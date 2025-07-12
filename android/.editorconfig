@@ -1,0 +1,5 @@
+root = true
+
+[*.{kt,kts}]
+# Disable function naming rule - conflicts with Compose convention
+ktlint_standard_function-naming = disabled

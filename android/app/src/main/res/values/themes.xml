@@ -1,0 +1,18 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.ClingSync" parent="Theme.AppCompat.DayNight">
+        <item name="colorPrimary">#8E4957</item>
+        <item name="colorPrimaryDark">#71333F</item>
+    </style>
+
+    <style name="Theme.ClingSync" parent="Base.Theme.ClingSync" />
+    
+    <!-- Splash Screen Theme -->
+    <style name="Theme.ClingSync.SplashScreen" parent="Theme.ClingSync">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

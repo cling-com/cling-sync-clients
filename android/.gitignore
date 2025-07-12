@@ -1,0 +1,8 @@
+.idea/
+.gradle/
+.kotlin/
+build/
+tools/
+app/src/main/jniLibs/
+local.properties
+*.log

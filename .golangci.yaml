@@ -1,0 +1,82 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: 120
+linters:
+  default: "all"
+  disable:
+    - cyclop
+    - err113
+    - gocognit
+    - goconst
+    - gocyclo
+    - gomodguard
+    - inamedparam
+    - interfacebloat
+    - ireturn
+    - lll
+    - makezero
+    - maintidx
+    - nestif
+    - nonamedreturns
+    - mnd
+    - musttag
+    - nlreturn
+    - perfsprint
+    - testpackage
+    - varnamelen
+    - wsl
+  exclusions:
+    presets:
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - wrapcheck
+  settings:
+    depguard:
+      rules:
+        lib:
+          files:
+            - "**/lib/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - "golang.org/x/crypto/argon2"
+            - "golang.org/x/crypto/chacha20poly1305"
+    forbidigo:
+      forbid:
+        - pattern: '^os\.'
+          msg: "Prefer io/fs over os"
+    funlen:
+      lines: 60
+      statements: 60
+    godox:
+      keywords:
+        - fixme
+    gomoddirectives:
+      replace-local: true
+    govet:
+      disable:
+        - composites
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: exported
+          disabled: true
+    wrapcheck:
+      extra-ignore-sigs:
+        - .WrapErrorf
