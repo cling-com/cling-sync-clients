@@ -1,0 +1,7 @@
+build/
+tools/
+xcuserdata/
+
+# Go build artifacts
+ClingSync/go/gobridge.a
+ClingSync/go/gobridge.h

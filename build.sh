@@ -33,7 +33,7 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-projects="android"
+projects="ios android"
 
 build_tools() {
     if [ -f tools/golangci-lint ]; then
