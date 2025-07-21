@@ -114,8 +114,7 @@ class IntegrationTest {
         composeTestRule.onNodeWithText("blue_sky.jpg", substring = true).performClick()
         composeTestRule.onNodeWithText("red_earth.jpg", substring = true).performClick()
 
-        // Click upload button - text should be "Upload 2 files"
-        composeTestRule.onNodeWithText("Upload 2 files").performClick()
+        composeTestRule.onNodeWithText("Upload").performClick()
 
         // Wait for files to show "Done" status
         runBlocking {

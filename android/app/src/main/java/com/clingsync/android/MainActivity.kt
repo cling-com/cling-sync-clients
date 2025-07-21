@@ -23,25 +23,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,6 +61,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.clingsync.android.ui.ScrollAwareTopBar
+import com.clingsync.android.ui.formatFileSize
 import com.clingsync.android.ui.theme.ClingSyncTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -259,7 +260,7 @@ fun FileListItem(
                     horizontalArrangement = Arrangement.Start,
                 ) {
                     Text(
-                        text = "${file.length() / 1024} KB",
+                        text = formatFileSize(file.length()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -310,14 +311,16 @@ fun FileList(
     fileStatus: Map<String, FileStatus>,
     isUploading: Boolean,
     onSelectionChange: (File, Boolean) -> Unit,
+    lazyListState: LazyListState = rememberLazyListState(),
 ) {
     LazyColumn(
+        state = lazyListState,
         modifier =
             Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(vertical = 16.dp),
+        contentPadding = PaddingValues(top = 88.dp, bottom = 16.dp),
     ) {
         items(files) { file ->
             val isSelected = selectedFiles.contains(file)
@@ -328,144 +331,6 @@ fun FileList(
                 isUploading = isUploading,
                 onSelectionChange = { checked -> onSelectionChange(file, checked) },
             )
-        }
-    }
-}
-
-@Composable
-fun StatusBar(
-    isLoadingFiles: Boolean,
-    isUploading: Boolean,
-    currentUploadInfo: UploadInfo?,
-    onAbort: () -> Unit,
-) {
-    // Guard clause - only show when there's status to report.
-    if (!isLoadingFiles && !isUploading) return
-
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(80.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shadowElevation = 8.dp,
-    ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().height(80.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            when {
-                isLoadingFiles -> {
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Scanning Local Files...",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-                isUploading && currentUploadInfo != null -> {
-                    Column(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = currentUploadInfo.currentFile ?: "Preparing...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            if (currentUploadInfo.fileSize != null) {
-                                Text(
-                                    text = " • ${currentUploadInfo.fileSize} KB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                )
-                            }
-                            Spacer(modifier = Modifier.weight(1f))
-                            TextButton(onClick = onAbort) {
-                                Text(
-                                    text = "Abort",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            LinearProgressIndicator(
-                                progress = {
-                                    if (currentUploadInfo.totalFiles > 0) {
-                                        (currentUploadInfo.currentIndex - 1).toFloat() / currentUploadInfo.totalFiles
-                                    } else {
-                                        0f
-                                    }
-                                },
-                                modifier =
-                                    Modifier
-                                        .weight(1f)
-                                        .height(4.dp),
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "${currentUploadInfo.currentIndex}/${currentUploadInfo.totalFiles}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun UploadButton(
-    selectedFiles: Set<File>,
-    isUploading: Boolean,
-    onClick: () -> Unit,
-) {
-    // Guard clause - only show when files are selected and not uploading.
-    if (selectedFiles.isEmpty() || isUploading) return
-
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(80.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shadowElevation = 8.dp,
-    ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().height(80.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Button(
-                onClick = onClick,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .height(48.dp)
-                        .testTag("upload_button"),
-            ) {
-                Text(
-                    text = "Upload ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"}",
-                )
-            }
         }
     }
 }
@@ -489,6 +354,30 @@ fun MainScreen(
     var currentUploadInfo by remember { mutableStateOf<UploadInfo?>(null) }
     var isUploading by remember { mutableStateOf(false) }
     var uploadError by remember { mutableStateOf<String?>(null) }
+    val lazyListState = rememberLazyListState()
+
+    // Calculate total size for selected files and uploaded size.
+    val totalSizeMB =
+        remember(selectedFiles) {
+            selectedFiles.sumOf { it.length() } / (1024 * 1024)
+        }
+    val uploadedSizeMB =
+        remember(selectedFiles, currentUploadInfo) {
+            val info = currentUploadInfo
+            if (info != null && info.totalFiles > 0) {
+                // Estimate based on completed files
+                val filesUploaded = (info.currentIndex - 1).coerceAtLeast(0)
+                val avgFileSize =
+                    if (selectedFiles.isNotEmpty()) {
+                        selectedFiles.sumOf { it.length() } / selectedFiles.size
+                    } else {
+                        0L
+                    }
+                (filesUploaded * avgFileSize) / (1024 * 1024)
+            } else {
+                0L
+            }
+        }
 
     // Function to load files.
     fun loadFiles() {
@@ -834,8 +723,24 @@ fun MainScreen(
 
             // Guard clause for loading.
             if (isLoadingFiles) {
-                Box(modifier = Modifier.weight(1f))
-                StatusBar(isLoadingFiles, isUploading, currentUploadInfo, onAbort = {})
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Searching files...",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
                 return@Column
             }
 
@@ -845,70 +750,31 @@ fun MainScreen(
                 return@Column
             }
 
-            // Select all header.
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-            ) {
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 32.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked =
-                            run {
-                                val selectableFiles =
-                                    cameraFiles.filter { file ->
-                                        val status = fileStatus[file.name]
-                                        status is FileStatus.New ||
-                                            status is FileStatus.Failed ||
-                                            status is FileStatus.Aborted ||
-                                            status == null
-                                    }
-                                selectableFiles.isNotEmpty() && selectedFiles.containsAll(selectableFiles)
-                            },
-                        modifier = Modifier.testTag("select_all"),
-                        onCheckedChange = { checked ->
-                            selectedFiles =
-                                if (checked) {
-                                    cameraFiles.filter { file ->
-                                        val status = fileStatus[file.name]
-                                        status is FileStatus.New ||
-                                            status is FileStatus.Failed ||
-                                            status is FileStatus.Aborted ||
-                                            status == null
-                                    }.toSet()
-                                } else {
-                                    emptySet()
-                                }
-                        },
-                        enabled = !isUploading,
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Select All",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        text = "${selectedFiles.size} selected",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            // Calculate selectable files and select all state.
+            val selectableFiles =
+                remember(cameraFiles, fileStatus) {
+                    cameraFiles.filter { file ->
+                        val status = fileStatus[file.name]
+                        status is FileStatus.New ||
+                            status is FileStatus.Failed ||
+                            status is FileStatus.Aborted ||
+                            status == null
+                    }
                 }
-            }
 
-            // Main content.
+            val selectAllChecked =
+                remember(selectableFiles, selectedFiles) {
+                    selectableFiles.isNotEmpty() && selectedFiles.containsAll(selectableFiles)
+                }
+
+            // Main content with unified top bar.
             Box(modifier = Modifier.weight(1f)) {
                 FileList(
                     files = cameraFiles,
                     selectedFiles = selectedFiles,
                     fileStatus = fileStatus,
                     isUploading = isUploading,
+                    lazyListState = lazyListState,
                     onSelectionChange = { file, checked ->
                         selectedFiles =
                             if (checked) {
@@ -919,43 +785,50 @@ fun MainScreen(
                     },
                 )
 
-                // Status bar overlays at bottom.
-                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-                    StatusBar(
-                        isLoadingFiles = isLoadingFiles,
-                        isUploading = isUploading,
-                        currentUploadInfo = currentUploadInfo,
-                        onAbort = { workManager.cancelUniqueWork(UploadWorker.WORK_NAME) },
-                    )
-                }
+                // Unified top bar with scroll behavior.
+                ScrollAwareTopBar(
+                    lazyListState = lazyListState,
+                    selectedFiles = selectedFiles,
+                    isUploading = isUploading,
+                    uploadInfo = currentUploadInfo,
+                    selectAllChecked = selectAllChecked,
+                    onSelectAllChange = { checked ->
+                        selectedFiles =
+                            if (checked) {
+                                selectableFiles.toSet()
+                            } else {
+                                emptySet()
+                            }
+                    },
+                    onUploadClick = {
+                        val filePaths = selectedFiles.map { it.absolutePath }
+                        Log.d("ClingSync", "Scheduling upload for files: $filePaths")
+
+                        // Cancel any ongoing file checking
+                        workManager.cancelUniqueWork(CheckFilesWorker.WORK_NAME)
+
+                        selectedFiles.forEach { file ->
+                            fileStatus = fileStatus + (file.name to FileStatus.Waiting)
+                        }
+
+                        UploadWorker.enqueueUpload(
+                            context = context,
+                            filePaths = filePaths,
+                            repoPathPrefix = settings.repoPathPrefix,
+                            author = "Android User",
+                            message = "Backup ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"} from camera",
+                            hostUrl = settings.hostUrl,
+                            password = settings.password,
+                        )
+                    },
+                    onAbortClick = {
+                        workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
+                    },
+                    isSelectAllEnabled = !isUploading,
+                    totalSizeMB = totalSizeMB,
+                    uploadedSizeMB = uploadedSizeMB,
+                )
             }
-
-            // Upload button at bottom of column.
-            UploadButton(
-                selectedFiles = selectedFiles,
-                isUploading = isUploading,
-                onClick = {
-                    val filePaths = selectedFiles.map { it.absolutePath }
-                    Log.d("ClingSync", "Scheduling upload for files: $filePaths")
-
-                    // Cancel any ongoing file checking
-                    workManager.cancelUniqueWork(CheckFilesWorker.WORK_NAME)
-
-                    selectedFiles.forEach { file ->
-                        fileStatus = fileStatus + (file.name to FileStatus.Waiting)
-                    }
-
-                    UploadWorker.enqueueUpload(
-                        context = context,
-                        filePaths = filePaths,
-                        repoPathPrefix = settings.repoPathPrefix,
-                        author = "Android User",
-                        message = "Backup ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"} from camera",
-                        hostUrl = settings.hostUrl,
-                        password = settings.password,
-                    )
-                },
-            )
         }
 
         // Dialogs.
