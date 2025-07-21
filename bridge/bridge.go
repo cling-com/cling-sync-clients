@@ -8,6 +8,7 @@ package bridge
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -31,6 +32,36 @@ func Execute(command string, paramsJSON string) string { //nolint:funlen
 		response := struct {
 			Success bool `json:"success"`
 		}{Success: true}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "checkFiles":
+		var params struct {
+			Sha256s []string `json:"sha256s"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		sha256s := make([]lib.Sha256, len(params.Sha256s))
+		for i, s := range params.Sha256s {
+			sha256, err := hex.DecodeString(s)
+			if err != nil {
+				return errorResponse("Failed to decode SHA256 hash: " + err.Error())
+			}
+			if len(sha256) != 32 {
+				return errorResponse("Invalid SHA256 hash length: " + s)
+			}
+			sha256s[i] = lib.Sha256(sha256)
+		}
+		res, err := CheckFiles(sha256s)
+		if err != nil {
+			return errorResponse(err.Error())
+		}
+		response := struct {
+			Results []string `json:"results"`
+		}{Results: res}
 		jsonBytes, err := json.Marshal(response)
 		if err != nil {
 			return errorResponse("Failed to marshal response: " + err.Error())
