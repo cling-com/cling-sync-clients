@@ -33,7 +33,7 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-projects="ios android"
+projects="bridge ios android"
 
 build_tools() {
     if [ -f tools/golangci-lint ]; then
@@ -73,6 +73,9 @@ shift
 case "$cmd" in
     android)
         exec ./android/build.sh "$@"
+        ;;
+    bridge)
+        exec ./bridge/build.sh "$@"
         ;;
     ios)
         exec ./ios/build.sh "$@"
