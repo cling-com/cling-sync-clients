@@ -6,6 +6,8 @@ interface IGoBridge {
         password: String,
     )
 
+    fun checkFiles(sha256s: List<String>): List<String>
+
     fun uploadFile(
         filePath: String,
         repoPathPrefix: String,

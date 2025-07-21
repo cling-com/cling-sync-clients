@@ -11,12 +11,31 @@ open class GoBridge : IGoBridge {
                 // Library not found - will fall back to error messages.
             }
         }
+
+        private val executeLock = Any()
     }
 
     external fun Execute(
         command: String,
         params: String,
     ): String
+
+    private fun executeInternal(
+        command: String,
+        params: JSONObject,
+    ): JSONObject {
+        synchronized(executeLock) {
+            val result = Execute(command, params.toString())
+            val response = JSONObject(result)
+
+            if (response.has("error")) {
+                val error = response.getJSONObject("error")
+                throw Exception(error.getString("message"))
+            }
+
+            return response
+        }
+    }
 
     override fun ensureOpen(
         hostUrl: String,
@@ -28,13 +47,18 @@ open class GoBridge : IGoBridge {
                 put("password", password)
             }
 
-        val result = Execute("ensureOpen", params.toString())
-        val response = JSONObject(result)
+        executeInternal("ensureOpen", params)
+    }
 
-        if (response.has("error")) {
-            val error = response.getJSONObject("error")
-            throw Exception(error.getString("message"))
-        }
+    override fun checkFiles(sha256s: List<String>): List<String> {
+        val params =
+            JSONObject().apply {
+                put("sha256s", org.json.JSONArray(sha256s))
+            }
+
+        val response = executeInternal("checkFiles", params)
+        val resultsArray = response.getJSONArray("results")
+        return List(resultsArray.length()) { i -> resultsArray.getString(i) }
     }
 
     override fun uploadFile(
@@ -47,14 +71,7 @@ open class GoBridge : IGoBridge {
                 put("repoPathPrefix", repoPathPrefix)
             }
 
-        val result = Execute("uploadFile", params.toString())
-        val response = JSONObject(result)
-
-        if (response.has("error")) {
-            val error = response.getJSONObject("error")
-            throw Exception(error.getString("message"))
-        }
-
+        val response = executeInternal("uploadFile", params)
         return response.getString("revisionEntry")
     }
 
@@ -70,14 +87,7 @@ open class GoBridge : IGoBridge {
                 put("message", message)
             }
 
-        val result = Execute("commit", params.toString())
-        val response = JSONObject(result)
-
-        if (response.has("error")) {
-            val error = response.getJSONObject("error")
-            throw Exception(error.getString("message"))
-        }
-
+        val response = executeInternal("commit", params)
         return response.getString("revisionId")
     }
 }

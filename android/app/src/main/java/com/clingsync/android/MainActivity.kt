@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -65,22 +66,29 @@ import com.clingsync.android.ui.theme.ClingSyncTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
-sealed class UploadStatus {
-    object Waiting : UploadStatus()
+sealed class FileStatus {
+    object Scanning : FileStatus()
 
-    object Uploading : UploadStatus()
+    object New : FileStatus()
 
-    object Uploaded : UploadStatus()
+    data class Exists(val repoPath: String) : FileStatus()
 
-    object Committing : UploadStatus()
+    object Waiting : FileStatus()
 
-    object Done : UploadStatus()
+    object Uploading : FileStatus()
 
-    object Aborted : UploadStatus()
+    object Uploaded : FileStatus()
 
-    data class Failed(val error: String) : UploadStatus()
+    object Committing : FileStatus()
+
+    object Done : FileStatus()
+
+    object Aborted : FileStatus()
+
+    data class Failed(val error: String) : FileStatus()
 }
 
 data class UploadInfo(
@@ -161,7 +169,7 @@ fun EmptyFilesScreen() {
 fun FileListItem(
     file: File,
     isSelected: Boolean,
-    uploadStatus: UploadStatus?,
+    uploadStatus: FileStatus?,
     isUploading: Boolean,
     onSelectionChange: (Boolean) -> Unit,
 ) {
@@ -193,34 +201,58 @@ fun FileListItem(
                     .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            when (uploadStatus) {
-                is UploadStatus.Waiting, is UploadStatus.Uploading, is UploadStatus.Uploaded, is UploadStatus.Committing -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                    )
-                }
-                else -> {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = onSelectionChange,
-                        modifier = Modifier.testTag("checkbox_${file.name}"),
-                        enabled =
-                            (
-                                uploadStatus == null || uploadStatus is UploadStatus.Aborted ||
-                                    uploadStatus is UploadStatus.Failed || uploadStatus is UploadStatus.Done
-                            ) && !isUploading,
-                    )
+            Box(
+                modifier = Modifier.size(40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (uploadStatus) {
+                    is FileStatus.Scanning -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                    is FileStatus.Waiting, is FileStatus.Uploading, is FileStatus.Uploaded, is FileStatus.Committing -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                    is FileStatus.Exists, is FileStatus.Done -> {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Synced",
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    else -> {
+                        Checkbox(
+                            checked = isSelected,
+                            onCheckedChange = onSelectionChange,
+                            modifier = Modifier.testTag("checkbox_${file.name}"),
+                            enabled =
+                                (
+                                    uploadStatus is FileStatus.New ||
+                                        uploadStatus is FileStatus.Failed ||
+                                        uploadStatus is FileStatus.Aborted ||
+                                        uploadStatus == null
+                                ) && !isUploading,
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = file.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -240,21 +272,29 @@ fun FileListItem(
                         Text(
                             text =
                                 when (status) {
-                                    is UploadStatus.Waiting -> "Waiting..."
-                                    is UploadStatus.Uploading -> "Sending..."
-                                    is UploadStatus.Uploaded -> "Processing..."
-                                    is UploadStatus.Committing -> "Committing..."
-                                    is UploadStatus.Done -> "Done"
-                                    is UploadStatus.Aborted -> "Aborted"
-                                    is UploadStatus.Failed -> "Failed: ${status.error}"
+                                    is FileStatus.Scanning -> "Scanning..."
+                                    is FileStatus.New -> "New"
+                                    is FileStatus.Exists -> ""
+                                    is FileStatus.Waiting -> "Waiting..."
+                                    is FileStatus.Uploading -> "Sending..."
+                                    is FileStatus.Uploaded -> ""
+                                    is FileStatus.Committing -> "Committing..."
+                                    is FileStatus.Done -> ""
+                                    is FileStatus.Aborted -> "Aborted"
+                                    is FileStatus.Failed -> "Failed: ${status.error}"
                                 },
                             style = MaterialTheme.typography.bodySmall,
                             color =
                                 when (status) {
-                                    is UploadStatus.Failed -> MaterialTheme.colorScheme.error
+                                    is FileStatus.Failed -> MaterialTheme.colorScheme.error
+                                    is FileStatus.Exists -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    is FileStatus.New -> MaterialTheme.colorScheme.primary
+                                    is FileStatus.Done, is FileStatus.Uploaded -> MaterialTheme.colorScheme.onSurfaceVariant
                                     else -> MaterialTheme.colorScheme.primary
                                 },
                             fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -267,7 +307,7 @@ fun FileListItem(
 fun FileList(
     files: List<File>,
     selectedFiles: Set<File>,
-    fileUploadStatus: Map<String, UploadStatus>,
+    fileStatus: Map<String, FileStatus>,
     isUploading: Boolean,
     onSelectionChange: (File, Boolean) -> Unit,
 ) {
@@ -284,7 +324,7 @@ fun FileList(
             FileListItem(
                 file = file,
                 isSelected = isSelected,
-                uploadStatus = fileUploadStatus[file.name],
+                uploadStatus = fileStatus[file.name],
                 isUploading = isUploading,
                 onSelectionChange = { checked -> onSelectionChange(file, checked) },
             )
@@ -438,7 +478,7 @@ fun MainScreen(
 ) {
     var cameraFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var selectedFiles by remember { mutableStateOf<Set<File>>(emptySet()) }
-    var fileUploadStatus by remember { mutableStateOf<Map<String, UploadStatus>>(emptyMap()) }
+    var fileStatus by remember { mutableStateOf<Map<String, FileStatus>>(emptyMap()) }
     var hasPermission by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(settingsManager.getSettings()) }
     var showSettingsDialog by remember { mutableStateOf(!settings.isValid()) }
@@ -456,6 +496,36 @@ fun MainScreen(
             isLoadingFiles = true
             cameraFiles = withContext(Dispatchers.IO) { getCameraFiles() }
             isLoadingFiles = false
+
+            // Start checking files if we have settings
+            if (settings.isValid() && cameraFiles.isNotEmpty()) {
+                // Only check files that haven't been scanned yet
+                val filesToCheck =
+                    cameraFiles.filter { file ->
+                        fileStatus[file.name] == null
+                    }
+
+                if (filesToCheck.isNotEmpty()) {
+                    Log.d("MainActivity", "Starting file check for ${filesToCheck.size} new files")
+
+                    // Set files to scanning status
+                    filesToCheck.forEach { file ->
+                        fileStatus = fileStatus + (file.name to FileStatus.Scanning)
+                    }
+
+                    Log.d("MainActivity", "Set ${filesToCheck.size} files to Scanning status")
+
+                    // Start the check worker
+                    CheckFilesWorker.enqueueCheck(
+                        context = context,
+                        filePaths = filesToCheck.map { it.absolutePath },
+                        hostUrl = settings.hostUrl,
+                        password = settings.password,
+                    )
+
+                    Log.d("MainActivity", "Enqueued CheckFilesWorker")
+                }
+            }
         }
     }
 
@@ -469,13 +539,17 @@ fun MainScreen(
             }
         }
 
-    // Work observer effect.
-    val workInfos by workManager.getWorkInfosForUniqueWorkLiveData(UploadWorker.WORK_NAME).observeAsState()
-    LaunchedEffect(workInfos) {
+    // Upload work observer effect.
+    val uploadWorkInfos by workManager.getWorkInfosForUniqueWorkLiveData(UploadWorker.WORK_NAME).observeAsState()
+
+    // Check files work observer effect.
+    val checkWorkInfos by workManager.getWorkInfosForUniqueWorkLiveData(CheckFilesWorker.WORK_NAME).observeAsState()
+
+    LaunchedEffect(uploadWorkInfos) {
         val workInfo =
-            workInfos?.lastOrNull {
+            uploadWorkInfos?.lastOrNull {
                 it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED
-            } ?: workInfos?.lastOrNull()
+            } ?: uploadWorkInfos?.lastOrNull()
 
         workInfo?.let { info ->
             // Only process recent work (ignore old failed work from previous sessions).
@@ -486,10 +560,31 @@ fun MainScreen(
             when (info.state) {
                 WorkInfo.State.RUNNING -> {
                     isUploading = true
+
+                    // Process complete file statuses
+                    val fileStatusesJson = info.progress.getString("file_statuses")
                     val totalFiles = info.progress.getInt("total_files", selectedFiles.size)
                     val currentIndex = info.progress.getInt("current_index", 0)
                     val status = info.progress.getString("status")
                     val currentFile = info.progress.getString("current_file")
+
+                    // Update file statuses from JSON
+                    if (fileStatusesJson != null) {
+                        try {
+                            val statusesObj = JSONObject(fileStatusesJson)
+                            statusesObj.keys().forEach { fileName ->
+                                val statusValue = statusesObj.getString(fileName)
+                                when (statusValue) {
+                                    "waiting" -> fileStatus = fileStatus + (fileName to FileStatus.Waiting)
+                                    "uploading" -> fileStatus = fileStatus + (fileName to FileStatus.Uploading)
+                                    "uploaded" -> fileStatus = fileStatus + (fileName to FileStatus.Uploaded)
+                                    "committing" -> fileStatus = fileStatus + (fileName to FileStatus.Committing)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "Failed to parse upload file statuses", e)
+                        }
+                    }
 
                     var currentFileSize: Long? = null
                     if (currentFile != null) {
@@ -499,60 +594,23 @@ fun MainScreen(
 
                     currentUploadInfo =
                         UploadInfo(
-                            currentFile = currentFile,
+                            currentFile = if (status == "committing") "Committing changes..." else currentFile,
                             fileSize = currentFileSize,
                             currentIndex = currentIndex,
                             totalFiles = totalFiles,
                         )
-
-                    when (status) {
-                        "waiting" -> {
-                            // Mark all selected files as waiting.
-                            selectedFiles.forEach { file ->
-                                fileUploadStatus = fileUploadStatus + (file.name to UploadStatus.Waiting)
-                            }
-                        }
-                        "uploading" -> {
-                            if (currentFile != null) {
-                                // Mark current file as uploading.
-                                fileUploadStatus = fileUploadStatus + (currentFile to UploadStatus.Uploading)
-
-                                // Mark previous files as uploaded based on index.
-                                var uploadedCount = 0
-                                selectedFiles.forEach { file ->
-                                    if (uploadedCount < currentIndex - 1) {
-                                        val currentStatus = fileUploadStatus[file.name]
-                                        if (currentStatus !is UploadStatus.Done &&
-                                            currentStatus !is UploadStatus.Failed &&
-                                            currentStatus !is UploadStatus.Uploaded
-                                        ) {
-                                            fileUploadStatus = fileUploadStatus + (file.name to UploadStatus.Uploaded)
-                                        }
-                                        uploadedCount++
-                                    }
-                                }
-                            }
-                        }
-                        "committing" -> {
-                            currentUploadInfo =
-                                UploadInfo(
-                                    currentFile = "Committing changes...",
-                                    currentIndex = totalFiles,
-                                    totalFiles = totalFiles,
-                                )
-                            // Mark all selected files as committing.
-                            selectedFiles.forEach { file ->
-                                fileUploadStatus = fileUploadStatus + (file.name to UploadStatus.Committing)
-                            }
-                        }
-                    }
                 }
                 WorkInfo.State.SUCCEEDED -> {
                     isUploading = false
                     currentUploadInfo = null
-                    fileUploadStatus.forEach { (fileName, status) ->
-                        if (status !is UploadStatus.Done && status !is UploadStatus.Failed) {
-                            fileUploadStatus = fileUploadStatus + (fileName to UploadStatus.Done)
+                    // Only mark files that were being uploaded as Done
+                    fileStatus.forEach { (fileName, status) ->
+                        if (status is FileStatus.Waiting ||
+                            status is FileStatus.Uploading ||
+                            status is FileStatus.Uploaded ||
+                            status is FileStatus.Committing
+                        ) {
+                            fileStatus = fileStatus + (fileName to FileStatus.Done)
                         }
                     }
                     selectedFiles = emptySet()
@@ -560,9 +618,9 @@ fun MainScreen(
                 WorkInfo.State.CANCELLED -> {
                     isUploading = false
                     currentUploadInfo = null
-                    fileUploadStatus.forEach { (fileName, status) ->
-                        if (status !is UploadStatus.Done && status !is UploadStatus.Failed && status !is UploadStatus.Aborted) {
-                            fileUploadStatus = fileUploadStatus + (fileName to UploadStatus.Aborted)
+                    fileStatus.forEach { (fileName, status) ->
+                        if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
+                            fileStatus = fileStatus + (fileName to FileStatus.Aborted)
                         }
                     }
                 }
@@ -572,15 +630,113 @@ fun MainScreen(
                     val fullErrorMsg = info.outputData.getString("error") ?: "Upload failed"
                     uploadError = fullErrorMsg
 
-                    fileUploadStatus.forEach { (fileName, status) ->
-                        if (status !is UploadStatus.Done && status !is UploadStatus.Failed && status !is UploadStatus.Aborted) {
-                            fileUploadStatus = fileUploadStatus + (fileName to UploadStatus.Failed("Error"))
+                    fileStatus.forEach { (fileName, status) ->
+                        if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
+                            fileStatus = fileStatus + (fileName to FileStatus.Failed("Error"))
                         }
                     }
                 }
                 else -> {
                     isUploading = false
                     currentUploadInfo = null
+                }
+            }
+
+            // After upload is done (succeeded, failed, or cancelled), check files still in Scanning status
+            if ((
+                    info.state == WorkInfo.State.SUCCEEDED ||
+                        info.state == WorkInfo.State.FAILED ||
+                        info.state == WorkInfo.State.CANCELLED
+                ) &&
+                settings.isValid() && cameraFiles.isNotEmpty()
+            ) {
+                // Only check files that are still in Scanning status
+                val filesToCheck =
+                    cameraFiles.filter { file ->
+                        fileStatus[file.name] is FileStatus.Scanning
+                    }
+
+                if (filesToCheck.isNotEmpty()) {
+                    Log.d("MainActivity", "Checking ${filesToCheck.size} files still in Scanning status after upload")
+
+                    // Start the check worker
+                    CheckFilesWorker.enqueueCheck(
+                        context = context,
+                        filePaths = filesToCheck.map { it.absolutePath },
+                        hostUrl = settings.hostUrl,
+                        password = settings.password,
+                    )
+                }
+            }
+        }
+    }
+
+    // Observer for check files work - properly observe ALL updates
+    LaunchedEffect(checkWorkInfos) {
+        val workInfo = checkWorkInfos?.lastOrNull()
+
+        workInfo?.let { info ->
+            Log.d("MainActivity", "Check work state: ${info.state}")
+
+            // Process progress updates - now contains all file statuses
+            val fileStatusesJson = info.progress.getString("file_statuses")
+            val processedCount = info.progress.getInt("processed_count", 0)
+            val totalFiles = info.progress.getInt("total_files", 0)
+
+            if (fileStatusesJson != null) {
+                try {
+                    val statusesObj = JSONObject(fileStatusesJson)
+
+                    // Update all file statuses at once
+                    statusesObj.keys().forEach { fileName ->
+                        val statusAndPath = statusesObj.getString(fileName)
+                        val parts = statusAndPath.split(":", limit = 2)
+                        val statusType = parts[0]
+                        val repoPath = if (parts.size > 1) parts[1] else ""
+
+                        when (statusType) {
+                            "exists" -> {
+                                fileStatus = fileStatus + (fileName to FileStatus.Exists(repoPath))
+                            }
+                            "new" -> {
+                                fileStatus = fileStatus + (fileName to FileStatus.New)
+                            }
+                            "not_found" -> {
+                                // File doesn't exist, remove from status
+                                fileStatus = fileStatus - fileName
+                            }
+                        }
+                    }
+
+                    Log.d("MainActivity", "Updated statuses for $processedCount/$totalFiles files")
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to parse file statuses", e)
+                }
+            }
+
+            // Handle state changes
+            when (info.state) {
+                WorkInfo.State.SUCCEEDED -> {
+                    // Check completed - any files still in Scanning state should be marked as New
+                    Log.d("MainActivity", "Check work succeeded")
+                    fileStatus.forEach { (fileName, status) ->
+                        if (status is FileStatus.Scanning) {
+                            Log.w("MainActivity", "File $fileName still in Scanning state after completion, marking as New")
+                            fileStatus = fileStatus + (fileName to FileStatus.New)
+                        }
+                    }
+                }
+                WorkInfo.State.FAILED -> {
+                    // Check failed - mark all scanning files as new
+                    Log.e("MainActivity", "Check work failed")
+                    fileStatus.forEach { (fileName, status) ->
+                        if (status is FileStatus.Scanning) {
+                            fileStatus = fileStatus + (fileName to FileStatus.New)
+                        }
+                    }
+                }
+                else -> {
+                    // Other states
                 }
             }
         }
@@ -702,12 +858,29 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(
-                        checked = selectedFiles.size == cameraFiles.size && cameraFiles.isNotEmpty(),
+                        checked =
+                            run {
+                                val selectableFiles =
+                                    cameraFiles.filter { file ->
+                                        val status = fileStatus[file.name]
+                                        status is FileStatus.New ||
+                                            status is FileStatus.Failed ||
+                                            status is FileStatus.Aborted ||
+                                            status == null
+                                    }
+                                selectableFiles.isNotEmpty() && selectedFiles.containsAll(selectableFiles)
+                            },
                         modifier = Modifier.testTag("select_all"),
                         onCheckedChange = { checked ->
                             selectedFiles =
                                 if (checked) {
-                                    cameraFiles.toSet()
+                                    cameraFiles.filter { file ->
+                                        val status = fileStatus[file.name]
+                                        status is FileStatus.New ||
+                                            status is FileStatus.Failed ||
+                                            status is FileStatus.Aborted ||
+                                            status == null
+                                    }.toSet()
                                 } else {
                                     emptySet()
                                 }
@@ -722,7 +895,7 @@ fun MainScreen(
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
-                        text = "${selectedFiles.size} of ${cameraFiles.size} selected",
+                        text = "${selectedFiles.size} selected",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -734,7 +907,7 @@ fun MainScreen(
                 FileList(
                     files = cameraFiles,
                     selectedFiles = selectedFiles,
-                    fileUploadStatus = fileUploadStatus,
+                    fileStatus = fileStatus,
                     isUploading = isUploading,
                     onSelectionChange = { file, checked ->
                         selectedFiles =
@@ -765,8 +938,11 @@ fun MainScreen(
                     val filePaths = selectedFiles.map { it.absolutePath }
                     Log.d("ClingSync", "Scheduling upload for files: $filePaths")
 
+                    // Cancel any ongoing file checking
+                    workManager.cancelUniqueWork(CheckFilesWorker.WORK_NAME)
+
                     selectedFiles.forEach { file ->
-                        fileUploadStatus = fileUploadStatus + (file.name to UploadStatus.Waiting)
+                        fileStatus = fileStatus + (file.name to FileStatus.Waiting)
                     }
 
                     UploadWorker.enqueueUpload(

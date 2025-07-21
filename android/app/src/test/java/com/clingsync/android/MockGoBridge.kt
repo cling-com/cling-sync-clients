@@ -39,6 +39,20 @@ class MockGoBridge : IGoBridge {
         isOpen = true
     }
 
+    override fun checkFiles(sha256s: List<String>): List<String> {
+        if (!isOpen) {
+            val error = "Repository not open"
+            errors.add(error)
+            throw Exception(error)
+        }
+
+        val res = mutableListOf<String>()
+        for (sha256 in sha256s) {
+            res.add("path/to/file/$sha256")
+        }
+        return res
+    }
+
     override fun uploadFile(
         filePath: String,
         repoPathPrefix: String,
