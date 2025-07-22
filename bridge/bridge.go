@@ -15,7 +15,16 @@ import (
 	"github.com/flunderpero/cling-sync/lib"
 )
 
-func Execute(command string, paramsJSON string) string { //nolint:funlen
+func Execute(command string, paramsJSON string) (result string) { //nolint:funlen
+	// Recover from panics and convert them to error responses
+	defer func() {
+		if r := recover(); r != nil {
+			// Convert panic to error response
+			errMsg := fmt.Sprintf("panic: %v", r)
+			result = errorResponse(errMsg)
+		}
+	}()
+	
 	switch command {
 	case "ensureOpen":
 		var params struct {
