@@ -12,9 +12,12 @@ let fileSizeFormatter: ByteCountFormatter = {
 enum AppState {
     case initializing
     case needsSettings
+    case connectingToServer
+    case connectionFailed(String)
     case ready
 }
 
+// swiftlint:disable:next type_body_length
 struct ContentView: View {
     @State private var selectedFileNames = Set<String>()
     @State private var files = [File]()
@@ -23,13 +26,15 @@ struct ContentView: View {
     @State private var uploader: Uploader?
     @State private var appState: AppState = .initializing
     @State private var disabledFileNames = Set<String>()
+    @State private var fileChecker: FileChecker?
+    @State private var isCheckingFiles = false
 
     @AppStorage("hostURL") private var hostURL = ""
     @AppStorage("passphrase") private var passphrase = ""
     @AppStorage("repoPathPrefix") private var repoPathPrefix = ""
 
     private var selectableFiles: [File] {
-        files.filter { $0.uploadState == .none }
+        files.filter { $0.uploadState == .none || $0.uploadState == .new }
     }
 
     private var selectedFiles: [File] {
@@ -103,6 +108,52 @@ struct ContentView: View {
 
         files = photoFiles
         isLoading = false
+
+        await checkFilesInRepository()
+    }
+
+    private func checkFilesInRepository() async {
+        guard !files.isEmpty else { return }
+
+        isCheckingFiles = true
+
+        for file in files {
+            file.uploadState = .checking
+        }
+
+        let checker = FileChecker(
+            files: files,
+            fileStatusUpdate: { fileStatuses in
+                DispatchQueue.main.async {
+                    for file in self.files {
+                        if let repoPath = fileStatuses[file.name] {
+                            if repoPath.isEmpty {
+                                file.uploadState = .new
+                            } else {
+                                file.uploadState = .exists(repoPath: repoPath)
+                            }
+                        }
+                    }
+                }
+            },
+            progressUpdate: { processed, total in
+                print("Checked \(processed) of \(total) files")
+            }
+        )
+
+        fileChecker = checker
+
+        do {
+            try await checker.checkFiles()
+        } catch {
+            print("Error checking files: \(error)")
+            for file in files where file.uploadState == .checking {
+                file.uploadState = .new
+            }
+        }
+
+        isCheckingFiles = false
+        fileChecker = nil
     }
 
     var body: some View {
@@ -114,7 +165,9 @@ struct ContentView: View {
                     if hostURL.isEmpty || passphrase.isEmpty {
                         appState = .needsSettings
                     } else {
-                        appState = .ready
+                        Task {
+                            await connectToServer()
+                        }
                     }
                 }
 
@@ -136,7 +189,11 @@ struct ContentView: View {
                 SettingsView(isPresented: $showSettings)
                     .interactiveDismissDisabled(hostURL.isEmpty || passphrase.isEmpty)
                     .onDisappear {
-                        appState = .ready
+                        if !hostURL.isEmpty && !passphrase.isEmpty {
+                            Task {
+                                await connectToServer()
+                            }
+                        }
                     }
             }
 
@@ -192,6 +249,54 @@ struct ContentView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(isPresented: $showSettings)
             }
+
+        case .connectingToServer:
+            VStack(spacing: 16) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .scaleEffect(1.5)
+                Text("Connecting to server...")
+                    .font(.headline)
+            }
+
+        case .connectionFailed(let errorMessage):
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(.red)
+                Text("Connection Failed")
+                    .font(.headline)
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                Button("Go to Settings") {
+                    showSettings = true
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView(isPresented: $showSettings)
+                    .onDisappear {
+                        if !hostURL.isEmpty && !passphrase.isEmpty {
+                            Task {
+                                await connectToServer()
+                            }
+                        }
+                    }
+            }
+        }
+    }
+
+    private func connectToServer() async {
+        appState = .connectingToServer
+        do {
+            try await Bridge.connectToServer(url: hostURL, password: passphrase)
+            appState = .ready
+        } catch {
+            let bridgeError = error as? BridgeError
+            appState = .connectionFailed(bridgeError?.message ?? "Unknown error")
         }
     }
 
@@ -204,99 +309,6 @@ struct ContentView: View {
         // todo: we should only remove all selected files when the upload is
         //       successful. Now, when we abort, we loose the selection.
         selectedFileNames.removeAll()
-    }
-}
-
-struct UploadProgress: View {
-    @ObservedObject var uploader: Uploader
-    let dismiss: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            switch uploader.state {
-            case .preparing:
-                HStack {
-                    Text(uploader.state == .preparing ? "Preparing" : "Aborted!")
-                    Spacer()
-                    Button("Abort", action: uploader.abort)
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                }
-            case .aborted:
-                HStack {
-                    Text(uploader.state == .preparing ? "Preparing" : "Aborted!")
-                    Spacer()
-                    Button("OK") {
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            case .error:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(uploader.errorMessage)
-                        .lineLimit(10)
-                    HStack {
-                        Spacer()
-                        Button("OK") {
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-            case .sending, .committing:
-                VStack(alignment: .leading, spacing: 4) {
-                    if let file = uploader.currentlySending {
-                        HStack {
-                            Text(file.name)
-                                .font(.caption)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(fileSizeFormatter.string(fromByteCount: file.size))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Text("Committing...")
-                    }
-
-                    ProgressView(
-                        value: Double(uploader.uploadedBytes),
-                        total: Double(uploader.totalBytes)
-                    )
-                    .progressViewStyle(.linear)
-                }
-
-                HStack {
-                    let percentage = uploader.uploadedBytes * 100 / max(uploader.totalBytes, 1)
-                    Text("\(percentage)% uploaded")
-                        .font(.subheadline)
-
-                    Spacer()
-
-                    Button(action: uploader.abort) {
-                        Text("Abort")
-                    }
-                    .disabled(uploader.state == .committing)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                }
-            case .done:
-                HStack {
-                    let fileCount = uploader.files.count
-                    let fileText = fileCount > 1 ? "files" : "file"
-                    let sizeText = fileSizeFormatter.string(fromByteCount: uploader.uploadedBytes)
-                    Text("Success! \(fileCount) \(fileText) uploaded (\(sizeText))")
-                    Spacer()
-                    Button("OK") {
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-        .padding()
-        .background(.regularMaterial)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
 

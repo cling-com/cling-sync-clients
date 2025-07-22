@@ -1,8 +1,11 @@
 import Photos
 import SwiftUI
 
-enum FileStatus {
+enum FileStatus: Equatable {
     case none
+    case checking
+    case new
+    case exists(repoPath: String)
     case waiting
     case sending
     case sentWaitingCommit
@@ -33,6 +36,9 @@ struct FileView: View {
     private var uploadStateText: String {
         switch file.uploadState {
         case .none: return ""
+        case .checking: return "Scanning"
+        case .new: return "New"
+        case .exists: return ""
         case .waiting: return "Waiting"
         case .sending: return "Sending"
         case .sentWaitingCommit: return "Processing"
@@ -43,6 +49,9 @@ struct FileView: View {
     private var uploadStateColor: Color {
         switch file.uploadState {
         case .none: return .clear
+        case .checking: return .secondary
+        case .new: return .blue
+        case .exists: return .green
         case .waiting: return .secondary
         case .sending: return .blue
         case .sentWaitingCommit: return .secondary
@@ -74,7 +83,7 @@ struct FileView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    if file.uploadState != .none {
+                    if !uploadStateText.isEmpty {
                         Text("•")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -85,18 +94,29 @@ struct FileView: View {
                 }
             }
             Spacer()
-            if file.uploadState == .sending || file.uploadState == .sentWaitingCommit {
+            switch file.uploadState {
+            case .checking, .sending, .sentWaitingCommit:
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
-            } else if file.uploadState == .done {
+            case .done, .exists:
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
+            default:
+                EmptyView()
             }
         }
         .onAppear {
             loadThumbnail()
         }
-        .selectionDisabled(file.uploadState != .none)
+        .selectionDisabled(
+            {
+                switch file.uploadState {
+                case .none, .new:
+                    return false
+                default:
+                    return true
+                }
+            }())
     }
 
     private func loadThumbnail() {
