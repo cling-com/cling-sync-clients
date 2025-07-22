@@ -51,7 +51,7 @@ func EnsureRepositoryOpen(hostURL, password string) error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to get HEAD revision")
 	}
-	if currenHead == head {
+	if currenHead == head && snapshot != nil {
 		return nil
 	}
 	head = currenHead
