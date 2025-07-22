@@ -1,5 +1,6 @@
 package com.clingsync.android
 
+import android.util.Log
 import org.json.JSONObject
 
 open class GoBridge : IGoBridge {
@@ -24,16 +25,25 @@ open class GoBridge : IGoBridge {
         command: String,
         params: JSONObject,
     ): JSONObject {
+        Log.d("GoBridge", "Executing command: $command")
         synchronized(executeLock) {
-            val result = Execute(command, params.toString())
-            val response = JSONObject(result)
+            try {
+                val result = Execute(command, params.toString())
+                val response = JSONObject(result)
 
-            if (response.has("error")) {
-                val error = response.getJSONObject("error")
-                throw Exception(error.getString("message"))
+                if (response.has("error")) {
+                    val error = response.getJSONObject("error")
+                    val errorMessage = error.getString("message")
+                    Log.e("GoBridge", "Command $command failed with error: $errorMessage")
+                    throw Exception(errorMessage)
+                }
+
+                Log.d("GoBridge", "Command $command completed successfully")
+                return response
+            } catch (e: Exception) {
+                Log.e("GoBridge", "Exception in command $command: ${e.message}", e)
+                throw e
             }
-
-            return response
         }
     }
 

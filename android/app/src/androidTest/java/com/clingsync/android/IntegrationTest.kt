@@ -3,6 +3,11 @@ package com.clingsync.android
 import android.Manifest
 import android.content.Context
 import android.os.Environment
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -10,9 +15,6 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -26,36 +28,13 @@ class IntegrationTest {
     private val testPassphrase = System.getenv("TEST_PASSPHRASE") ?: "testpassphrase"
     private val repoPathPrefix = System.getenv("TEST_DESTINATION_PATH") ?: "/phone/camera/"
 
-    private lateinit var file1: File
-    private lateinit var file2: File
-    private lateinit var file3: File
-
-    init {
-        // Create sample files in DCIM before activity starts
-        val dcimDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
-        val cameraDir = File(dcimDir, "Camera")
-        cameraDir.mkdirs()
-
-        file1 =
-            File(cameraDir, "blue_sky.jpg").apply {
-                writeText("Blue sky")
-            }
-        file2 =
-            File(cameraDir, "red_earth.jpg").apply {
-                writeText("Red earth")
-            }
-        file3 =
-            File(cameraDir, "green_grass.jpg").apply {
-                writeText("Green grass")
-            }
-    }
-
     @get:Rule(order = 1)
     val permissionRule: GrantPermissionRule =
         GrantPermissionRule.grant(
             Manifest.permission.READ_MEDIA_IMAGES,
             Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.READ_EXTERNAL_STORAGE,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
         )
 
     @get:Rule(order = 2)
@@ -67,21 +46,35 @@ class IntegrationTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("cling_sync_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
+
+        val dcimDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DCIM), "Camera")
+        dcimDir.mkdirs()
+        File(dcimDir, "blue_sky.jpg").apply {
+            writeText("Blue sky")
+        }
+        File(dcimDir, "red_earth.jpg").apply {
+            writeText("Red earth")
+        }
+        File(dcimDir, "green_grass.jpg").apply {
+            writeText("Green grass")
+        }
     }
 
     @After
     fun teardown() {
-        file1.delete()
-        file2.delete()
-        file3.delete()
+        // file1.delete()
+        // file2.delete()
+        // file3.delete()
     }
 
+    @OptIn(ExperimentalTestApi::class)
     @Test
     fun testBackupFiles() {
         // Wait for activity to load and settings dialog to appear.
         composeTestRule.waitForIdle()
 
         // Fill in settings and save.
+        composeTestRule.waitUntilExactlyOneExists(hasText("Host URL"), 5000)
         composeTestRule.onNodeWithText("Host URL").performClick()
         composeTestRule.onNodeWithText("Host URL").performTextInput(serverUrl)
 
@@ -94,50 +87,20 @@ class IntegrationTest {
         composeTestRule.onNodeWithText("Save").performClick()
         composeTestRule.waitForIdle()
 
-        // Wait for files to be loaded using withTimeout
-        runBlocking {
-            withTimeout(5000) {
-                var filesLoaded = false
-                while (!filesLoaded) {
-                    try {
-                        composeTestRule.onNodeWithText("blue_sky.jpg", substring = true)
-                        filesLoaded = true
-                    } catch (e: AssertionError) {
-                        // Files not loaded yet, wait a bit
-                        delay(100)
-                    }
-                }
-            }
-        }
+        // Wait for file cards to be displayed.
+        composeTestRule.waitUntilExactlyOneExists(hasText("blue_sky.jpg"), 5000)
+        composeTestRule.waitUntilExactlyOneExists(hasText("red_earth.jpg"), 5000)
 
         // Select files.
         composeTestRule.onNodeWithText("blue_sky.jpg", substring = true).performClick()
         composeTestRule.onNodeWithText("red_earth.jpg", substring = true).performClick()
 
+        // Upload.
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
         composeTestRule.onNodeWithText("Upload").performClick()
+        composeTestRule.waitForIdle()
 
-        // Wait for files to show "Done" status
-        runBlocking {
-            withTimeout(30000) { // 30 seconds timeout
-                // Wait for both files to show "Done"
-                var foundCount = 0
-                while (foundCount < 2) {
-                    foundCount = 0
-                    try {
-                        // Try to find "Done" text for first file
-                        composeTestRule.onNodeWithText("Done", substring = true)
-                        foundCount++
-
-                        // Since we can't easily check for multiple instances,
-                        // just wait a bit more to ensure both are done
-                        delay(2000)
-                        foundCount = 2
-                    } catch (e: AssertionError) {
-                        // Not done yet
-                        delay(500)
-                    }
-                }
-            }
-        }
+        // Wait for both files to show "Synced" status
+        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 2, 10000)
     }
 }

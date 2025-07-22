@@ -15,6 +15,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -109,13 +110,11 @@ class UploadWorker(
                 val fileStatuses = mutableMapOf<String, String>() // filename -> status
                 val fileNames = filePaths.map { File(it).name }
 
-                // Initialize all files as waiting.
+                // Initialize all files as waiting and send individual updates.
                 fileNames.forEach { fileName ->
                     fileStatuses[fileName] = "waiting"
+                    sendFileUpdate(fileName, "waiting", 0, filePaths.size)
                 }
-
-                // Send initial status.
-                sendProgressUpdate(fileStatuses, 0, filePaths.size, "waiting")
 
                 // Ensure repository is open.
                 goBridge.ensureOpen(hostUrl, password)
@@ -129,16 +128,16 @@ class UploadWorker(
                     Log.d("Worker", "Uploading file ${index + 1}/${filePaths.size}: $filePath")
 
                     fileStatuses[fileName] = "uploading"
+                    sendFileUpdate(fileName, "uploading", index + 1, filePaths.size)
 
                     // Update previous files to uploaded
                     for (i in 0 until index) {
                         val prevFileName = fileNames[i]
                         if (fileStatuses[prevFileName] == "uploading" || fileStatuses[prevFileName] == "waiting") {
                             fileStatuses[prevFileName] = "uploaded"
+                            sendFileUpdate(prevFileName, "uploaded", index + 1, filePaths.size)
                         }
                     }
-
-                    sendProgressUpdate(fileStatuses, index + 1, filePaths.size, "uploading", fileName)
 
                     // Update progress notification.
                     setForeground(createForegroundInfo(index + 1, filePaths.size, fileName))
@@ -151,11 +150,9 @@ class UploadWorker(
                 fileNames.forEach { fileName ->
                     if (fileStatuses[fileName] == "uploading" || fileStatuses[fileName] == "uploaded") {
                         fileStatuses[fileName] = "committing"
+                        sendFileUpdate(fileName, "committing", filePaths.size, filePaths.size)
                     }
                 }
-
-                // Send committing status
-                sendProgressUpdate(fileStatuses, filePaths.size, filePaths.size, "committing")
 
                 // Update notification.
                 setForeground(createForegroundInfo(filePaths.size, filePaths.size, "Committing..."))
@@ -164,8 +161,23 @@ class UploadWorker(
                 val revisionId = goBridge.commit(revisionEntries, author, message)
                 Log.d("Worker", "Commit successful: $revisionId")
 
-                // Return success with revision ID.
-                val outputData = workDataOf(KEY_REVISION_ID to revisionId)
+                // Build complete status file and send as result
+                val resultFile = File(applicationContext.cacheDir, "upload_result_${System.currentTimeMillis()}.json")
+                val resultJson =
+                    JSONObject().apply {
+                        fileStatuses.forEach { (fileName, status) ->
+                            put(fileName, status)
+                        }
+                    }
+                resultFile.writeText(resultJson.toString())
+
+                // Return success with revision ID and result file.
+                val outputData =
+                    workDataOf(
+                        KEY_REVISION_ID to revisionId,
+                        "result_file" to resultFile.absolutePath,
+                        "total_files" to filePaths.size,
+                    )
                 Result.success(outputData)
             } catch (e: Exception) {
                 Log.e("Worker", "Upload failed", e)
@@ -245,6 +257,27 @@ class UploadWorker(
             val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
+    }
+
+    private suspend fun sendFileUpdate(
+        fileName: String,
+        status: String,
+        currentIndex: Int,
+        totalFiles: Int,
+    ) {
+        // Sleep briefly to prevent overwhelming the UI with updates
+        // This helps avoid WorkManager's internal buffer overflow issues
+        delay(10)
+
+        // Send single file update
+        setProgress(
+            workDataOf(
+                "file_name" to fileName,
+                "file_status" to status,
+                "current_index" to currentIndex,
+                "total_files" to totalFiles,
+            ),
+        )
     }
 
     private suspend fun sendProgressUpdate(
