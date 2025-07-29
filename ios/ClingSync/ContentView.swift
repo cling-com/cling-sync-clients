@@ -183,6 +183,7 @@ struct ContentView: View {
                         showSettings = true
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(uploader != nil)
                 }
             }
             .sheet(isPresented: $showSettings) {
@@ -227,7 +228,9 @@ struct ContentView: View {
                             action: { showSettings = true },
                             label: {
                                 Text("Settings")
-                            })
+                            }
+                        )
+                        .disabled(uploader != nil)
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
@@ -275,6 +278,7 @@ struct ContentView: View {
                     showSettings = true
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(uploader != nil)
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(isPresented: $showSettings)
@@ -292,7 +296,7 @@ struct ContentView: View {
     private func connectToServer() async {
         appState = .connectingToServer
         do {
-            try await Bridge.connectToServer(url: hostURL, password: passphrase)
+            try await Bridge.connectToServer(url: hostURL, password: passphrase, repoPathPrefix: repoPathPrefix)
             appState = .ready
         } catch {
             let bridgeError = error as? BridgeError

@@ -50,6 +50,12 @@ final class ClingSyncUITests: XCTestCase {
         destinationPathField.tap()
         destinationPathField.typeText("/uitest")
 
+        let authorField = app.textFields.element(boundBy: 2)
+        authorField.tap()
+        // Clear existing text
+        authorField.doubleTap()
+        authorField.typeText("Testinger")
+
         // Save settings, dialog should close.
         app.navigationBars["Connect to Server"].buttons["Save"].tap()
         // Wait for setting dialog to close.

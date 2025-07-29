@@ -16,15 +16,23 @@ import (
 	"github.com/flunderpero/cling-sync/workspace"
 )
 
-var repository *lib.Repository     //nolint:gochecknoglobals
-var head lib.RevisionId            //nolint:gochecknoglobals
-var snapshot *lib.RevisionSnapshot //nolint:gochecknoglobals
-var snapshotCache *lib.RevisionTempCache //nolint:gochecknoglobals
+var (
+	repository     *lib.Repository        //nolint:gochecknoglobals
+	head           lib.RevisionId         //nolint:gochecknoglobals
+	snapshot       *lib.RevisionTemp      //nolint:gochecknoglobals
+	snapshotCache  *lib.RevisionTempCache //nolint:gochecknoglobals
+	repoPathPrefix lib.Path               //nolint:gochecknoglobals
+)
 
 // Open the repository if needed and updates the current revision snapshot if the HEAD changed.
-func EnsureRepositoryOpen(hostURL, password string) error {
+func EnsureRepositoryOpen(hostURL, password, repoPathPrefix_ string) error {
 	// If repository is already open, verify the HEAD revision did not change.
 	// If it did, refresh the snapshot.
+	var err error
+	repoPathPrefix, err = lib.NewPath(strings.Trim(repoPathPrefix_, "/"))
+	if err != nil {
+		return lib.WrapErrorf(err, "failed to create repo path prefix %s", repoPathPrefix_)
+	}
 	if repository != nil {
 		currentHead, err := repository.Head()
 		if err != nil {
@@ -60,7 +68,7 @@ func EnsureRepositoryOpen(hostURL, password string) error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision snapshot")
 	}
-	snapshotCache, err = lib.NewRevisionTempCache(&snapshot.RevisionTemp, 20)
+	snapshotCache, err = lib.NewRevisionTempCache(snapshot, 20)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision cache")
 	}
@@ -90,18 +98,17 @@ func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 		}
 		for i, sha256 := range sha256s {
 			if sha256 == re.Metadata.FileHash {
-				res[i] = re.Path.FSString()
+				res[i] = re.Path.String()
 			}
 		}
 	}
 	return res, nil
 }
 
-func UploadFile(filePath, repoPathPrefix string) (*lib.RevisionEntry, error) {
+func UploadFile(filePath string) (*lib.RevisionEntry, error) {
 	if repository == nil {
 		return nil, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
 	}
-	repoPathPrefix = strings.Trim(repoPathPrefix, "/")
 	fileInfo, err := os.Stat(filePath) //nolint:forbidigo
 	if err != nil {
 		return nil, lib.WrapErrorf(err, "failed to stat file %s", filePath)
@@ -113,11 +120,14 @@ func UploadFile(filePath, repoPathPrefix string) (*lib.RevisionEntry, error) {
 	dir := filepath.Dir(filePath)
 	fs := lib.NewRealFS(dir)
 	// Ensure the final repoPath is not absolute.
-	repoPathStr := repoPathPrefix + "/" + strings.Trim(filename, "/")
-	repoPath := lib.NewPath(strings.Split(repoPathStr, "/")...)
+	filenamePath, err := lib.NewPath(strings.Trim(filename, "/"))
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "invalid path %s", filename)
+	}
+	repoPath := repoPathPrefix.Join(filenamePath)
 	md, err := workspace.AddFileToRepository(
 		fs,
-		filename,
+		filenamePath,
 		fileInfo,
 		repository,
 		nil,
@@ -144,6 +154,9 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	commit, err := lib.NewCommit(repository, tempFS)
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to create commit")
+	}
+	if err := commit.EnsureDirExists(repoPathPrefix, snapshotCache); err != nil {
+		return "", lib.WrapErrorf(err, "failed to ensure path prefix exists as a directory in the repository")
 	}
 	for _, entry := range entries {
 		if err := commit.Add(entry); err != nil {

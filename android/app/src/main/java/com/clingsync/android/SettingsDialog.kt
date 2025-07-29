@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -21,6 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -34,6 +37,7 @@ fun SettingsDialog(
     var hostUrl by remember { mutableStateOf(settings.hostUrl) }
     var password by remember { mutableStateOf(settings.password) }
     var repoPathPrefix by remember { mutableStateOf(settings.repoPathPrefix) }
+    var author by remember { mutableStateOf(settings.author) }
 
     Dialog(
         onDismissRequest = { onDismiss?.invoke() },
@@ -67,6 +71,12 @@ fun SettingsDialog(
                     onValueChange = { password = it },
                     label = { Text("Password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions =
+                        KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            autoCorrect = false,
+                            capitalization = KeyboardCapitalization.None,
+                        ),
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -75,6 +85,14 @@ fun SettingsDialog(
                     onValueChange = { repoPathPrefix = it },
                     label = { Text("Destination Path") },
                     placeholder = { Text("/backup/photos") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = author,
+                    onValueChange = { author = it },
+                    label = { Text("Author") },
+                    placeholder = { Text("Your Name") },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -97,10 +115,11 @@ fun SettingsDialog(
                                     hostUrl = hostUrl.trim(),
                                     password = password,
                                     repoPathPrefix = repoPathPrefix.trim(),
+                                    author = author.trim(),
                                 )
                             onSave(newSettings)
                         },
-                        enabled = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank(),
+                        enabled = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank() && author.isNotBlank(),
                     ) {
                         Text("Save")
                     }

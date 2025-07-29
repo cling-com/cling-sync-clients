@@ -24,17 +24,18 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			result = errorResponse(errMsg)
 		}
 	}()
-	
+
 	switch command {
 	case "ensureOpen":
 		var params struct {
-			HostURL  string `json:"hostUrl"`
-			Password string `json:"password"`
+			HostURL        string `json:"hostUrl"`
+			Password       string `json:"password"`
+			RepoPathPrefix string `json:"repoPathPrefix"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		err := EnsureRepositoryOpen(params.HostURL, params.Password)
+		err := EnsureRepositoryOpen(params.HostURL, params.Password, params.RepoPathPrefix)
 		if err != nil {
 			return errorResponse(err.Error())
 		}
@@ -78,13 +79,12 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		return string(jsonBytes)
 	case "uploadFile":
 		var params struct {
-			FilePath       string `json:"filePath"`
-			RepoPathPrefix string `json:"repoPathPrefix"`
+			FilePath string `json:"filePath"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		entry, err := UploadFile(params.FilePath, params.RepoPathPrefix)
+		entry, err := UploadFile(params.FilePath)
 		if err != nil {
 			return errorResponse(err.Error())
 		}

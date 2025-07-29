@@ -61,17 +61,26 @@ fun TopBar(
             ) {
                 if (isUploading && uploadInfo != null) {
                     // Show circular progress during upload.
-                    val progress =
-                        if (uploadInfo.totalFiles > 0) {
-                            uploadInfo.currentIndex.toFloat() / uploadInfo.totalFiles
-                        } else {
-                            0f
-                        }
-                    CircularProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                    )
+                    if (uploadInfo.currentFile == null) {
+                        // Preparing state - show indeterminate spinner
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        // Uploading state - show progress
+                        val progress =
+                            if (uploadInfo.totalFiles > 0) {
+                                uploadInfo.currentIndex.toFloat() / uploadInfo.totalFiles
+                            } else {
+                                0f
+                            }
+                        CircularProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                 } else {
                     // Show checkbox when not uploading.
                     Checkbox(

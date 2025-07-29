@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -83,6 +84,9 @@ class IntegrationTest {
 
         composeTestRule.onNodeWithText("Destination Path").performClick()
         composeTestRule.onNodeWithText("Destination Path").performTextInput(repoPathPrefix)
+
+        composeTestRule.onNodeWithText("Author").performClick()
+        composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
 
         composeTestRule.onNodeWithText("Save").performClick()
         composeTestRule.waitForIdle()

@@ -50,11 +50,13 @@ open class GoBridge : IGoBridge {
     override fun ensureOpen(
         hostUrl: String,
         password: String,
+        repoPathPrefix: String,
     ) {
         val params =
             JSONObject().apply {
                 put("hostUrl", hostUrl)
                 put("password", password)
+                put("repoPathPrefix", repoPathPrefix)
             }
 
         executeInternal("ensureOpen", params)
@@ -71,14 +73,10 @@ open class GoBridge : IGoBridge {
         return List(resultsArray.length()) { i -> resultsArray.getString(i) }
     }
 
-    override fun uploadFile(
-        filePath: String,
-        repoPathPrefix: String,
-    ): String {
+    override fun uploadFile(filePath: String): String {
         val params =
             JSONObject().apply {
                 put("filePath", filePath)
-                put("repoPathPrefix", repoPathPrefix)
             }
 
         val response = executeInternal("uploadFile", params)

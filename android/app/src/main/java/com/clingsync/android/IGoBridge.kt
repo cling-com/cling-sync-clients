@@ -4,14 +4,12 @@ interface IGoBridge {
     fun ensureOpen(
         hostUrl: String,
         password: String,
+        repoPathPrefix: String,
     )
 
     fun checkFiles(sha256s: List<String>): List<String>
 
-    fun uploadFile(
-        filePath: String,
-        repoPathPrefix: String,
-    ): String
+    fun uploadFile(filePath: String): String
 
     fun commit(
         revisionEntries: List<String>,

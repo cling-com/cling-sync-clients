@@ -8,8 +8,9 @@ data class AppSettings(
     // TODO: Don't store the password as plain text.
     val password: String = "",
     val repoPathPrefix: String = "",
+    val author: String = "Android User",
 ) {
-    fun isValid(): Boolean = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank()
+    fun isValid(): Boolean = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank() && author.isNotBlank()
 }
 
 class SettingsManager(private val context: Context) {
@@ -20,6 +21,7 @@ class SettingsManager(private val context: Context) {
             hostUrl = prefs.getString("host_url", "") ?: "",
             password = prefs.getString("password", "") ?: "",
             repoPathPrefix = prefs.getString("repo_path_prefix", "") ?: "",
+            author = prefs.getString("author", "Android User") ?: "Android User",
         )
     }
 
@@ -28,6 +30,7 @@ class SettingsManager(private val context: Context) {
             putString("host_url", settings.hostUrl)
             putString("password", settings.password)
             putString("repo_path_prefix", settings.repoPathPrefix)
+            putString("author", settings.author)
             apply()
         }
     }

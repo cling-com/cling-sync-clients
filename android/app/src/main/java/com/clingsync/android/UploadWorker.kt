@@ -117,7 +117,7 @@ class UploadWorker(
                 }
 
                 // Ensure repository is open.
-                goBridge.ensureOpen(hostUrl, password)
+                goBridge.ensureOpen(hostUrl, password, repoPathPrefix)
 
                 // List to collect revision entries.
                 val revisionEntries = mutableListOf<String>()
@@ -142,7 +142,7 @@ class UploadWorker(
                     // Update progress notification.
                     setForeground(createForegroundInfo(index + 1, filePaths.size, fileName))
 
-                    val revisionEntry = goBridge.uploadFile(filePath, repoPathPrefix)
+                    val revisionEntry = goBridge.uploadFile(filePath)
                     revisionEntries.add(revisionEntry)
                 }
 

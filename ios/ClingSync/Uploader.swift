@@ -1,5 +1,6 @@
 import Photos
 import SwiftUI
+import UIKit
 
 enum UploaderState {
     case preparing
@@ -14,6 +15,7 @@ class Uploader: ObservableObject {
     @AppStorage("hostURL") private var hostURL = ""
     @AppStorage("passphrase") private var passphrase = ""
     @AppStorage("repoPathPrefix") private var repoPathPrefix = ""
+    @AppStorage("author") private var author = "iOS User"
     @Published var currentlySending: File?
     @Published var uploadedBytes: Int64 = 0
     @Published var errorMessage: String = ""
@@ -44,7 +46,7 @@ class Uploader: ObservableObject {
         }
         task = Task {
             do {
-                try Bridge.ensureOpen(url: hostURL, password: passphrase)
+                try Bridge.ensureOpen(url: hostURL, password: passphrase, repoPathPrefix: repoPathPrefix)
                 var revisionEntries: [String] = []
 
                 // Upload each file sequentially.
@@ -74,11 +76,12 @@ class Uploader: ObservableObject {
                 }
 
                 // Commit all uploaded files
+                let deviceModel = await UIDevice.current.model
+                let deviceName = await UIDevice.current.name
                 _ = try Bridge.commit(
                     revisionEntries: revisionEntries,
-                    // todo: use the system's user name
-                    author: "iOS User",
-                    message: "Upload from iOS app"
+                    author: author,
+                    message: "Backup \(files.count) file\(files.count == 1 ? "" : "s") from \(deviceName)"
                 )
 
                 // Mark all committed files as uploaded
@@ -148,7 +151,7 @@ class Uploader: ObservableObject {
             }
         }
         let revisionEntry = try Bridge.uploadFile(
-            filePath: tempURL.path, repoPathPrefix: repoPathPrefix)
+            filePath: tempURL.path)
         try? FileManager.default.removeItem(at: tempURL)
         return revisionEntry
     }

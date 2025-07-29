@@ -357,12 +357,14 @@ fun MainScreen(
     val coroutineScope = rememberCoroutineScope()
     var currentUploadInfo by remember { mutableStateOf<UploadInfo?>(null) }
     var isUploading by remember { mutableStateOf(false) }
+    var isUploadInitiated by remember { mutableStateOf(false) }
     var uploadError by remember { mutableStateOf<String?>(null) }
     var checkFilesError by remember { mutableStateOf<String?>(null) }
     val lazyListState = rememberLazyListState()
     var checkFilesJob by remember { mutableStateOf<Job?>(null) }
     val fileChecker = remember { FileChecker() }
     var isConnecting by remember { mutableStateOf(false) }
+    var isConnected by remember { mutableStateOf(false) }
 
     // Calculate total size for selected files and uploaded size.
     val totalSizeMB =
@@ -389,7 +391,7 @@ fun MainScreen(
 
     // Function to check files that haven't been scanned
     fun checkUnscannedFiles() {
-        if (!settings.isValid() || cameraFiles.isEmpty()) return
+        if (!settings.isValid() || cameraFiles.isEmpty() || !isConnected) return
 
         val filesToCheck =
             cameraFiles.filter { file ->
@@ -425,6 +427,7 @@ fun MainScreen(
                         filePaths = filesToCheck.map { it.absolutePath },
                         hostUrl = settings.hostUrl,
                         password = settings.password,
+                        repoPathPrefix = settings.repoPathPrefix,
                     )
 
                 // Cancel update collection
@@ -460,8 +463,10 @@ fun MainScreen(
             cameraFiles = withContext(Dispatchers.IO) { getCameraFiles() }
             isLoadingFiles = false
 
-            // Start checking files if we have settings
-            checkUnscannedFiles()
+            // Only start checking files if we're connected
+            if (isConnected) {
+                checkUnscannedFiles()
+            }
         }
     }
 
@@ -534,6 +539,7 @@ fun MainScreen(
                 }
                 WorkInfo.State.SUCCEEDED -> {
                     isUploading = false
+                    isUploadInitiated = false
                     currentUploadInfo = null
 
                     // Apply complete result from file
@@ -574,6 +580,7 @@ fun MainScreen(
                 }
                 WorkInfo.State.CANCELLED -> {
                     isUploading = false
+                    isUploadInitiated = false
                     currentUploadInfo = null
                     fileStatus.forEach { (fileName, status) ->
                         if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
@@ -583,6 +590,7 @@ fun MainScreen(
                 }
                 WorkInfo.State.FAILED -> {
                     isUploading = false
+                    isUploadInitiated = false
                     currentUploadInfo = null
                     val fullErrorMsg = info.outputData.getString("error") ?: "Upload failed"
                     uploadError = fullErrorMsg
@@ -595,6 +603,7 @@ fun MainScreen(
                 }
                 else -> {
                     isUploading = false
+                    isUploadInitiated = false
                     currentUploadInfo = null
                 }
             }
@@ -617,11 +626,15 @@ fun MainScreen(
         if (settings.isValid()) {
             withContext(Dispatchers.IO) {
                 try {
-                    goBridge.ensureOpen(settings.hostUrl, settings.password)
+                    goBridge.ensureOpen(settings.hostUrl, settings.password, settings.repoPathPrefix)
                     Log.d("ClingSync", "Connected to repository")
+                    withContext(Dispatchers.Main) {
+                        isConnected = true
+                    }
                 } catch (e: Exception) {
                     Log.e("ClingSync", "Failed to open repository", e)
                     withContext(Dispatchers.Main) {
+                        isConnected = false
                         errorMessage = "Failed to connect to repository: ${e.message}"
                     }
                 }
@@ -644,6 +657,14 @@ fun MainScreen(
             loadFiles()
         } else if (!hasPermission) {
             permissionLauncher.launch(permissions)
+        }
+    }
+
+    // Watch for connection status changes
+    LaunchedEffect(isConnected) {
+        if (isConnected && cameraFiles.isNotEmpty()) {
+            // When we become connected, check any unscanned files
+            checkUnscannedFiles()
         }
     }
 
@@ -681,11 +702,19 @@ fun MainScreen(
                                 )
                             }
 
-                            IconButton(onClick = { showSettingsDialog = true }) {
+                            IconButton(
+                                onClick = { showSettingsDialog = true },
+                                enabled = !(isUploading || isUploadInitiated),
+                            ) {
                                 Icon(
                                     Icons.Default.Settings,
                                     contentDescription = "Settings",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint =
+                                        if (isUploading || isUploadInitiated) {
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
                                     modifier = Modifier.size(24.dp),
                                 )
                             }
@@ -775,7 +804,7 @@ fun MainScreen(
                 ScrollAwareTopBar(
                     lazyListState = lazyListState,
                     selectedFiles = selectedFiles,
-                    isUploading = isUploading,
+                    isUploading = isUploading || isUploadInitiated,
                     uploadInfo = currentUploadInfo,
                     selectAllChecked = selectAllChecked,
                     onSelectAllChange = { checked ->
@@ -790,8 +819,16 @@ fun MainScreen(
                         val filePaths = selectedFiles.map { it.absolutePath }
                         Log.d("ClingSync", "Scheduling upload for files: $filePaths")
 
-                        // Cancel any ongoing file checking
-                        checkFilesJob?.cancel()
+                        // Immediately switch to upload mode
+                        isUploadInitiated = true
+                        currentUploadInfo =
+                            UploadInfo(
+                                // Will show "Preparing..."
+                                currentFile = null,
+                                fileSize = null,
+                                currentIndex = 0,
+                                totalFiles = selectedFiles.size,
+                            )
 
                         selectedFiles.forEach { file ->
                             fileStatus = fileStatus + (file.name to FileStatus.Waiting)
@@ -801,16 +838,19 @@ fun MainScreen(
                             context = context,
                             filePaths = filePaths,
                             repoPathPrefix = settings.repoPathPrefix,
-                            author = "Android User",
-                            message = "Backup ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"} from camera",
+                            author = settings.author,
+                            message =
+                                "Backup ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"}" +
+                                    " from ${Build.MANUFACTURER} ${Build.MODEL}",
                             hostUrl = settings.hostUrl,
                             password = settings.password,
                         )
                     },
                     onAbortClick = {
                         workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
+                        isUploadInitiated = false
                     },
-                    isSelectAllEnabled = !isUploading,
+                    isSelectAllEnabled = !(isUploading || isUploadInitiated),
                     totalSizeMB = totalSizeMB,
                     uploadedSizeMB = uploadedSizeMB,
                 )
@@ -830,7 +870,7 @@ fun MainScreen(
                             showSettingsDialog = false
 
                             withContext(Dispatchers.IO) {
-                                goBridge.ensureOpen(newSettings.hostUrl, newSettings.password)
+                                goBridge.ensureOpen(newSettings.hostUrl, newSettings.password, newSettings.repoPathPrefix)
                             }
 
                             // Check if host URL changed
@@ -839,6 +879,7 @@ fun MainScreen(
                             settings = newSettings
                             settingsManager.saveSettings(newSettings)
                             isConnecting = false
+                            isConnected = true
                             Log.d("ClingSync", "Connected to repository via settings")
 
                             if (hostUrlChanged) {
@@ -847,11 +888,11 @@ fun MainScreen(
                                 Log.d("MainActivity", "Host URL changed, clearing file statuses")
                             }
 
-                            // Start checking files that haven't been scanned yet
-                            checkUnscannedFiles()
+                            // File checking will be triggered by the LaunchedEffect watching isConnected
                         } catch (e: Exception) {
                             Log.e("ClingSync", "Failed to open repository with new settings", e)
                             isConnecting = false
+                            isConnected = false
                             errorMessage = "Failed to connect to repository: ${e.message}"
                         }
                     }

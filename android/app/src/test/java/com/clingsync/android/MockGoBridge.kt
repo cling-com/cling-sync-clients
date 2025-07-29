@@ -16,7 +16,7 @@ class MockGoBridge : IGoBridge {
     private val ensureOpenCounter = AtomicInteger(0)
     private val commitCounter = AtomicInteger(0)
 
-    private val uploadCalls = mutableListOf<Pair<String, String>>()
+    private val uploadCalls = mutableListOf<String>()
     private val commitCalls = mutableListOf<Triple<List<String>, String, String>>()
     private val errors = mutableListOf<String>()
 
@@ -29,6 +29,7 @@ class MockGoBridge : IGoBridge {
     override fun ensureOpen(
         hostUrl: String,
         password: String,
+        repoPathPrefix: String,
     ) {
         if (shouldFailEnsureOpen) {
             val error = "Failed to connect to repository: Connection refused"
@@ -53,10 +54,7 @@ class MockGoBridge : IGoBridge {
         return res
     }
 
-    override fun uploadFile(
-        filePath: String,
-        repoPathPrefix: String,
-    ): String {
+    override fun uploadFile(filePath: String): String {
         if (!isOpen) {
             val error = "Repository not open"
             errors.add(error)
@@ -83,7 +81,7 @@ class MockGoBridge : IGoBridge {
         }
 
         uploadedFiles.add(filePath)
-        uploadCalls.add(Pair(filePath, repoPathPrefix))
+        uploadCalls.add(filePath)
         return "revision-entry-$currentIndex"
     }
 
@@ -139,7 +137,7 @@ class MockGoBridge : IGoBridge {
 
     fun getCommitCount(): Int = commitCounter.get()
 
-    fun getUploadCalls(): List<Pair<String, String>> = uploadCalls.toList()
+    fun getUploadCalls(): List<String> = uploadCalls.toList()
 
     fun getCommitCalls(): List<Triple<List<String>, String, String>> = commitCalls.toList()
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	iofs "io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,7 +49,14 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	assert.NotEqual(head, newHead, "Head should have changed")
 
 	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"phone", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/camera", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
 		{"phone/camera/blue_sky.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Blue sky")},
 		{"phone/camera/red_earth.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Red earth")},
 	}, r.RevisionInfos(newHead))
+
+	revision, err := r.ReadRevision(newHead)
+	assert.NoError(err)
+	assert.Contains(revision.Message, "Backup 2 files from Google")
+	assert.Equal("Testinger", revision.Author)
 }

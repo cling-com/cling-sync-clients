@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	iofs "io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -51,7 +52,15 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	shaImg0004, err := hex.DecodeString("5864d328a5b09805637c971e4a6e8802a184b01d7d1cfe80ff1a61e2783f46f1")
 	assert.NoError(err)
 	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"uitest", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
 		{"uitest/IMG_0001.JPG", lib.RevisionEntryAdd, 0o600, lib.Sha256(shaImg0001)},
 		{"uitest/IMG_0004.JPG", lib.RevisionEntryAdd, 0o600, lib.Sha256(shaImg0004)},
 	}, r.RevisionInfos(newHead))
+
+	revision, err := r.ReadRevision(newHead)
+	assert.NoError(err)
+	assert.Equal("Testinger", revision.Author)
+	assert.Contains(revision.Message, "Backup 2 files from")
+	// The message should include the device name
+	assert.Contains(revision.Message, "Clone")
 }

@@ -5,10 +5,11 @@ struct BridgeError: Error {
 }
 
 class Bridge {
-    static func ensureOpen(url: String, password: String) throws(BridgeError) {
+    static func ensureOpen(url: String, password: String, repoPathPrefix: String) throws(BridgeError) {
         let params: [String: Any] = [
             "hostUrl": url,
             "password": password,
+            "repoPathPrefix": repoPathPrefix,
         ]
 
         guard let paramsData = try? JSONSerialization.data(withJSONObject: params),
@@ -44,10 +45,9 @@ class Bridge {
         }
     }
 
-    static func uploadFile(filePath: String, repoPathPrefix: String) throws(BridgeError) -> String {
+    static func uploadFile(filePath: String) throws(BridgeError) -> String {
         let params: [String: Any] = [
-            "filePath": filePath,
-            "repoPathPrefix": repoPathPrefix,
+            "filePath": filePath
         ]
 
         guard let paramsData = try? JSONSerialization.data(withJSONObject: params),
@@ -184,9 +184,9 @@ class Bridge {
 
     // First, make a HEAD request to trigger network permission dialog if needed.
     // Then, connect to the server using `ensureOpen`.
-    static func connectToServer(url: String, password: String) async throws {
+    static func connectToServer(url: String, password: String, repoPathPrefix: String) async throws {
         try await triggerNetworkPermissionIfNeeded(url: url)
-        try ensureOpen(url: url, password: password)
+        try ensureOpen(url: url, password: password, repoPathPrefix: repoPathPrefix)
     }
 
     private static func triggerNetworkPermissionIfNeeded(url urlString: String) async throws {

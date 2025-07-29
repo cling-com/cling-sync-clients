@@ -258,7 +258,7 @@ class MainScreenTest {
 
                     assertEquals(2, uploadCalls.size)
                     assertEquals(1, commitCalls.size)
-                    assertEquals(setOf("IMG_001.jpg", "IMG_002.jpg"), uploadCalls.map { File(it.first).name }.toSet())
+                    assertEquals(setOf("IMG_001.jpg", "IMG_002.jpg"), uploadCalls.map { File(it).name }.toSet())
                 }
         }
 

@@ -32,13 +32,14 @@ class FileChecker {
         filePaths: List<String>,
         hostUrl: String,
         password: String,
+        repoPathPrefix: String,
     ): Result<FileCheckResult> =
         withContext(Dispatchers.IO) {
             try {
                 Log.d("FileChecker", "Starting check of ${filePaths.size} files")
 
                 // Ensure repository is open
-                goBridge.ensureOpen(hostUrl, password)
+                goBridge.ensureOpen(hostUrl, password, repoPathPrefix)
 
                 Log.d("FileChecker", "Starting to process ${filePaths.size} files")
 

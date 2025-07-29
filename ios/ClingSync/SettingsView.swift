@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage("hostURL") private var hostURL = ""
     @AppStorage("passphrase") private var passphrase = ""
     @AppStorage("repoPathPrefix") private var repoPathPrefix = ""
+    @AppStorage("author") private var author = "iOS User"
 
     @Binding var isPresented: Bool
     @State private var isConnecting = false
@@ -25,22 +26,9 @@ struct SettingsView: View {
                     TextField("Destination path", text: $repoPathPrefix)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
-                }
 
-                Section {
-                    Button(action: testConnection) {
-                        if isConnecting {
-                            HStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(0.8)
-                                Text("Connecting...")
-                            }
-                        } else {
-                            Text("Test Connection")
-                        }
-                    }
-                    .disabled(hostURL.isEmpty || passphrase.isEmpty || isConnecting)
+                    TextField("Author", text: $author)
+                        .textContentType(.name)
                 }
             }
             .navigationTitle("Connect to Server")
@@ -53,19 +41,38 @@ struct SettingsView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        isPresented = false
+                        if !isConnecting {
+                            testConnection()
+                        }
                     }
-                    .disabled(hostURL.isEmpty || passphrase.isEmpty)
+                    .disabled(hostURL.isEmpty || passphrase.isEmpty || isConnecting)
                 }
             }
             .alert(isPresented: $showError) {
                 Alert(
-                    title: Text(
-                        errorMessage.isEmpty ? "Connection Successful" : "Connection Error"),
-                    message: Text(
-                        errorMessage.isEmpty ? "Successfully connected to server" : errorMessage),
+                    title: Text("Connection Error"),
+                    message: Text(errorMessage),
                     dismissButton: .default(Text("OK"))
                 )
+            }
+            .overlay {
+                if isConnecting {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .overlay {
+                            VStack(spacing: 16) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .scaleEffect(1.5)
+                                Text("Connecting to server...")
+                                    .font(.headline)
+                            }
+                            .padding(24)
+                            .background(Color(.systemBackground))
+                            .cornerRadius(12)
+                            .shadow(radius: 4)
+                        }
+                }
             }
         }
     }
@@ -76,11 +83,11 @@ struct SettingsView: View {
 
         Task {
             do {
-                try Bridge.ensureOpen(url: hostURL, password: passphrase)
+                try Bridge.ensureOpen(url: hostURL, password: passphrase, repoPathPrefix: repoPathPrefix)
                 await MainActor.run {
                     isConnecting = false
-                    errorMessage = ""
-                    showError = true
+                    // Close the dialog on success
+                    isPresented = false
                 }
             } catch {
                 await MainActor.run {
