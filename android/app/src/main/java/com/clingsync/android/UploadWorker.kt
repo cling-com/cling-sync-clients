@@ -16,6 +16,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -48,6 +49,7 @@ class UploadWorker(
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "upload_channel"
         private const val TEMP_FILE_NAME = "pending_upload_files.txt"
+        private const val STATUS_FILE_NAME = "upload_status.json"
 
         fun enqueueUpload(
             context: Context,
@@ -84,9 +86,22 @@ class UploadWorker(
     }
 
     private val goBridge = GoBridgeProvider.getInstance()
+    private val statusFile = File(applicationContext.cacheDir, STATUS_FILE_NAME)
+    private val fileStatuses = mutableMapOf<String, String>()
+    private var totalBytes = 0L
+    private var uploadedBytes = 0L
 
     override suspend fun doWork(): Result =
         withContext(Dispatchers.IO) {
+            // Setup a coroutine to periodically update progress
+            val progressJob =
+                launch {
+                    while (true) {
+                        updateProgressFile()
+                        delay(1000) // Update every second
+                    }
+                }
+
             try {
                 // Read file paths from file and delete it immediately.
                 val filePath = inputData.getString(KEY_FILE_PATHS_FILE) ?: return@withContext Result.failure()
@@ -106,14 +121,15 @@ class UploadWorker(
                 // Show foreground notification.
                 setForeground(createForegroundInfo(0, filePaths.size))
 
-                // Build complete status map for all files.
-                val fileStatuses = mutableMapOf<String, String>() // filename -> status
-                val fileNames = filePaths.map { File(it).name }
+                // Calculate total bytes
+                filePaths.forEach { path ->
+                    totalBytes += File(path).length()
+                }
 
-                // Initialize all files as waiting and send individual updates.
+                // Initialize all files as waiting
+                val fileNames = filePaths.map { File(it).name }
                 fileNames.forEach { fileName ->
                     fileStatuses[fileName] = "waiting"
-                    sendFileUpdate(fileName, "waiting", 0, filePaths.size)
                 }
 
                 // Ensure repository is open.
@@ -125,41 +141,50 @@ class UploadWorker(
                 // Upload each file.
                 filePaths.forEachIndexed { index, filePath ->
                     val fileName = File(filePath).name
+                    val fileSize = File(filePath).length()
                     Log.d("Worker", "Uploading file ${index + 1}/${filePaths.size}: $filePath")
 
                     fileStatuses[fileName] = "uploading"
-                    sendFileUpdate(fileName, "uploading", index + 1, filePaths.size)
-
-                    // Update previous files to uploaded
-                    for (i in 0 until index) {
-                        val prevFileName = fileNames[i]
-                        if (fileStatuses[prevFileName] == "uploading" || fileStatuses[prevFileName] == "waiting") {
-                            fileStatuses[prevFileName] = "uploaded"
-                            sendFileUpdate(prevFileName, "uploaded", index + 1, filePaths.size)
-                        }
-                    }
+                    Log.d("Worker", "Marking $fileName as uploading (file ${index + 1}/${filePaths.size})")
 
                     // Update progress notification.
                     setForeground(createForegroundInfo(index + 1, filePaths.size, fileName))
 
                     val revisionEntry = goBridge.uploadFile(filePath)
-                    revisionEntries.add(revisionEntry)
+                    if (revisionEntry != null) {
+                        revisionEntries.add(revisionEntry)
+                        uploadedBytes += fileSize
+                        fileStatuses[fileName] = "uploaded"
+                        Log.d("Worker", "Marked $fileName as uploaded with size $fileSize")
+                    } else {
+                        // File was skipped (already exists with same hash)
+                        Log.d("Worker", "Skipped file $fileName - already exists with same hash")
+                        fileStatuses[fileName] = "skipped"
+                        uploadedBytes += fileSize // Count skipped files as uploaded
+                    }
                 }
 
                 // Mark all files as committing.
                 fileNames.forEach { fileName ->
                     if (fileStatuses[fileName] == "uploading" || fileStatuses[fileName] == "uploaded") {
                         fileStatuses[fileName] = "committing"
-                        sendFileUpdate(fileName, "committing", filePaths.size, filePaths.size)
                     }
                 }
 
                 // Update notification.
                 setForeground(createForegroundInfo(filePaths.size, filePaths.size, "Committing..."))
 
-                // Commit all entries.
-                val revisionId = goBridge.commit(revisionEntries, author, message)
-                Log.d("Worker", "Commit successful: $revisionId")
+                // Only commit if we have revision entries
+                val revisionId =
+                    if (revisionEntries.isNotEmpty()) {
+                        // Commit all entries.
+                        val id = goBridge.commit(revisionEntries, author, message)
+                        Log.d("Worker", "Commit successful: $id")
+                        id
+                    } else {
+                        Log.d("Worker", "No files to commit - all files already exist with same hash")
+                        ""
+                    }
 
                 // Build complete status file and send as result
                 val resultFile = File(applicationContext.cacheDir, "upload_result_${System.currentTimeMillis()}.json")
@@ -178,8 +203,13 @@ class UploadWorker(
                         "result_file" to resultFile.absolutePath,
                         "total_files" to filePaths.size,
                     )
+                // Cancel progress job and write final status
+                progressJob.cancel()
+                updateProgressFile()
+
                 Result.success(outputData)
             } catch (e: Exception) {
+                progressJob.cancel()
                 Log.e("Worker", "Upload failed", e)
 
                 // Build detailed error message with stack trace.
@@ -259,54 +289,27 @@ class UploadWorker(
         }
     }
 
-    private suspend fun sendFileUpdate(
-        fileName: String,
-        status: String,
-        currentIndex: Int,
-        totalFiles: Int,
-    ) {
-        // Sleep briefly to prevent overwhelming the UI with updates
-        // This helps avoid WorkManager's internal buffer overflow issues
-        delay(10)
-
-        // Send single file update
-        setProgress(
-            workDataOf(
-                "file_name" to fileName,
-                "file_status" to status,
-                "current_index" to currentIndex,
-                "total_files" to totalFiles,
-            ),
-        )
-    }
-
-    private suspend fun sendProgressUpdate(
-        fileStatuses: Map<String, String>,
-        currentIndex: Int,
-        totalFiles: Int,
-        overallStatus: String,
-        currentFile: String? = null,
-    ) {
-        // Convert map to JSON for efficient transfer
-        val statusJson =
-            JSONObject().apply {
-                fileStatuses.forEach { (fileName, status) ->
-                    put(fileName, status)
+    private suspend fun updateProgressFile() {
+        try {
+            // Write status to file
+            val statusJson =
+                JSONObject().apply {
+                    fileStatuses.forEach { (fileName, status) ->
+                        put(fileName, status)
+                    }
                 }
-            }
+            statusFile.writeText(statusJson.toString())
 
-        val data =
-            mutableMapOf(
-                "file_statuses" to statusJson.toString(),
-                "current_index" to currentIndex,
-                "total_files" to totalFiles,
-                "status" to overallStatus,
+            // Send progress update with just the filename
+            setProgress(
+                workDataOf(
+                    "status_file" to statusFile.absolutePath,
+                    "uploaded_bytes" to uploadedBytes,
+                    "total_bytes" to totalBytes,
+                ),
             )
-
-        if (currentFile != null) {
-            data["current_file"] = currentFile
+        } catch (e: Exception) {
+            Log.e("Worker", "Failed to update progress file", e)
         }
-
-        setProgress(workDataOf(*data.toList().toTypedArray()))
     }
 }

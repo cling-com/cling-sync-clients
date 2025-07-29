@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -35,10 +34,10 @@ fun TopBar(
     selectAllChecked: Boolean,
     onSelectAllChange: (Boolean) -> Unit,
     onUploadClick: () -> Unit,
+    onUploadAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     modifier: Modifier = Modifier,
     isSelectAllEnabled: Boolean = true,
-    totalSizeMB: Long = 0L,
     uploadedSizeMB: Long = 0L,
 ) {
     Surface(
@@ -50,17 +49,16 @@ fun TopBar(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start,
         ) {
-            // Left side: Checkbox or circular progress.
-            Box(
-                modifier = Modifier.size(40.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isUploading && uploadInfo != null) {
-                    // Show circular progress during upload.
+            // Left side: Progress indicator during upload or empty space
+            if (isUploading && uploadInfo != null) {
+                Box(
+                    modifier = Modifier.size(40.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     if (uploadInfo.currentFile == null) {
                         // Preparing state - show indeterminate spinner
                         CircularProgressIndicator(
@@ -81,18 +79,9 @@ fun TopBar(
                             strokeWidth = 2.dp,
                         )
                     }
-                } else {
-                    // Show checkbox when not uploading.
-                    Checkbox(
-                        checked = selectAllChecked,
-                        onCheckedChange = onSelectAllChange,
-                        modifier = Modifier.testTag("select_all"),
-                        enabled = isSelectAllEnabled && !isUploading,
-                    )
                 }
+                Spacer(modifier = Modifier.width(12.dp))
             }
-
-            Spacer(modifier = Modifier.width(12.dp))
 
             // Middle: Status text.
             Box(
@@ -104,8 +93,14 @@ fun TopBar(
                         // During upload: show current file and progress.
                         UploadProgressDisplay(
                             uploadInfo = uploadInfo,
-                            totalSizeMB = totalSizeMB,
                             uploadedSizeMB = uploadedSizeMB,
+                        )
+                    }
+                    isUploading -> {
+                        // Upload initiated but no info yet - show preparing
+                        Text(
+                            text = "Preparing upload...",
+                            style = MaterialTheme.typography.bodyMedium,
                         )
                     }
                     selectedFiles.isNotEmpty() -> {
@@ -144,6 +139,7 @@ fun TopBar(
                     }
                 }
                 selectedFiles.isNotEmpty() -> {
+                    // Show Upload Selected button
                     Button(
                         onClick = onUploadClick,
                         modifier =
@@ -156,20 +152,26 @@ fun TopBar(
                             ),
                     ) {
                         Text(
-                            text = "Upload",
+                            text = "Upload Selected",
                             fontWeight = FontWeight.Medium,
                         )
                     }
                 }
                 else -> {
-                    // Disabled upload button when no files selected.
+                    // Show Upload All button when no files selected
                     Button(
-                        onClick = { },
-                        modifier = Modifier.height(40.dp),
-                        enabled = false,
+                        onClick = onUploadAllClick,
+                        modifier =
+                            Modifier
+                                .height(40.dp)
+                                .testTag("upload_all_button"),
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                            ),
                     ) {
                         Text(
-                            text = "Upload",
+                            text = "Upload All",
                             fontWeight = FontWeight.Medium,
                         )
                     }

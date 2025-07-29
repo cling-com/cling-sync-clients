@@ -217,8 +217,16 @@ fun FileListItem(
                             strokeWidth = 2.dp,
                         )
                     }
-                    is FileStatus.Waiting, is FileStatus.Uploading, is FileStatus.Uploaded, is FileStatus.Committing -> {
+                    is FileStatus.Waiting, is FileStatus.Uploading, is FileStatus.Committing -> {
                         CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                    is FileStatus.Uploaded -> {
+                        // Show a static full circle for "Processing" state
+                        CircularProgressIndicator(
+                            progress = { 1f },
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp,
                         )
@@ -351,42 +359,24 @@ fun MainScreen(
     var hasPermission by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(settingsManager.getSettings()) }
     var showSettingsDialog by remember { mutableStateOf(!settings.isValid()) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var currentErrorDialog by remember { mutableStateOf<ErrorDialogState?>(null) }
     var isLoadingFiles by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var currentUploadInfo by remember { mutableStateOf<UploadInfo?>(null) }
     var isUploading by remember { mutableStateOf(false) }
     var isUploadInitiated by remember { mutableStateOf(false) }
-    var uploadError by remember { mutableStateOf<String?>(null) }
-    var checkFilesError by remember { mutableStateOf<String?>(null) }
     val lazyListState = rememberLazyListState()
     var checkFilesJob by remember { mutableStateOf<Job?>(null) }
     val fileChecker = remember { FileChecker() }
     var isConnecting by remember { mutableStateOf(false) }
     var isConnected by remember { mutableStateOf(false) }
+    var actualUploadedBytes by remember { mutableStateOf(0L) }
 
-    // Calculate total size for selected files and uploaded size.
-    val totalSizeMB =
-        remember(selectedFiles) {
-            selectedFiles.sumOf { it.length() } / (1024 * 1024)
-        }
+    // Track uploaded bytes
     val uploadedSizeMB =
-        remember(selectedFiles, currentUploadInfo) {
-            val info = currentUploadInfo
-            if (info != null && info.totalFiles > 0) {
-                // Estimate based on completed files
-                val filesUploaded = (info.currentIndex - 1).coerceAtLeast(0)
-                val avgFileSize =
-                    if (selectedFiles.isNotEmpty()) {
-                        selectedFiles.sumOf { it.length() } / selectedFiles.size
-                    } else {
-                        0L
-                    }
-                (filesUploaded * avgFileSize) / (1024 * 1024)
-            } else {
-                0L
-            }
+        remember(actualUploadedBytes) {
+            actualUploadedBytes / (1024 * 1024)
         }
 
     // Function to check files that haven't been scanned
@@ -395,7 +385,13 @@ fun MainScreen(
 
         val filesToCheck =
             cameraFiles.filter { file ->
-                fileStatus[file.name] == null || fileStatus[file.name] is FileStatus.Scanning
+                val status = fileStatus[file.name]
+                // Check files that haven't been scanned or weren't successfully uploaded
+                status == null ||
+                    status is FileStatus.Scanning ||
+                    status is FileStatus.New ||
+                    status is FileStatus.Failed ||
+                    status is FileStatus.Aborted
             }
 
         if (filesToCheck.isEmpty()) return
@@ -444,7 +440,14 @@ fun MainScreen(
                     },
                     onFailure = { error ->
                         Log.e("MainActivity", "File check failed", error)
-                        checkFilesError = "Some files could not be scanned: ${error.message}"
+                        // Only show error dialog if no other error is showing
+                        if (currentErrorDialog == null) {
+                            currentErrorDialog =
+                                ErrorDialogState(
+                                    title = "File Scanning Error",
+                                    message = "Some files could not be scanned: ${error.message}",
+                                )
+                        }
                         // Reset scanning files to new
                         filesToCheck.forEach { file ->
                             if (fileStatus[file.name] is FileStatus.Scanning) {
@@ -491,7 +494,7 @@ fun MainScreen(
 
         workInfo?.let { info ->
             // Only process recent work (ignore old failed work from previous sessions).
-            if (info.state == WorkInfo.State.FAILED && uploadError == null && !isUploading) {
+            if (info.state == WorkInfo.State.FAILED && !isUploading) {
                 // Skip showing old errors on app start.
                 return@let
             }
@@ -499,40 +502,84 @@ fun MainScreen(
                 WorkInfo.State.RUNNING -> {
                     isUploading = true
 
-                    // Handle individual file updates
-                    val fileName = info.progress.getString("file_name")
-                    val fileStatusStr = info.progress.getString("file_status")
-                    val totalFiles = info.progress.getInt("total_files", selectedFiles.size)
-                    val currentIndex = info.progress.getInt("current_index", 0)
+                    // Read status from file
+                    val statusFilePath = info.progress.getString("status_file")
+                    val uploadedBytesFromWorker = info.progress.getLong("uploaded_bytes", 0)
+                    val totalBytesFromWorker = info.progress.getLong("total_bytes", 0)
 
-                    if (fileName != null && fileStatusStr != null) {
-                        // Process individual file update
-                        when (fileStatusStr) {
-                            "waiting" -> fileStatus = fileStatus + (fileName to FileStatus.Waiting)
-                            "uploading" -> {
-                                fileStatus = fileStatus + (fileName to FileStatus.Uploading)
+                    if (statusFilePath != null) {
+                        // Process status update in background
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                val statusFile = File(statusFilePath)
+                                if (statusFile.exists()) {
+                                    val statusJson = JSONObject(statusFile.readText())
 
-                                // Update upload info for current file
-                                val file = cameraFiles.find { it.name == fileName }
-                                val currentFileSize = file?.length()?.div(1024)
-                                currentUploadInfo =
-                                    UploadInfo(
-                                        currentFile = fileName,
-                                        fileSize = currentFileSize,
-                                        currentIndex = currentIndex,
-                                        totalFiles = totalFiles,
-                                    )
-                            }
-                            "uploaded" -> fileStatus = fileStatus + (fileName to FileStatus.Uploaded)
-                            "committing" -> {
-                                fileStatus = fileStatus + (fileName to FileStatus.Committing)
-                                currentUploadInfo =
-                                    UploadInfo(
-                                        currentFile = "Committing changes...",
-                                        fileSize = null,
-                                        currentIndex = currentIndex,
-                                        totalFiles = totalFiles,
-                                    )
+                                    // Build new status map
+                                    val newFileStatus = mutableMapOf<String, FileStatus>()
+                                    statusJson.keys().forEach { fileName ->
+                                        val status = statusJson.getString(fileName)
+                                        newFileStatus[fileName] =
+                                            when (status) {
+                                                "waiting" -> FileStatus.Waiting
+                                                "uploading" -> FileStatus.Uploading
+                                                "uploaded" -> FileStatus.Uploaded
+                                                "skipped" -> FileStatus.Exists("")
+                                                "committing" -> FileStatus.Committing
+                                                else -> FileStatus.New
+                                            }
+                                    }
+
+                                    withContext(Dispatchers.Main) {
+                                        // Update UI state on main thread
+                                        fileStatus = newFileStatus
+
+                                        // Find current uploading file
+                                        val uploadingFiles = fileStatus.filter { it.value is FileStatus.Uploading }
+                                        val currentFileName = uploadingFiles.keys.firstOrNull()
+
+                                        // Count completed files
+                                        val completedFiles =
+                                            fileStatus.count {
+                                                it.value is FileStatus.Uploaded ||
+                                                    it.value is FileStatus.Exists ||
+                                                    it.value is FileStatus.Committing
+                                            }
+                                        val totalFiles = fileStatus.size
+
+                                        // Update upload info
+                                        currentUploadInfo =
+                                            if (fileStatus.any { it.value is FileStatus.Committing }) {
+                                                UploadInfo(
+                                                    currentFile = "Committing changes...",
+                                                    fileSize = null,
+                                                    currentIndex = completedFiles,
+                                                    totalFiles = totalFiles,
+                                                )
+                                            } else if (currentFileName != null) {
+                                                val file = cameraFiles.find { it.name == currentFileName }
+                                                UploadInfo(
+                                                    currentFile = currentFileName,
+                                                    fileSize = file?.length()?.div(1024),
+                                                    currentIndex = completedFiles,
+                                                    totalFiles = totalFiles,
+                                                )
+                                            } else {
+                                                UploadInfo(
+                                                    currentFile = null,
+                                                    fileSize = null,
+                                                    currentIndex = completedFiles,
+                                                    totalFiles = totalFiles,
+                                                )
+                                            }
+
+                                        // Update uploaded bytes
+                                        actualUploadedBytes = uploadedBytesFromWorker
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // Ignore file IO errors - file might be being written
+                                Log.d("MainActivity", "Error reading status file: ${e.message}")
                             }
                         }
                     }
@@ -541,6 +588,7 @@ fun MainScreen(
                     isUploading = false
                     isUploadInitiated = false
                     currentUploadInfo = null
+                    actualUploadedBytes = 0L
 
                     // Apply complete result from file
                     val resultFilePath = info.outputData.getString("result_file")
@@ -582,6 +630,7 @@ fun MainScreen(
                     isUploading = false
                     isUploadInitiated = false
                     currentUploadInfo = null
+                    actualUploadedBytes = 0L
                     fileStatus.forEach { (fileName, status) ->
                         if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
                             fileStatus = fileStatus + (fileName to FileStatus.Aborted)
@@ -592,8 +641,17 @@ fun MainScreen(
                     isUploading = false
                     isUploadInitiated = false
                     currentUploadInfo = null
+                    actualUploadedBytes = 0L
                     val fullErrorMsg = info.outputData.getString("error") ?: "Upload failed"
-                    uploadError = fullErrorMsg
+
+                    // Only show error dialog if no other error is showing
+                    if (currentErrorDialog == null) {
+                        currentErrorDialog =
+                            ErrorDialogState(
+                                title = "Upload Failed",
+                                message = fullErrorMsg,
+                            )
+                    }
 
                     fileStatus.forEach { (fileName, status) ->
                         if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
@@ -635,7 +693,14 @@ fun MainScreen(
                     Log.e("ClingSync", "Failed to open repository", e)
                     withContext(Dispatchers.Main) {
                         isConnected = false
-                        errorMessage = "Failed to connect to repository: ${e.message}"
+                        // Only show error dialog if no other error is showing
+                        if (currentErrorDialog == null) {
+                            currentErrorDialog =
+                                ErrorDialogState(
+                                    title = "Connection Error",
+                                    message = "Failed to connect to repository: ${e.message}",
+                                )
+                        }
                     }
                 }
             }
@@ -816,7 +881,11 @@ fun MainScreen(
                             }
                     },
                     onUploadClick = {
-                        val filePaths = selectedFiles.map { it.absolutePath }
+                        // Cancel any file checking in progress
+                        checkFilesJob?.cancel()
+
+                        // Preserve the order from cameraFiles (newest first)
+                        val filePaths = cameraFiles.filter { it in selectedFiles }.map { it.absolutePath }
                         Log.d("ClingSync", "Scheduling upload for files: $filePaths")
 
                         // Immediately switch to upload mode
@@ -846,12 +915,54 @@ fun MainScreen(
                             password = settings.password,
                         )
                     },
+                    onUploadAllClick = {
+                        // Cancel any file checking in progress
+                        checkFilesJob?.cancel()
+
+                        // Upload all camera files
+                        val allFiles = cameraFiles
+                        Log.d(
+                            "ClingSync",
+                            "Upload All clicked - ${allFiles.size} files, " +
+                                "isUploadInitiated=$isUploadInitiated, isUploading=$isUploading",
+                        )
+
+                        // Clear any selected files to ensure clean state
+                        selectedFiles = emptySet()
+
+                        // Immediately switch to upload mode
+                        isUploadInitiated = true
+                        currentUploadInfo =
+                            UploadInfo(
+                                currentFile = null,
+                                fileSize = null,
+                                currentIndex = 0,
+                                totalFiles = allFiles.size,
+                            )
+
+                        // Mark all files as waiting
+                        allFiles.forEach { file ->
+                            fileStatus = fileStatus + (file.name to FileStatus.Waiting)
+                        }
+
+                        UploadWorker.enqueueUpload(
+                            context = context,
+                            // allFiles is already in correct order
+                            filePaths = allFiles.map { it.absolutePath },
+                            repoPathPrefix = settings.repoPathPrefix,
+                            author = settings.author,
+                            message =
+                                "Backup ${allFiles.size} file${if (allFiles.size == 1) "" else "s"}" +
+                                    " from ${Build.MANUFACTURER} ${Build.MODEL}",
+                            hostUrl = settings.hostUrl,
+                            password = settings.password,
+                        )
+                    },
                     onAbortClick = {
                         workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
                         isUploadInitiated = false
                     },
                     isSelectAllEnabled = !(isUploading || isUploadInitiated),
-                    totalSizeMB = totalSizeMB,
                     uploadedSizeMB = uploadedSizeMB,
                 )
             }
@@ -865,35 +976,46 @@ fun MainScreen(
                     isConnecting = true
 
                     coroutineScope.launch {
-                        try {
-                            // Dismiss dialog after starting the coroutine
-                            showSettingsDialog = false
+                        // Dismiss dialog and save settings immediately
+                        showSettingsDialog = false
 
+                        // Check if host URL changed
+                        val hostUrlChanged = settings.hostUrl != newSettings.hostUrl
+
+                        // Always save settings
+                        settings = newSettings
+                        settingsManager.saveSettings(newSettings)
+
+                        if (hostUrlChanged) {
+                            // Clear all file statuses when host URL changes
+                            fileStatus = emptyMap()
+                            Log.d("MainActivity", "Host URL changed, clearing file statuses")
+                        }
+
+                        try {
                             withContext(Dispatchers.IO) {
                                 goBridge.ensureOpen(newSettings.hostUrl, newSettings.password, newSettings.repoPathPrefix)
                             }
 
-                            // Check if host URL changed
-                            val hostUrlChanged = settings.hostUrl != newSettings.hostUrl
-
-                            settings = newSettings
-                            settingsManager.saveSettings(newSettings)
                             isConnecting = false
                             isConnected = true
                             Log.d("ClingSync", "Connected to repository via settings")
-
-                            if (hostUrlChanged) {
-                                // Clear all file statuses when host URL changes
-                                fileStatus = emptyMap()
-                                Log.d("MainActivity", "Host URL changed, clearing file statuses")
-                            }
 
                             // File checking will be triggered by the LaunchedEffect watching isConnected
                         } catch (e: Exception) {
                             Log.e("ClingSync", "Failed to open repository with new settings", e)
                             isConnecting = false
                             isConnected = false
-                            errorMessage = "Failed to connect to repository: ${e.message}"
+                            // Reopen settings dialog on connection failure
+                            showSettingsDialog = true
+                            // Only show error dialog if no other error is showing
+                            if (currentErrorDialog == null) {
+                                currentErrorDialog =
+                                    ErrorDialogState(
+                                        title = "Connection Error",
+                                        message = "Failed to connect to repository: ${e.message}",
+                                    )
+                            }
                         }
                     }
                 },
@@ -906,36 +1028,13 @@ fun MainScreen(
             )
         }
 
-        errorMessage?.let { message ->
-            ErrorDialog(
-                title = "Connection Error",
-                message = message,
-                onDismiss = {
-                    errorMessage = null
-                    showSettingsDialog = true
-                },
-            )
-        }
-
-        uploadError?.let { error ->
-            ErrorDialog(
-                title = "Upload Failed",
-                message = error,
-                onDismiss = {
-                    uploadError = null
-                },
-            )
-        }
-
-        checkFilesError?.let { error ->
-            WorkerErrorDialog(
-                title = "File Scanning Error",
-                message = error,
-                showRestart = true,
-                // No dismiss button, force restart or close.
-                onDismiss = null,
-            )
-        }
+        // Unified error dialog
+        UnifiedErrorDialog(
+            errorState = currentErrorDialog,
+            onDismiss = {
+                currentErrorDialog = null
+            },
+        )
 
         // Connecting overlay
         if (isConnecting) {

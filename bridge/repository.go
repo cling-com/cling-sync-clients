@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -105,16 +106,17 @@ func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 	return res, nil
 }
 
-func UploadFile(filePath string) (*lib.RevisionEntry, error) {
+// Return `true` if the file was uploaded, `false` if it was skipped.
+func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	if repository == nil {
-		return nil, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
+		return nil, false, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
 	}
 	fileInfo, err := os.Stat(filePath) //nolint:forbidigo
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "failed to stat file %s", filePath)
+		return nil, false, lib.WrapErrorf(err, "failed to stat file %s", filePath)
 	}
 	if fileInfo.IsDir() {
-		return nil, lib.Errorf("cannot add directory %s to repository", filePath)
+		return nil, false, lib.Errorf("cannot add directory %s to repository", filePath)
 	}
 	filename := filepath.Base(filePath)
 	dir := filepath.Dir(filePath)
@@ -122,9 +124,35 @@ func UploadFile(filePath string) (*lib.RevisionEntry, error) {
 	// Ensure the final repoPath is not absolute.
 	filenamePath, err := lib.NewPath(strings.Trim(filename, "/"))
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "invalid path %s", filename)
+		return nil, false, lib.WrapErrorf(err, "invalid path %s", filename)
 	}
 	repoPath := repoPathPrefix.Join(filenamePath)
+
+	// Check if file already exists in the current head of the repository.
+	existingEntry, found, err := snapshotCache.Get(repoPath, false)
+	if err != nil {
+		return nil, false, lib.WrapErrorf(err, "failed to get path %s from remote revision", repoPath)
+	}
+	if found {
+		// File exists, calculate its hash to compare.
+		file, err := os.Open(filePath) //nolint:forbidigo
+		if err != nil {
+			return nil, false, lib.WrapErrorf(err, "failed to open file %s", filePath)
+		}
+		defer file.Close() //nolint:errcheck
+
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, file); err != nil {
+			return nil, false, lib.WrapErrorf(err, "failed to calculate hash for file %s", filePath)
+		}
+		fileHash := lib.Sha256(hasher.Sum(nil))
+
+		// If hashes match, file is unchanged - return nil to skip.
+		if fileHash == existingEntry.Metadata.FileHash {
+			return nil, false, nil
+		}
+	}
+	// File does not exist or has changed, proceed with upload.
 	md, err := workspace.AddFileToRepository(
 		fs,
 		filenamePath,
@@ -134,7 +162,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, error) {
 		func(entry *lib.RevisionEntry, header *lib.BlockHeader, existed bool, dataSize int64) {},
 	)
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "failed to add file %s to repository", filePath)
+		return nil, false, lib.WrapErrorf(err, "failed to add file %s to repository", filePath)
 	}
 	// We want to have predictable file permissions and modes.
 	md.ModeAndPerm = 0o600
@@ -143,7 +171,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, error) {
 		Type:     lib.RevisionEntryAdd,
 		Metadata: &md,
 	}
-	return entry, nil
+	return entry, true, nil
 }
 
 func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string, error) {

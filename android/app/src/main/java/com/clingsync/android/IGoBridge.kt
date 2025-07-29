@@ -9,7 +9,7 @@ interface IGoBridge {
 
     fun checkFiles(sha256s: List<String>): List<String>
 
-    fun uploadFile(filePath: String): String
+    fun uploadFile(filePath: String): String?
 
     fun commit(
         revisionEntries: List<String>,

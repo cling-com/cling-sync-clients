@@ -45,7 +45,7 @@ class Bridge {
         }
     }
 
-    static func uploadFile(filePath: String) throws(BridgeError) -> String {
+    static func uploadFile(filePath: String) throws(BridgeError) -> String? {
         let params: [String: Any] = [
             "filePath": filePath
         ]
@@ -80,6 +80,11 @@ class Bridge {
             let errorMessage = error["message"] as? String
         {
             throw BridgeError(message: errorMessage)
+        }
+
+        // Check if file was skipped
+        if let skipped = result["skipped"] as? Bool, skipped {
+            return nil
         }
 
         guard let revisionEntry = result["revisionEntry"] as? String else {

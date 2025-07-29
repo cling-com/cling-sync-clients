@@ -8,9 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -25,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 
@@ -38,6 +44,7 @@ fun SettingsDialog(
     var password by remember { mutableStateOf(settings.password) }
     var repoPathPrefix by remember { mutableStateOf(settings.repoPathPrefix) }
     var author by remember { mutableStateOf(settings.author) }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     Dialog(
         onDismissRequest = { onDismiss?.invoke() },
@@ -70,20 +77,29 @@ fun SettingsDialog(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions =
                         KeyboardOptions(
                             keyboardType = KeyboardType.Password,
                             autoCorrect = false,
                             capitalization = KeyboardCapitalization.None,
                         ),
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
                 OutlinedTextField(
                     value = repoPathPrefix,
                     onValueChange = { repoPathPrefix = it },
-                    label = { Text("Destination Path") },
+                    label = { Text("Destination Path (optional)") },
                     placeholder = { Text("/backup/photos") },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -119,7 +135,7 @@ fun SettingsDialog(
                                 )
                             onSave(newSettings)
                         },
-                        enabled = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank() && author.isNotBlank(),
+                        enabled = hostUrl.isNotBlank() && password.isNotBlank() && author.isNotBlank(),
                     ) {
                         Text("Save")
                     }

@@ -82,8 +82,8 @@ class IntegrationTest {
         composeTestRule.onNodeWithText("Password").performClick()
         composeTestRule.onNodeWithText("Password").performTextInput(testPassphrase)
 
-        composeTestRule.onNodeWithText("Destination Path").performClick()
-        composeTestRule.onNodeWithText("Destination Path").performTextInput(repoPathPrefix)
+        composeTestRule.onNodeWithText("Destination Path (optional)").performClick()
+        composeTestRule.onNodeWithText("Destination Path (optional)").performTextInput(repoPathPrefix)
 
         composeTestRule.onNodeWithText("Author").performClick()
         composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
@@ -101,7 +101,7 @@ class IntegrationTest {
 
         // Upload.
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
-        composeTestRule.onNodeWithText("Upload").performClick()
+        composeTestRule.onNodeWithText("Upload Selected").performClick()
         composeTestRule.waitForIdle()
 
         // Wait for both files to show "Synced" status

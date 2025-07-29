@@ -84,11 +84,21 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		entry, err := UploadFile(params.FilePath)
+		entry, uploaded, err := UploadFile(params.FilePath)
 		if err != nil {
 			return errorResponse(err.Error())
 		}
-
+		if !uploaded {
+			response := struct {
+				RevisionEntry string `json:"revisionEntry"`
+				Skipped       bool   `json:"skipped"`
+			}{RevisionEntry: "", Skipped: true}
+			jsonBytes, err := json.Marshal(response)
+			if err != nil {
+				return errorResponse("Failed to marshal response: " + err.Error())
+			}
+			return string(jsonBytes)
+		}
 		// Marshal the entry to bytes
 		var buf bytes.Buffer
 		if err := lib.MarshalRevisionEntry(entry, &buf); err != nil {
@@ -100,7 +110,8 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 
 		response := struct {
 			RevisionEntry string `json:"revisionEntry"`
-		}{RevisionEntry: entryBase64}
+			Skipped       bool   `json:"skipped"`
+		}{RevisionEntry: entryBase64, Skipped: false}
 		jsonBytes, err := json.Marshal(response)
 		if err != nil {
 			return errorResponse("Failed to marshal response: " + err.Error())

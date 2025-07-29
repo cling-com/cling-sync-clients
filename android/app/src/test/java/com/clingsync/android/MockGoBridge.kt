@@ -54,7 +54,7 @@ class MockGoBridge : IGoBridge {
         return res
     }
 
-    override fun uploadFile(filePath: String): String {
+    override fun uploadFile(filePath: String): String? {
         if (!isOpen) {
             val error = "Repository not open"
             errors.add(error)

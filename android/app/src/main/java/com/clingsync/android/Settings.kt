@@ -10,7 +10,7 @@ data class AppSettings(
     val repoPathPrefix: String = "",
     val author: String = "Android User",
 ) {
-    fun isValid(): Boolean = hostUrl.isNotBlank() && password.isNotBlank() && repoPathPrefix.isNotBlank() && author.isNotBlank()
+    fun isValid(): Boolean = hostUrl.isNotBlank() && password.isNotBlank() && author.isNotBlank()
 }
 
 class SettingsManager(private val context: Context) {

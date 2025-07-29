@@ -57,13 +57,20 @@ class Uploader: ObservableObject {
                         file.uploadState = .sending
                         currentlySending = file
                     }
-                    let revisionEntry = try await uploadFile(file)
-                    revisionEntries.append(revisionEntry)
+                    if let revisionEntry = try await uploadFile(file) {
+                        revisionEntries.append(revisionEntry)
 
-                    await MainActor.run {
-                        file.uploadState = .sentWaitingCommit
-                        file.revisionEntry = revisionEntry
-                        uploadedBytes += file.size
+                        await MainActor.run {
+                            file.uploadState = .sentWaitingCommit
+                            file.revisionEntry = revisionEntry
+                            uploadedBytes += file.size
+                        }
+                    } else {
+                        // File was skipped (already exists with same hash)
+                        await MainActor.run {
+                            file.uploadState = .done
+                            uploadedBytes += file.size
+                        }
                     }
                 }
                 guard !Task.isCancelled else {
@@ -75,14 +82,17 @@ class Uploader: ObservableObject {
                     currentlySending = nil
                 }
 
-                // Commit all uploaded files
-                let deviceModel = await UIDevice.current.model
-                let deviceName = await UIDevice.current.name
-                _ = try Bridge.commit(
-                    revisionEntries: revisionEntries,
-                    author: author,
-                    message: "Backup \(files.count) file\(files.count == 1 ? "" : "s") from \(deviceName)"
-                )
+                // Only commit if we have revision entries
+                if !revisionEntries.isEmpty {
+                    // Commit all uploaded files
+                    let deviceModel = await UIDevice.current.model
+                    let deviceName = await UIDevice.current.name
+                    _ = try Bridge.commit(
+                        revisionEntries: revisionEntries,
+                        author: author,
+                        message: "Backup \(files.count) file\(files.count == 1 ? "" : "s") from \(deviceName)"
+                    )
+                }
 
                 // Mark all committed files as uploaded
                 await MainActor.run {
@@ -127,7 +137,7 @@ class Uploader: ObservableObject {
     }
 
     // Upload the file by first writing it to temporary file.
-    private func uploadFile(_ file: File) async throws -> String {
+    private func uploadFile(_ file: File) async throws -> String? {
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
         let resources = PHAssetResource.assetResources(for: file.asset)

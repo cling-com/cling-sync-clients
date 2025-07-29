@@ -25,9 +25,9 @@ fun ScrollAwareTopBar(
     selectAllChecked: Boolean,
     onSelectAllChange: (Boolean) -> Unit,
     onUploadClick: () -> Unit,
+    onUploadAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     isSelectAllEnabled: Boolean = true,
-    totalSizeMB: Long = 0L,
     uploadedSizeMB: Long = 0L,
 ) {
     // Derive scroll state.
@@ -78,9 +78,9 @@ fun ScrollAwareTopBar(
             selectAllChecked = selectAllChecked,
             onSelectAllChange = onSelectAllChange,
             onUploadClick = onUploadClick,
+            onUploadAllClick = onUploadAllClick,
             onAbortClick = onAbortClick,
             isSelectAllEnabled = isSelectAllEnabled,
-            totalSizeMB = totalSizeMB,
             uploadedSizeMB = uploadedSizeMB,
         )
     }

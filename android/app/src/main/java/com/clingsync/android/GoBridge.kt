@@ -73,13 +73,19 @@ open class GoBridge : IGoBridge {
         return List(resultsArray.length()) { i -> resultsArray.getString(i) }
     }
 
-    override fun uploadFile(filePath: String): String {
+    override fun uploadFile(filePath: String): String? {
         val params =
             JSONObject().apply {
                 put("filePath", filePath)
             }
 
         val response = executeInternal("uploadFile", params)
+
+        // Check if file was skipped
+        if (response.optBoolean("skipped", false)) {
+            return null
+        }
+
         return response.getString("revisionEntry")
     }
 
