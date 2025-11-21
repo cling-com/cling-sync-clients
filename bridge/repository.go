@@ -18,11 +18,11 @@ import (
 )
 
 var (
-	repository     *lib.Repository        //nolint:gochecknoglobals
-	head           lib.RevisionId         //nolint:gochecknoglobals
-	snapshot       *lib.RevisionTemp      //nolint:gochecknoglobals
-	snapshotCache  *lib.RevisionTempCache //nolint:gochecknoglobals
-	repoPathPrefix lib.Path               //nolint:gochecknoglobals
+	repository     *lib.Repository                   //nolint:gochecknoglobals
+	head           lib.RevisionId                    //nolint:gochecknoglobals
+	snapshot       *lib.Temp[lib.RevisionEntry]      //nolint:gochecknoglobals
+	snapshotCache  *lib.TempCache[lib.RevisionEntry] //nolint:gochecknoglobals
+	repoPathPrefix lib.Path                          //nolint:gochecknoglobals
 )
 
 // Open the repository if needed and updates the current revision snapshot if the HEAD changed.
@@ -69,7 +69,7 @@ func EnsureRepositoryOpen(hostURL, password, repoPathPrefix_ string) error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision snapshot")
 	}
-	snapshotCache, err = lib.NewRevisionTempCache(snapshot, 20)
+	snapshotCache, err = lib.NewRevisionEntryTempCache(snapshot, 10)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision cache")
 	}
@@ -129,7 +129,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	repoPath := repoPathPrefix.Join(filenamePath)
 
 	// Check if file already exists in the current head of the repository.
-	existingEntry, found, err := snapshotCache.Get(repoPath, false)
+	existingEntry, found, err := snapshotCache.Get(lib.PathCompareString(repoPath, false))
 	if err != nil {
 		return nil, false, lib.WrapErrorf(err, "failed to get path %s from remote revision", repoPath)
 	}
@@ -183,7 +183,7 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to create commit")
 	}
-	if err := commit.EnsureDirExists(repoPathPrefix, snapshotCache); err != nil {
+	if err := commit.EnsureDirExists(repoPathPrefix, snapshotCache, head); err != nil {
 		return "", lib.WrapErrorf(err, "failed to ensure path prefix exists as a directory in the repository")
 	}
 	for _, entry := range entries {
