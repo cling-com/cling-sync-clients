@@ -6,14 +6,20 @@ root=$(cd $(dirname $0) && pwd)
 cd "$root"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 android|tools|fmt|lint|test|precommit [options]"
+    echo "Usage: $0 bridge|ios|android|macos|tools|fmt|lint|test|precommit [options]"
     echo
     echo "Commands:"
+    echo "  bridge [options]"
+    echo "      Build the shared bridge. Dispatches to bridge/build.sh"
+    echo
     echo "  android [options]"
     echo "      Build the Android app. Dispatches to android/build.sh"
     echo
     echo "  ios [options]"
     echo "      Build the iOS app. Dispatches to ios/build.sh"
+    echo
+    echo "  macos [options]"
+    echo "      Build the macOS app. Dispatches to macos/build.sh"
     echo
     echo "  tools"
     echo "      Install development tools (golangci-lint)"
@@ -33,7 +39,7 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-projects="bridge ios android"
+projects="bridge ios android macos"
 
 build_tools() {
     if [ -f tools/golangci-lint ]; then
@@ -79,6 +85,9 @@ case "$cmd" in
         ;;
     ios)
         exec ./ios/build.sh "$@"
+        ;;
+    macos)
+        exec ./macos/build.sh "$@"
         ;;
     tools)
         build_tools

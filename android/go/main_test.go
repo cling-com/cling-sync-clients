@@ -34,9 +34,9 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	})
 
 	t.Log("Running Android tests")
-	cmd := exec.Command("./gradlew", "connectedAndroidTest", "-q")
+	cmd := exec.CommandContext(t.Context(), "./gradlew", "connectedAndroidTest", "-q")
 	cmd.Dir = ".."
-	cmd.Env = append(os.Environ(), //nolint:forbidigo
+	cmd.Env = append(os.Environ(),
 		"TEST_PASSPHRASE="+r.Passphrase,
 		"TEST_SERVER_URL=http://10.0.2.2:9124",
 		"TEST_DESTINATION_PATH=/",

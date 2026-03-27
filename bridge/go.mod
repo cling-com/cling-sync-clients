@@ -1,8 +1,9 @@
 module github.com/flunderpero/cling-sync-clients/bridge
 
-go 1.24.2
+go 1.26.1
 
 require (
+	github.com/flunderpero/cling-sync/cli v0.0.0
 	github.com/flunderpero/cling-sync/http v0.0.0
 	github.com/flunderpero/cling-sync/lib v0.0.0
 	github.com/flunderpero/cling-sync/workspace v0.0.0
@@ -14,6 +15,8 @@ require (
 )
 
 replace github.com/flunderpero/cling-sync/workspace v0.0.0 => ../../cling-sync/workspace
+
+replace github.com/flunderpero/cling-sync/cli v0.0.0 => ../../cling-sync/cli
 
 replace github.com/flunderpero/cling-sync/lib v0.0.0 => ../../cling-sync/lib
 

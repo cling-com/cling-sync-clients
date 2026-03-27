@@ -22,6 +22,7 @@ linters:
     - gocognit
     - goconst
     - gocyclo
+    - godoclint
     - gomodguard
     - inamedparam
     - interfacebloat
@@ -30,6 +31,7 @@ linters:
     - makezero
     - maintidx
     - nestif
+    - noinlineerr
     - nonamedreturns
     - mnd
     - musttag
@@ -38,6 +40,7 @@ linters:
     - testpackage
     - varnamelen
     - wsl
+    - wsl_v5
   exclusions:
     presets:
       - common-false-positives
@@ -57,10 +60,6 @@ linters:
             - $gostd
             - "golang.org/x/crypto/argon2"
             - "golang.org/x/crypto/chacha20poly1305"
-    forbidigo:
-      forbid:
-        - pattern: '^os\.'
-          msg: "Prefer io/fs over os"
     funlen:
       lines: 60
       statements: 60
@@ -80,3 +79,5 @@ linters:
     wrapcheck:
       extra-ignore-sigs:
         - .WrapErrorf
+    exhaustruct:
+      allow-empty: true

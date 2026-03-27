@@ -36,9 +36,9 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	})
 
 	t.Log("Running iOS tests")
-	cmd := exec.Command("./build.sh", "test", "--swiftui")
+	cmd := exec.CommandContext(t.Context(), "./build.sh", "test", "--swiftui")
 	cmd.Dir = ".."
-	cmd.Env = os.Environ() //nolint:forbidigo
+	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	assert.NoError(err, string(output))
 

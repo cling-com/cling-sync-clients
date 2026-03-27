@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -48,7 +47,7 @@ func EnsureRepositoryOpen(hostURL, password, repoPathPrefix_ string) error {
 		httpClient := &http.Client{ //nolint:exhaustruct
 			Timeout: 30 * time.Second,
 		}
-		client := clinghttp.NewDefaultHTTPClient(httpClient, context.Background())
+		client := clinghttp.NewDefaultHTTPClient(httpClient)
 		storage := clinghttp.NewHTTPStorageClient(hostURL, client)
 		var err error
 		repository, err = lib.OpenRepository(storage, []byte(password))
@@ -111,7 +110,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	if repository == nil {
 		return nil, false, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
 	}
-	fileInfo, err := os.Stat(filePath) //nolint:forbidigo
+	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return nil, false, lib.WrapErrorf(err, "failed to stat file %s", filePath)
 	}
@@ -135,7 +134,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	}
 	if found {
 		// File exists, calculate its hash to compare.
-		file, err := os.Open(filePath) //nolint:forbidigo
+		file, err := os.Open(filePath)
 		if err != nil {
 			return nil, false, lib.WrapErrorf(err, "failed to open file %s", filePath)
 		}
@@ -159,7 +158,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 		fileInfo,
 		repository,
 		nil,
-		func(entry *lib.RevisionEntry, header *lib.BlockHeader, existed bool, dataSize int64) {},
+		workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
 	)
 	if err != nil {
 		return nil, false, lib.WrapErrorf(err, "failed to add file %s to repository", filePath)

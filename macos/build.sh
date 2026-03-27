@@ -1,0 +1,269 @@
+#!/bin/sh
+
+set -eu
+
+root=$(cd "$(dirname "$0")" && pwd)
+cd "$root"
+
+icon_source="$root/../ios/ClingSync/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+icon_target_1x="$root/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon-512.png"
+icon_target_2x="$root/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+swiftlint_bin="$root/../tools/swiftlint"
+golangci_lint_bin="$root/../tools/golangci-lint"
+xcode_project="ClingSyncMac.xcodeproj"
+xcode_scheme="ClingSyncMac"
+derived_data_path="$root/build/DerivedData"
+app_path="$derived_data_path/Build/Products/Debug/ClingSyncMac.app"
+logs_dir="$root/build/logs"
+
+run_xcodebuild() {
+    log_name="$1"
+    shift
+    mkdir -p "$logs_dir"
+    log_path="$logs_dir/$log_name"
+    echo "    xcodebuild log: $log_path"
+    if xcodebuild "$@" >"$log_path" 2>&1; then
+        return 0
+    fi
+    echo "xcodebuild failed. Last 80 log lines:"
+    python3 - <<'PY' "$log_path"
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(errors="replace").splitlines()
+for line in lines[-80:]:
+    print(line)
+PY
+    return 1
+}
+
+usage() {
+    echo "Usage: $0 <command> [options]"
+    echo
+    echo "Prerequisites:"
+    echo "  - Go must be installed (check with: go version)"
+    echo "  - Xcode must be installed"
+    echo
+    echo "Commands:"
+    echo "  build [target]"
+    echo "      Build the target. If no target is specified, build all targets."
+    echo "      Available targets:"
+    echo "        go   - build the Go bridge"
+    echo "        app  - build the macOS app with xcodebuild"
+    echo "        all  - build everything (default)"
+    echo
+    echo "  fmt"
+    echo "      Format code"
+    echo
+    echo "  lint"
+    echo "      Lint code"
+    echo
+    echo "  precommit"
+    echo "      Run all checks before committing (fmt, lint, test)"
+    echo
+    echo "  test [--xcuitest]"
+    echo "      Run integration tests"
+    echo "      This runs go/main_test.go which in turn runs xcodebuild UI tests."
+    echo "      Pass --xcuitest to run the XCUITest target directly."
+    echo
+    echo "  tools"
+    echo "      Install development tools (swiftlint, golangci-lint)"
+    echo
+    echo "  run"
+    echo "      Build and run the app"
+    echo
+    echo "  clean"
+    echo "      Clean build artifacts"
+    exit 1
+}
+
+build_tools() {
+    current_go_version=$(go env GOVERSION)
+
+    if [ -f "$swiftlint_bin" ]; then
+        :
+    else
+        echo ">>> Downloading swiftlint"
+        url=https://github.com/realm/SwiftLint/releases/download/0.59.1/portable_swiftlint.zip
+        tmp_dir=$(mktemp -d)
+        curl -SsL -o "$tmp_dir/swiftlint.zip" "$url"
+        cd "$tmp_dir"
+        unzip swiftlint.zip
+        rm swiftlint.zip
+        cd "$root"
+        mkdir -p "$root/../tools"
+        mv "$tmp_dir/swiftlint" "$swiftlint_bin"
+        rm -rf "$tmp_dir"
+    fi
+
+    if [ -f "$golangci_lint_bin" ] \
+        && "$golangci_lint_bin" version 2>/dev/null | grep -q "$current_go_version" \
+        && "$golangci_lint_bin" version 2>/dev/null | grep -q "2.11.4"
+    then
+        return
+    fi
+
+    echo ">>> Installing golangci-lint"
+    GOBIN="$root/../tools" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+}
+
+sync_icon() {
+    echo ">>> Syncing app icon"
+    sips -z 512 512 "$icon_source" --out "$icon_target_1x" >/dev/null
+    cp "$icon_source" "$icon_target_2x"
+}
+
+build_go() {
+    echo ">>> Building Go bridge"
+    mkdir -p "$root/build/go"
+    cd "$root/go"
+    build_tags_args=""
+    if [ -n "${CLING_SYNC_GO_BUILD_TAGS:-}" ]; then
+        build_tags_args="-tags ${CLING_SYNC_GO_BUILD_TAGS}"
+    fi
+    MACOSX_DEPLOYMENT_TARGET=13.0 \
+    CGO_CFLAGS="-mmacosx-version-min=13.0" \
+    CGO_LDFLAGS="-mmacosx-version-min=13.0" \
+    CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+    go build $build_tags_args -buildmode=c-archive -o "$root/build/go/gobridge.a" ./...
+    cd "$root"
+}
+
+build_app() {
+    echo ">>> Building macOS app"
+    sync_icon
+    build_go
+    run_xcodebuild xcodebuild-build.log \
+        -project "$xcode_project" \
+        -scheme "$xcode_scheme" \
+        -configuration Debug \
+        -destination 'platform=macOS' \
+        -derivedDataPath "$derived_data_path" \
+        build
+}
+
+build_all() {
+    build_go
+    build_app
+}
+
+fmt() {
+    echo ">>> Formatting code"
+    build_tools
+
+    echo "    Formatting Go code"
+    cd "$root/go"
+    "$golangci_lint_bin" fmt .
+    cd "$root"
+
+    echo "    Formatting Swift code"
+    "$(xcrun --find swift-format)" --recursive --in-place --configuration "$root/../ios/.swiftformat.json" "$root"
+}
+
+lint() {
+    echo ">>> Linting code"
+    build_tools
+
+    echo "    Linting Go code"
+    cd "$root/go"
+    "$golangci_lint_bin" run ./...
+    cd "$root"
+    echo "    Linting Swift code"
+    "$swiftlint_bin" lint --quiet --strict --config "$root/.swiftlint.yml" "$root"
+}
+
+integration_test() {
+    echo ">>> Running integration tests"
+    cd "$root/go"
+    go test -v -count=1 ./...
+}
+
+integration_test_xcuitest() {
+    echo ">>> Running XCUITests"
+    sync_icon
+    run_xcodebuild xcodebuild-test.log \
+        -project "$xcode_project" \
+        -scheme "$xcode_scheme" \
+        -destination 'platform=macOS' \
+        -derivedDataPath "$derived_data_path" \
+        -test-timeouts-enabled YES \
+        -default-test-execution-time-allowance 30 \
+        -maximum-test-execution-time-allowance 90 \
+        test
+}
+
+run_app() {
+    build_app
+    open "$app_path"
+}
+
+clean() {
+    echo ">>> Cleaning build artifacts"
+    rm -rf "$root/build"
+    xcodebuild -project "$xcode_project" clean >/dev/null
+}
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+cmd="$1"
+shift
+case "$cmd" in
+    build)
+        target="all"
+        if [ $# -gt 0 ]; then
+            target="$1"
+            shift
+        fi
+        case "$target" in
+            go)
+                build_go "$@"
+                ;;
+            app)
+                build_app "$@"
+                ;;
+            all)
+                build_all "$@"
+                ;;
+            *)
+                echo "Unknown build target: $target"
+                echo "Available targets: go, app, all"
+                exit 1
+                ;;
+        esac
+        ;;
+    fmt)
+        fmt
+        ;;
+    lint)
+        lint
+        ;;
+    test)
+        if [ $# -gt 0 ] && [ "$1" = "--xcuitest" ]; then
+            integration_test_xcuitest
+        else
+            integration_test
+        fi
+        ;;
+    tools)
+        build_tools
+        ;;
+    precommit)
+        build_tools
+        fmt
+        lint
+        integration_test
+        ;;
+    run)
+        run_app
+        ;;
+    clean)
+        clean
+        ;;
+    *)
+        echo "Unknown command: $cmd"
+        exit 1
+        ;;
+esac
