@@ -17,52 +17,75 @@ import (
 )
 
 var (
-	repository     *lib.Repository                   //nolint:gochecknoglobals
-	head           lib.RevisionId                    //nolint:gochecknoglobals
-	snapshot       *lib.Temp[lib.RevisionEntry]      //nolint:gochecknoglobals
-	snapshotCache  *lib.TempCache[lib.RevisionEntry] //nolint:gochecknoglobals
-	repoPathPrefix lib.Path                          //nolint:gochecknoglobals
+	repository        *lib.Repository                   //nolint:gochecknoglobals
+	repositoryHostURL string                            //nolint:gochecknoglobals
+	head              lib.RevisionId                    //nolint:gochecknoglobals
+	snapshot          *lib.Temp[lib.RevisionEntry]      //nolint:gochecknoglobals
+	snapshotCache     *lib.TempCache[lib.RevisionEntry] //nolint:gochecknoglobals
+	repoPathPrefix    lib.Path                          //nolint:gochecknoglobals
 )
 
-// Open the repository if needed and updates the current revision snapshot if the HEAD changed.
-func EnsureRepositoryOpen(hostURL, password, repoPathPrefix_ string) error {
-	// If repository is already open, verify the HEAD revision did not change.
-	// If it did, refresh the snapshot.
+// CheckRepositoryOpen returns true if a repository is currently open for the given host URL
+// and path prefix. If the repository is open but the parameters do not match, it is closed
+// to prevent misuse.
+func CheckRepositoryOpen(hostURL, repoPathPrefix_ string) bool {
+	if repository == nil {
+		return false
+	}
+	prefix, err := lib.NewPath(strings.Trim(repoPathPrefix_, "/"))
+	if err != nil {
+		closeRepository()
+		return false
+	}
+	if repositoryHostURL != hostURL || prefix != repoPathPrefix {
+		closeRepository()
+		return false
+	}
+	return true
+}
+
+// GetRepositoryHeadRevisionID returns the current HEAD revision ID or an empty string.
+func GetRepositoryHeadRevisionID() string {
+	if repository == nil || head == (lib.RevisionId{}) {
+		return ""
+	}
+	return head.String()
+}
+
+// OpenRepository closes any existing repository and opens a new one.
+func OpenRepository(hostURL, password, repoPathPrefix_ string) error {
+	closeRepository()
 	var err error
 	repoPathPrefix, err = lib.NewPath(strings.Trim(repoPathPrefix_, "/"))
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create repo path prefix %s", repoPathPrefix_)
 	}
-	if repository != nil {
-		currentHead, err := repository.Head()
-		if err != nil {
-			return lib.WrapErrorf(err, "failed to get HEAD revision")
-		}
-		if currentHead == head {
-			return nil
-		}
+	httpClient := &http.Client{ //nolint:exhaustruct
+		Timeout: 30 * time.Second,
 	}
-	if repository == nil {
-		// todo: what are the right timeouts?
-		httpClient := &http.Client{ //nolint:exhaustruct
-			Timeout: 30 * time.Second,
-		}
-		client := clinghttp.NewDefaultHTTPClient(httpClient)
-		storage := clinghttp.NewHTTPStorageClient(hostURL, client)
-		var err error
-		repository, err = lib.OpenRepository(storage, []byte(password))
-		if err != nil {
-			return lib.WrapErrorf(err, "failed to open repository")
-		}
+	client := clinghttp.NewDefaultHTTPClient(httpClient)
+	storage := clinghttp.NewHTTPStorageClient(hostURL, client)
+	repository, err = lib.OpenRepository(storage, []byte(password))
+	if err != nil {
+		return lib.WrapErrorf(err, "failed to open repository")
 	}
-	currenHead, err := repository.Head()
+	repositoryHostURL = hostURL
+	if err := refreshSnapshot(); err != nil {
+		closeRepository()
+		return err
+	}
+	return nil
+}
+
+func refreshSnapshot() error {
+	currentHead, err := repository.Head()
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to get HEAD revision")
 	}
-	if currenHead == head && snapshot != nil {
+	if currentHead == head && snapshot != nil {
 		return nil
 	}
-	head = currenHead
+	head = currentHead
 	tmpFs := lib.NewMemoryFS(500_000_000)
 	snapshot, err = lib.NewRevisionSnapshot(repository, head, tmpFs)
 	if err != nil {
@@ -75,12 +98,20 @@ func EnsureRepositoryOpen(hostURL, password, repoPathPrefix_ string) error {
 	return nil
 }
 
+func closeRepository() {
+	repository = nil
+	repositoryHostURL = ""
+	head = lib.RevisionId{}
+	snapshot = nil
+	snapshotCache = nil
+}
+
 // Check if the given files (based on their SHA256 hashes) are *somewhere* in the HEAD
 // revision of the repository.
 // If a file is found, the path inside the repository is returned, otherwise an empty string.
 func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 	if repository == nil {
-		return nil, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
+		return nil, lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
 	r := snapshot.Reader(nil)
 	res := make([]string, len(sha256s))
@@ -108,7 +139,7 @@ func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 // Return `true` if the file was uploaded, `false` if it was skipped.
 func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	if repository == nil {
-		return nil, false, lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
+		return nil, false, lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -175,7 +206,7 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 
 func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string, error) {
 	if repository == nil {
-		return "", lib.Errorf("repository not opened - call 'EnsureRepositoryOpen' command first")
+		return "", lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
 	tempFS := lib.NewMemoryFS(500_000_000)
 	commit, err := lib.NewCommit(repository, tempFS)

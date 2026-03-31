@@ -132,8 +132,10 @@ class UploadWorker(
                     fileStatuses[fileName] = "waiting"
                 }
 
-                // Ensure repository is open.
-                goBridge.ensureOpen(hostUrl, password, repoPathPrefix)
+                // Open repository if not already open.
+                if (!goBridge.checkRepositoryOpen(hostUrl, repoPathPrefix)) {
+                    goBridge.openRepository(hostUrl, password, repoPathPrefix)
+                }
 
                 // List to collect revision entries.
                 val revisionEntries = mutableListOf<String>()

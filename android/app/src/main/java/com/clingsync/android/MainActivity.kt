@@ -684,7 +684,7 @@ fun MainScreen(
         if (settings.isValid()) {
             withContext(Dispatchers.IO) {
                 try {
-                    goBridge.ensureOpen(settings.hostUrl, settings.password, settings.repoPathPrefix)
+                    goBridge.openRepository(settings.hostUrl, settings.password, settings.repoPathPrefix)
                     Log.d("ClingSync", "Connected to repository")
                     withContext(Dispatchers.Main) {
                         isConnected = true
@@ -994,7 +994,7 @@ fun MainScreen(
 
                         try {
                             withContext(Dispatchers.IO) {
-                                goBridge.ensureOpen(newSettings.hostUrl, newSettings.password, newSettings.repoPathPrefix)
+                                goBridge.openRepository(newSettings.hostUrl, newSettings.password, newSettings.repoPathPrefix)
                             }
 
                             isConnecting = false

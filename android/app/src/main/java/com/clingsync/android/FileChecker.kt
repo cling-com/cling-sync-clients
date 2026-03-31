@@ -38,8 +38,10 @@ class FileChecker {
             try {
                 Log.d("FileChecker", "Starting check of ${filePaths.size} files")
 
-                // Ensure repository is open
-                goBridge.ensureOpen(hostUrl, password, repoPathPrefix)
+                // Open repository if not already open.
+                if (!goBridge.checkRepositoryOpen(hostUrl, repoPathPrefix)) {
+                    goBridge.openRepository(hostUrl, password, repoPathPrefix)
+                }
 
                 Log.d("FileChecker", "Starting to process ${filePaths.size} files")
 

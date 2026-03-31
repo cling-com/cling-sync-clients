@@ -83,7 +83,7 @@ class MainScreenTest {
         // Setup MockGoBridge in success mode.
         mockBridge = MockGoBridge()
         mockBridge.isOpen = true
-        mockBridge.shouldFailEnsureOpen = false
+        mockBridge.shouldFailOpenRepository = false
         mockBridge.shouldFailUploadFile = false
         mockBridge.shouldFailCommit = false
         mockBridge.uploadDelay = 10L

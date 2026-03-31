@@ -323,8 +323,9 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = go;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Cling Sync uses Face ID to protect your passphrase.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Cling Sync needs to access your local network to connect to the server.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access you Photo Library in order to backup photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access your Photo Library in order to backup photos.";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				LIBRARY_SEARCH_PATHS = ClingSync/go;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
@@ -386,8 +387,9 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = go;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Cling Sync uses Face ID to protect your passphrase.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Cling Sync needs to access your local network to connect to the server.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access you Photo Library in order to backup photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access your Photo Library in order to backup photos.";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				LIBRARY_SEARCH_PATHS = ClingSync/go;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;

@@ -8,6 +8,10 @@ set -eu
 root=$(cd $(dirname $0) && pwd)
 cd "$root"
 
+swiftlint_bin="$root/../tools/swiftlint"
+golangci_lint_bin="$root/../tools/golangci-lint"
+logs_dir="$root/build/logs"
+
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <command> [options]"
     echo
@@ -28,7 +32,7 @@ if [ $# -eq 0 ]; then
     echo "  fmt"
     echo "      Format code"
     echo
-    echh "  lint"
+    echo "  lint"
     echo "      Lint code"
     echo
     echo "  precommit"
@@ -54,20 +58,55 @@ if [ $# -eq 0 ]; then
 fi
 
 build_tools() {
-    if [ -f tools/swiftlint ]; then
+    local current_go_version=$(go env GOVERSION)
+
+    if [ -f "$swiftlint_bin" ]; then
+        :
+    else
+        echo ">>> Downloading swiftlint"
+        local url=https://github.com/realm/SwiftLint/releases/download/0.59.1/portable_swiftlint.zip
+        local tmp_dir=$(mktemp -d)
+        curl -SsL -o "$tmp_dir/swiftlint.zip" "$url"
+        cd "$tmp_dir"
+        unzip swiftlint.zip
+        rm swiftlint.zip
+        cd "$root"
+        mkdir -p "$root/../tools"
+        mv "$tmp_dir/swiftlint" "$swiftlint_bin"
+        rm -rf "$tmp_dir"
+    fi
+
+    if [ -f "$golangci_lint_bin" ] \
+        && "$golangci_lint_bin" version 2>/dev/null | grep -q "$current_go_version" \
+        && "$golangci_lint_bin" version 2>/dev/null | grep -q "2.11.4"
+    then
         return
     fi
-    echo ">>> Downloading swiftlint"
-    local url=https://github.com/realm/SwiftLint/releases/download/0.59.1/portable_swiftlint.zip
-    local tmp_dir=$(mktemp -d)
-    curl -SsL -o "$tmp_dir/swiftlint.zip" "$url"
-    cd "$tmp_dir"
-    unzip swiftlint.zip
-    rm swiftlint.zip
-    cd "$root"
-    mkdir -p tools
-    mv "$tmp_dir/swiftlint" "$root/tools/"
-    rm -rf "$tmp_dir"
+
+    echo ">>> Installing golangci-lint"
+    GOBIN="$root/../tools" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+}
+
+run_xcodebuild() {
+    local log_name="$1"
+    shift
+    mkdir -p "$logs_dir"
+    local log_path="$logs_dir/$log_name"
+    echo "    xcodebuild log: $log_path"
+    if xcodebuild "$@" >"$log_path" 2>&1; then
+        return 0
+    fi
+    echo "xcodebuild failed. Last 80 log lines:"
+    python3 - <<'PY' "$log_path"
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(errors="replace").splitlines()
+for line in lines[-80:]:
+    print(line)
+PY
+    return 1
 }
 
 # Build the Go shared library for the iOS app.
@@ -120,7 +159,7 @@ build_app() {
         
         # Get current version and increment it.
         local current_build=$(xcrun agvtool what-version -terse)
-        xcrun agvtool next-version -all
+    xcrun agvtool next-version -all
         local new_build=$(xcrun agvtool what-version -terse)
         
         echo ">>> Build number: $current_build -> $new_build"
@@ -134,30 +173,23 @@ build_app() {
     
     # Create archive.
     echo ">>> Creating archive..."
-    xcodebuild archive \
+    run_xcodebuild xcodebuild-archive.log \
         -project ClingSync.xcodeproj \
         -scheme ClingSync \
         -configuration Release \
         -destination 'generic/platform=iOS' \
         -archivePath build/ClingSync.xcarchive \
         CODE_SIGN_STYLE=Automatic \
-        DEVELOPMENT_TEAM="$development_team_id" \
-        || {
-            echo "Error: Archive failed"
-            exit 1
-        }
+        DEVELOPMENT_TEAM="$development_team_id"
     
     # Export archive for App Store.
     echo ">>> Exporting archive for App Store..."
     
-    xcodebuild -exportArchive \
+    run_xcodebuild xcodebuild-export.log \
+        -exportArchive \
         -archivePath build/ClingSync.xcarchive \
         -exportPath build/export \
-        -exportOptionsPlist build/ExportOptions.plist \
-        || {
-            echo "Error: Export failed"
-            exit 1
-        }
+        -exportOptionsPlist build/ExportOptions.plist
     
     echo ">>> Successfully created App Store archive"
     echo "    Archive location: build/ClingSync.xcarchive"
@@ -184,7 +216,7 @@ run_app() {
         build_go --simulator
         
         # Build app for simulator (force arm64 to match Go library).
-        xcodebuild \
+        run_xcodebuild xcodebuild-run-simulator.log \
             -project ClingSync.xcodeproj \
             -scheme ClingSync \
             -configuration Debug \
@@ -213,21 +245,26 @@ run_app() {
         build_go
         
         # Build app for device.
-        xcodebuild -project ClingSync.xcodeproj \
+        run_xcodebuild xcodebuild-run-device.log \
+            -project ClingSync.xcodeproj \
             -scheme ClingSync \
             -configuration Debug \
             -sdk iphoneos \
             -derivedDataPath build/DerivedData \
             build
-        
-        # Install on device using ios-deploy (if available).
-        if ! command -v ios-deploy &> /dev/null; then
-            echo "ios-deploy not found. Please install it with: brew install ios-deploy"
-            echo "Or run the app from Xcode"
+
+        # Install and launch on device using devicectl.
+        local app_path=$(find build/DerivedData -path "*/Debug-iphoneos/ClingSync.app" -type d | head -1)
+        local device_id
+        device_id=$(xcrun devicectl list devices 2>/dev/null | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1)
+        if [ -z "$device_id" ]; then
+            echo "Error: No connected iOS device found"
             exit 1
         fi
-        local app_path=$(find build/DerivedData -name "ClingSync.app" -type d | head -1)
-        ios-deploy --bundle "$app_path" --debug
+        echo ">>> Installing app on device $device_id..."
+        xcrun devicectl device install app --device "$device_id" "$app_path"
+        echo ">>> Launching app..."
+        xcrun devicectl device process launch --device "$device_id" "$bundle_id"
     fi
 }
 
@@ -236,7 +273,7 @@ fmt() {
 
     echo "    Formatting Go code"
     cd go
-    ../../tools/golangci-lint fmt .
+    "$golangci_lint_bin" fmt .
     cd "$root"
 
     echo "    Formatting Swift code"
@@ -251,7 +288,7 @@ lint() {
     cd "$root"
     build_tools
     echo "    Linting Swift code"
-    "$root/tools/swiftlint" lint --quiet --strict --config "$root/.swiftlint.yml" .
+    "$swiftlint_bin" lint --quiet --strict --config "$root/.swiftlint.yml" .
 }
 
 integration_test() {
@@ -312,15 +349,29 @@ integration_test_swiftui() {
     
     # Run the UI test.
     echo ">>> Running UI test on simulator: $simulator_device_id"
-    xcodebuild test \
-        -project ClingSync.xcodeproj \
-        -scheme ClingSync \
-        -destination "id=$simulator_device_id" \
-        -only-testing:ClingSyncUITests/ClingSyncUITests/testHappyPath \
-        || {
+    local attempt=1
+    while true; do
+        if run_xcodebuild xcodebuild-test.log \
+            test \
+            -project ClingSync.xcodeproj \
+            -scheme ClingSync \
+            -destination "id=$simulator_device_id" \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 240 \
+            -only-testing:ClingSyncUITests/ClingSyncUITests/testHappyPath
+        then
+            break
+        fi
+        if ! grep -q "Failed to clone device" "$logs_dir/xcodebuild-test.log" || [ "$attempt" -ge 3 ]; then
             echo "❌ UI test failed"
             return 1
-        }
+        fi
+        attempt=$((attempt + 1))
+        echo ">>> Retrying after simulator clone failure (attempt $attempt)"
+        sleep 2
+    done
     
     echo "✅ UI test passed"
 }

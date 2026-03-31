@@ -27,7 +27,24 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 	}()
 
 	switch command {
-	case "ensureOpen":
+	case "checkRepositoryOpen":
+		var params struct {
+			HostURL        string `json:"hostUrl"`
+			RepoPathPrefix string `json:"repoPathPrefix"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		response := struct {
+			Open           bool   `json:"open"`
+			HeadRevisionID string `json:"headRevisionId"`
+		}{Open: CheckRepositoryOpen(params.HostURL, params.RepoPathPrefix), HeadRevisionID: GetRepositoryHeadRevisionID()}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "openRepository":
 		var params struct {
 			HostURL        string `json:"hostUrl"`
 			Password       string `json:"password"`
@@ -36,13 +53,13 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		err := EnsureRepositoryOpen(params.HostURL, params.Password, params.RepoPathPrefix)
+		err := OpenRepository(params.HostURL, params.Password, params.RepoPathPrefix)
 		if err != nil {
 			return errorResponse(err.Error())
 		}
 		response := struct {
-			Success bool `json:"success"`
-		}{Success: true}
+			HeadRevisionID string `json:"headRevisionId"`
+		}{HeadRevisionID: GetRepositoryHeadRevisionID()}
 		jsonBytes, err := json.Marshal(response)
 		if err != nil {
 			return errorResponse("Failed to marshal response: " + err.Error())

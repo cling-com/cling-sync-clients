@@ -5,7 +5,7 @@ import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicInteger
 
 class MockGoBridge : IGoBridge {
-    var shouldFailEnsureOpen = false
+    var shouldFailOpenRepository = false
     var shouldFailUploadFile = false
     var shouldFailCommit = false
     var uploadDelay = 100L // Milliseconds per file.
@@ -13,7 +13,7 @@ class MockGoBridge : IGoBridge {
 
     private val uploadedFiles = mutableListOf<String>()
     private val uploadCounter = AtomicInteger(0)
-    private val ensureOpenCounter = AtomicInteger(0)
+    private val openRepositoryCounter = AtomicInteger(0)
     private val commitCounter = AtomicInteger(0)
 
     private val uploadCalls = mutableListOf<String>()
@@ -26,17 +26,24 @@ class MockGoBridge : IGoBridge {
 
     val selectedFiles = mutableListOf<String>()
 
-    override fun ensureOpen(
+    override fun checkRepositoryOpen(
+        hostUrl: String,
+        repoPathPrefix: String,
+    ): Boolean {
+        return isOpen
+    }
+
+    override fun openRepository(
         hostUrl: String,
         password: String,
         repoPathPrefix: String,
     ) {
-        if (shouldFailEnsureOpen) {
+        if (shouldFailOpenRepository) {
             val error = "Failed to connect to repository: Connection refused"
             errors.add(error)
             throw Exception(error)
         }
-        ensureOpenCounter.incrementAndGet()
+        openRepositoryCounter.incrementAndGet()
         isOpen = true
     }
 
@@ -111,14 +118,14 @@ class MockGoBridge : IGoBridge {
     }
 
     fun reset() {
-        shouldFailEnsureOpen = false
+        shouldFailOpenRepository = false
         shouldFailUploadFile = false
         shouldFailCommit = false
         uploadDelay = 100L
         failAtFileIndex = -1
         uploadedFiles.clear()
         uploadCounter.set(0)
-        ensureOpenCounter.set(0)
+        openRepositoryCounter.set(0)
         commitCounter.set(0)
         uploadCalls.clear()
         commitCalls.clear()
@@ -133,7 +140,7 @@ class MockGoBridge : IGoBridge {
 
     fun getUploadCount(): Int = uploadCounter.get()
 
-    fun getEnsureOpenCount(): Int = ensureOpenCounter.get()
+    fun getOpenRepositoryCount(): Int = openRepositoryCounter.get()
 
     fun getCommitCount(): Int = commitCounter.get()
 

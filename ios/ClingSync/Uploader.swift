@@ -1,5 +1,4 @@
 import Photos
-import SwiftUI
 import UIKit
 
 enum UploaderState {
@@ -11,158 +10,182 @@ enum UploaderState {
     case error
 }
 
-class Uploader: ObservableObject {
-    @AppStorage("hostURL") private var hostURL = ""
-    @AppStorage("passphrase") private var passphrase = ""
-    @AppStorage("repoPathPrefix") private var repoPathPrefix = ""
-    @AppStorage("author") private var author = "iOS User"
-    @Published var currentlySending: File?
+final class Uploader: ObservableObject {
+    @Published var currentlySending: MediaFile?
     @Published var uploadedBytes: Int64 = 0
-    @Published var errorMessage: String = ""
+    @Published var errorMessage = ""
     @Published var state: UploaderState = .preparing
 
+    let files: [MediaFile]
+
+    private let configuration: RepositoryConfiguration
+    private let headRevisionId: String
+    private var task: Task<Void, Never>?
+
+    init(files: [MediaFile], configuration: RepositoryConfiguration, headRevisionId: String) {
+        self.files = files
+        self.configuration = configuration
+        self.headRevisionId = headRevisionId
+    }
+
     var finished: Bool {
-        return state == .done || state == .aborted || state == .error
+        state == .done || state == .aborted || state == .error
     }
 
     var totalBytes: Int64 {
         files.reduce(0) { $0 + $1.size }
     }
 
-    let files: [File]
-    private var task: Task<Void, Never>?
-
-    init(files: [File]) {
-        self.files = files
-    }
-
-    // swiftlint:disable:next cyclomatic_complexity function_body_length
-    public func start() {
-        if files.isEmpty {
-            return
-        }
+    func start() {
+        guard !files.isEmpty else { return }
         for file in files {
             file.uploadState = .waiting
         }
-        task = Task {
-            do {
-                try Bridge.ensureOpen(url: hostURL, password: passphrase, repoPathPrefix: repoPathPrefix)
-                var revisionEntries: [String] = []
+        let files = files
+        let configuration = configuration
+        let headRevisionId = headRevisionId
+        task = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.executeUploadTask(files: files, configuration: configuration, headRevisionId: headRevisionId)
+        }
+    }
 
-                // Upload each file sequentially.
-                for file in files {
-                    guard !Task.isCancelled else { break }
-                    await MainActor.run {
-                        state = .sending
-                        file.uploadState = .sending
-                        currentlySending = file
-                    }
-                    if let revisionEntry = try await uploadFile(file) {
-                        revisionEntries.append(revisionEntry)
+    func abort() {
+        task?.cancel()
+    }
 
-                        await MainActor.run {
-                            file.uploadState = .sentWaitingCommit
-                            file.revisionEntry = revisionEntry
-                            uploadedBytes += file.size
-                        }
-                    } else {
-                        // File was skipped (already exists with same hash)
-                        await MainActor.run {
-                            file.uploadState = .done
-                            uploadedBytes += file.size
-                        }
-                    }
-                }
-                guard !Task.isCancelled else {
-                    throw CancellationError()
-                }
+    private func executeUploadTask(
+        files: [MediaFile],
+        configuration: RepositoryConfiguration,
+        headRevisionId: String
+    ) async {
+        do {
+            let result = try await transfer(
+                files: files, configuration: configuration, headRevisionID: headRevisionId)
+            SyncIndexStore.shared.add(
+                result.records, repositoryID: configuration.repositoryID, headRevisionID: result.headRevisionID)
+            await MainActor.run {
+                self.currentlySending = nil
+                self.state = .done
+                self.task = nil
+            }
+        } catch is CancellationError {
+            await handleCancellation()
+        } catch let error as BridgeError {
+            await failUpload(message: error.message)
+        } catch {
+            await failUpload(message: error.localizedDescription)
+        }
+    }
 
+    private func transfer(
+        files: [MediaFile],
+        configuration: RepositoryConfiguration,
+        headRevisionID: String
+    ) async throws -> (records: [SyncedFileRecord], headRevisionID: String) {
+        var syncedRecords: [SyncedFileRecord] = []
+        var revisionEntries: [String] = []
+        var currentHeadRevisionID = headRevisionID
+
+        for file in files {
+            try Task.checkCancellation()
+            await MainActor.run {
+                self.state = .sending
+                self.currentlySending = file
+                file.uploadState = .sending
+            }
+
+            if let revisionEntry = try await upload(file) {
+                revisionEntries.append(revisionEntry)
                 await MainActor.run {
-                    state = .committing
-                    currentlySending = nil
+                    file.revisionEntry = revisionEntry
+                    file.uploadState = .sentWaitingCommit
+                    self.uploadedBytes += file.size
                 }
-
-                // Only commit if we have revision entries
-                if !revisionEntries.isEmpty {
-                    // Commit all uploaded files
-                    let deviceModel = await UIDevice.current.model
-                    let deviceName = await UIDevice.current.name
-                    _ = try Bridge.commit(
-                        revisionEntries: revisionEntries,
-                        author: author,
-                        message: "Backup \(files.count) file\(files.count == 1 ? "" : "s") from \(deviceName)"
-                    )
-                }
-
-                // Mark all committed files as uploaded
+            } else {
                 await MainActor.run {
-                    for file in files {
-                        file.uploadState = .done
-                    }
-                    state = .done
-                    task = nil
-                }
-
-            } catch is CancellationError {
-                await MainActor.run {
-                    // Reset files to none state if cancelled.
-                    for file in files {
-                        file.uploadState = .none
-                    }
-                    task = nil
-                }
-            } catch {
-                await MainActor.run {
-                    // Reset files to none state on error.
-                    for file in files {
-                        file.uploadState = .none
-                    }
-                    if let bridgeError = error as? BridgeError {
-                        errorMessage = bridgeError.message
-                    } else {
-                        errorMessage = error.localizedDescription
-                    }
-                    state = .error
+                    file.uploadState = .done
+                    self.uploadedBytes += file.size
                 }
             }
+            syncedRecords.append(file.syncedRecord)
+        }
+
+        await MainActor.run {
+            self.currentlySending = nil
+            self.state = .committing
+        }
+        if !revisionEntries.isEmpty {
+            let author = configuration.author.isEmpty ? UIDevice.current.name : configuration.author
+            currentHeadRevisionID = try Bridge.commit(
+                revisionEntries: revisionEntries,
+                author: author,
+                message: "Backup \(files.count) file\(files.count == 1 ? "" : "s") from \(UIDevice.current.name)"
+            )
+        }
+
+        await MainActor.run {
+            for file in files {
+                file.uploadState = .done
+            }
+        }
+        return (syncedRecords, currentHeadRevisionID)
+    }
+
+    private func handleCancellation() async {
+        await MainActor.run {
+            self.currentlySending = nil
+            for file in self.files {
+                file.uploadState = .none
+            }
+            self.state = .aborted
+            self.task = nil
         }
     }
 
-    public func abort() {
-        task?.cancel()
-        state = .aborted
-        for file in files {
-            file.uploadState = .none
+    private func failUpload(message: String) async {
+        await MainActor.run {
+            self.currentlySending = nil
+            for file in self.files {
+                file.uploadState = .none
+            }
+            self.errorMessage = message
+            self.state = .error
+            self.task = nil
         }
     }
 
-    // Upload the file by first writing it to temporary file.
-    private func uploadFile(_ file: File) async throws -> String? {
+    private func upload(_ file: MediaFile) async throws -> String? {
+        if let localFileURL = file.localFileURL {
+            return try Bridge.uploadFile(filePath: localFileURL.path)
+        }
+
+        guard let resource = file.resource else {
+            throw BridgeError(message: "Missing file source")
+        }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
-        let resources = PHAssetResource.assetResources(for: file.asset)
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                file.id.replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: ":", with: "_"),
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let tempURL = tempDirectory.appendingPathComponent(file.name)
 
-        // Typically, the first resource is the original.
-        // todo: perhaps we should (optionally) upload all resources? If a PHAsset has multiple
-        //       resources, we should display them all and let the user decide.
-        guard let resource = resources.first else {
-            throw BridgeError(message: "No resource found for asset")
-        }
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(file.name)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHAssetResourceManager.default().writeData(
-                for: resource, toFile: tempURL, options: options
-            ) { error in
-                if let error = error {
+            PHAssetResourceManager.default().writeData(for: resource, toFile: tempURL, options: options) { error in
+                if let error {
                     continuation.resume(throwing: error)
                 } else {
                     continuation.resume()
                 }
             }
         }
-        let revisionEntry = try Bridge.uploadFile(
-            filePath: tempURL.path)
-        try? FileManager.default.removeItem(at: tempURL)
-        return revisionEntry
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+        return try Bridge.uploadFile(filePath: tempURL.path)
     }
 }

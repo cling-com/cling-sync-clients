@@ -1,7 +1,12 @@
 package com.clingsync.android
 
 interface IGoBridge {
-    fun ensureOpen(
+    fun checkRepositoryOpen(
+        hostUrl: String,
+        repoPathPrefix: String,
+    ): Boolean
+
+    fun openRepository(
         hostUrl: String,
         password: String,
         repoPathPrefix: String,

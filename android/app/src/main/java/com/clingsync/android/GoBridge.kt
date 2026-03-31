@@ -47,7 +47,21 @@ open class GoBridge : IGoBridge {
         }
     }
 
-    override fun ensureOpen(
+    override fun checkRepositoryOpen(
+        hostUrl: String,
+        repoPathPrefix: String,
+    ): Boolean {
+        val params =
+            JSONObject().apply {
+                put("hostUrl", hostUrl)
+                put("repoPathPrefix", repoPathPrefix)
+            }
+
+        val response = executeInternal("checkRepositoryOpen", params)
+        return response.optBoolean("open", false)
+    }
+
+    override fun openRepository(
         hostUrl: String,
         password: String,
         repoPathPrefix: String,
@@ -59,7 +73,7 @@ open class GoBridge : IGoBridge {
                 put("repoPathPrefix", repoPathPrefix)
             }
 
-        executeInternal("ensureOpen", params)
+        executeInternal("openRepository", params)
     }
 
     override fun checkFiles(sha256s: List<String>): List<String> {

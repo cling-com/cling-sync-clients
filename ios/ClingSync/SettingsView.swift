@@ -1,37 +1,89 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("hostURL") private var hostURL = ""
-    @AppStorage("passphrase") private var passphrase = ""
-    @AppStorage("repoPathPrefix") private var repoPathPrefix = ""
-    @AppStorage("author") private var author = "iOS User"
+    @AppStorage(AppStorageKey.author) private var storedAuthor = ""
+    @AppStorage(AppStorageKey.hostURL) private var storedHostURL = ""
+    @AppStorage(AppStorageKey.passphraseStorageMode) private var storedPassphraseStorageMode = PassphraseStorageMode
+        .session.rawValue
+    @AppStorage(AppStorageKey.repoPathPrefix) private var storedRepoPathPrefix = ""
 
     @Binding var isPresented: Bool
-    @State private var isConnecting = false
+    let onSave: (RepositoryConfiguration, Bool) -> Void
+    @StateObject private var passphrasePromptController = PassphrasePromptController()
+    @State private var author = ""
     @State private var errorMessage = ""
+    @State private var hostURL = ""
+    @State private var isTesting = false
+    @State private var repoPathPrefix = ""
+    @State private var testedConfiguration: RepositoryConfiguration?
     @State private var showError = false
+    @State private var showSuccess = false
+
+    private var configuration: RepositoryConfiguration {
+        RepositoryConfiguration(hostURL: hostURL, repoPathPrefix: repoPathPrefix, author: author)
+    }
+
+    private var storedPassphraseMode: PassphraseStorageMode {
+        PassphraseStorageMode(rawValue: storedPassphraseStorageMode) ?? .session
+    }
+
+    private var hasStoredPassphrase: Bool {
+        PassphraseStore.shared.hasStoredPassphrase(for: configuration.repositoryID, mode: storedPassphraseMode)
+    }
+
+    private var canSave: Bool {
+        configuration.isConfigured && !isTesting
+    }
+
+    private var storedPassphraseLabel: String {
+        guard hasStoredPassphrase else {
+            return "No passphrase stored. You will be asked when you test the connection or start syncing."
+        }
+        switch storedPassphraseMode {
+        case .session:
+            return "No passphrase stored. You will be asked when needed."
+        case .keychain:
+            return "Passphrase is stored in the iPhone Keychain."
+        }
+    }
 
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Server Configuration")) {
+                Section("Repository") {
                     TextField("Host URL", text: $hostURL)
                         .textContentType(.URL)
-                        .autocapitalization(.none)
+                        .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
 
-                    SecureField("Passphrase", text: $passphrase)
-                        .textContentType(.password)
-
                     TextField("Destination path", text: $repoPathPrefix)
-                        .autocapitalization(.none)
+                        .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
 
                     TextField("Author", text: $author)
                         .textContentType(.name)
                 }
+
+                Section("Repository Access") {
+                    Text(storedPassphraseLabel)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Button("Test Connection") {
+                        if !isTesting {
+                            testConnection()
+                        }
+                    }
+                    .disabled(!configuration.isConfigured || isTesting)
+
+                    if hasStoredPassphrase {
+                        Button("Forget Stored Passphrase", role: .destructive) {
+                            forgetStoredPassphrase()
+                        }
+                    }
+                }
             }
-            .navigationTitle("Connect to Server")
+            .navigationTitle("Repository Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -41,22 +93,23 @@ struct SettingsView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        if !isConnecting {
-                            testConnection()
-                        }
+                        saveSettings()
                     }
-                    .disabled(hostURL.isEmpty || passphrase.isEmpty || isConnecting)
+                    .disabled(!canSave)
                 }
             }
-            .alert(isPresented: $showError) {
-                Alert(
-                    title: Text("Connection Error"),
-                    message: Text(errorMessage),
-                    dismissButton: .default(Text("OK"))
-                )
+            .alert("Connection Error", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage)
+            }
+            .alert("Connection Succeeded", isPresented: $showSuccess) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The repository is reachable and the passphrase worked.")
             }
             .overlay {
-                if isConnecting {
+                if isTesting {
                     Color.black.opacity(0.3)
                         .ignoresSafeArea()
                         .overlay {
@@ -64,7 +117,7 @@ struct SettingsView: View {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle())
                                     .scaleEffect(1.5)
-                                Text("Connecting to server...")
+                                Text("Testing connection...")
                                     .font(.headline)
                             }
                             .padding(24)
@@ -74,50 +127,103 @@ struct SettingsView: View {
                         }
                 }
             }
+            .sheet(item: $passphrasePromptController.request) { request in
+                PassphrasePromptView(controller: passphrasePromptController, request: request)
+            }
+            .onAppear(perform: loadStoredValues)
+        }
+    }
+
+    private func loadStoredValues() {
+        hostURL = storedHostURL
+        repoPathPrefix = storedRepoPathPrefix
+        author = storedAuthor
+        testedConfiguration = nil
+    }
+
+    private func saveSettings() {
+        storedHostURL = hostURL
+        storedRepoPathPrefix = repoPathPrefix
+        storedAuthor = author
+        isPresented = false
+        let configuration = configuration
+        let repositoryVerified = testedConfiguration == configuration
+        DispatchQueue.main.async {
+            onSave(configuration, repositoryVerified)
         }
     }
 
     private func testConnection() {
-        isConnecting = true
+        isTesting = true
         errorMessage = ""
 
         Task {
             do {
-                try Bridge.ensureOpen(url: hostURL, password: passphrase, repoPathPrefix: repoPathPrefix)
-                await MainActor.run {
-                    isConnecting = false
-                    // Close the dialog on success
-                    isPresented = false
+                let resolved = try await verifyConnection()
+                if resolved.mode.savesInKeychain {
+                    storedPassphraseStorageMode = resolved.mode.rawValue
                 }
+                testedConfiguration = configuration
+                isTesting = false
+                showSuccess = true
+            } catch let error as BridgeError {
+                show(error.message)
+            } catch let error as PassphraseStoreError {
+                show(error.message)
             } catch {
-                await MainActor.run {
-                    isConnecting = false
-                    if let bridgeError = error as? BridgeError {
-                        errorMessage = bridgeError.message
-                    } else {
-                        errorMessage = error.localizedDescription
-                    }
-                    showError = true
-                }
+                show(error.localizedDescription)
             }
         }
     }
-}
 
-extension View {
-    func placeholder<Content: View>(
-        when shouldShow: Bool,
-        alignment: Alignment = .leading,
-        @ViewBuilder placeholder: () -> Content
-    ) -> some View {
-
-        ZStack(alignment: alignment) {
-            placeholder().opacity(shouldShow ? 1 : 0)
-            self
+    private func verifyConnection() async throws -> ResolvedPassphrase {
+        guard
+            let resolved = try await passphrasePromptController.resolvePassphrase(
+                repositoryID: configuration.repositoryID,
+                currentMode: storedPassphraseMode,
+                promptIfNeeded: true,
+                allowsKeychainSave: true,
+                promptMessage: "Enter the passphrase for \(hostURL)."
+            )
+        else {
+            throw PassphraseStoreError(message: "Authentication was cancelled.")
         }
+        let currentConfiguration = configuration
+        try await Bridge.triggerNetworkPermissionIfNeeded(url: currentConfiguration.hostURL)
+        try await Task.detached(priority: .userInitiated) {
+            _ = try Bridge.openRepository(
+                url: currentConfiguration.hostURL,
+                password: resolved.passphrase,
+                repoPathPrefix: currentConfiguration.repoPathPrefix
+            )
+        }.value
+
+        if resolved.mode.savesInKeychain {
+            try PassphraseStore.shared.save(
+                passphrase: resolved.passphrase, for: configuration.repositoryID, mode: resolved.mode)
+        }
+        return resolved
+    }
+
+    private func forgetStoredPassphrase() {
+        do {
+            try PassphraseStore.shared.clear(for: configuration.repositoryID)
+            storedPassphraseStorageMode = PassphraseStorageMode.session.rawValue
+            testedConfiguration = nil
+        } catch let error as PassphraseStoreError {
+            show(error.message)
+        } catch {
+            show(error.localizedDescription)
+        }
+    }
+
+    private func show(_ message: String) {
+        isTesting = false
+        errorMessage = message
+        showError = true
     }
 }
 
 #Preview {
-    SettingsView(isPresented: .constant(true))
+    SettingsView(isPresented: .constant(true), onSave: { _, _ in })
 }

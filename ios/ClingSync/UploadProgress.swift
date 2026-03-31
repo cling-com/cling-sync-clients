@@ -9,7 +9,7 @@ struct UploadProgress: View {
             switch uploader.state {
             case .preparing:
                 HStack {
-                    Text(uploader.state == .preparing ? "Preparing" : "Aborted!")
+                    Text("Preparing")
                     Spacer()
                     Button("Abort", action: uploader.abort)
                         .buttonStyle(.borderedProminent)
@@ -17,7 +17,7 @@ struct UploadProgress: View {
                 }
             case .aborted:
                 HStack {
-                    Text(uploader.state == .preparing ? "Preparing" : "Aborted!")
+                    Text("Aborted!")
                     Spacer()
                     Button("OK") {
                         dismiss()

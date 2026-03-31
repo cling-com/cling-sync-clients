@@ -33,6 +33,21 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		server.Close() //nolint:errcheck,gosec
 	})
 
+	// Push test files to emulator's public DCIM/Camera directory.
+	t.Log("Pushing test files to emulator")
+	adb := "../tools/android-sdk/platform-tools/adb"
+	for _, f := range []struct{ name, content string }{
+		{"blue_sky.jpg", "Blue sky"},
+		{"red_earth.jpg", "Red earth"},
+		{"green_grass.jpg", "Green grass"},
+	} {
+		tmpFile := t.TempDir() + "/" + f.name
+		assert.NoError(os.WriteFile(tmpFile, []byte(f.content), 0o644)) //nolint:gosec
+		out, err := exec.CommandContext(t.Context(), adb, "push", tmpFile, "/sdcard/DCIM/Camera/"+f.name).
+			CombinedOutput()
+		assert.NoError(err, string(out))
+	}
+
 	t.Log("Running Android tests")
 	cmd := exec.CommandContext(t.Context(), "./gradlew", "connectedAndroidTest", "-q")
 	cmd.Dir = ".."

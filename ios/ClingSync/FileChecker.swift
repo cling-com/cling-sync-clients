@@ -1,20 +1,62 @@
-import CommonCrypto
+import CryptoKit
 import Foundation
 import Photos
 
-class FileChecker {
+final class SHA256Cache {
+    static let shared = SHA256Cache()
+
+    private struct Entry: Codable {
+        let size: Int64
+        let modificationDate: Date
+        let sha256: String
+    }
+
+    private var entries: [String: Entry]
+    private let fileURL: URL
+
+    private init() {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        fileURL = cacheDir.appendingPathComponent("sha256cache.json")
+        if let data = try? Data(contentsOf: fileURL),
+            let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
+        {
+            entries = decoded
+        } else {
+            entries = [:]
+        }
+    }
+
+    func lookup(id: String, size: Int64, modificationDate: Date) -> String? {
+        guard let entry = entries[id] else { return nil }
+        guard entry.size == size, entry.modificationDate == modificationDate else {
+            entries.removeValue(forKey: id)
+            return nil
+        }
+        return entry.sha256
+    }
+
+    func store(id: String, size: Int64, modificationDate: Date, sha256: String) {
+        entries[id] = Entry(size: size, modificationDate: modificationDate, sha256: sha256)
+    }
+
+    func save() {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
+final class FileChecker {
     private static let maxBatchSize = 100
     private static let batchTimeLimit: TimeInterval = 1.0
 
-    private let bridge = Bridge.self
-    private let files: [File]
-    private var fileStatusUpdate: ([String: String]) -> Void
-    private var progressUpdate: (Int, Int) -> Void
+    private let files: [MediaFile]
+    private let fileStatusUpdate: ([String: String]) -> Void
+    private let progressUpdate: (Int, Int) -> Void
 
     private var isCancelled = false
 
     init(
-        files: [File],
+        files: [MediaFile],
         fileStatusUpdate: @escaping ([String: String]) -> Void,
         progressUpdate: @escaping (Int, Int) -> Void
     ) {
@@ -33,96 +75,82 @@ class FileChecker {
         let totalFiles = files.count
 
         progressUpdate(0, totalFiles)
+        while fileIndex < totalFiles && !isCancelled {
+            let batch = try await nextBatch(startingAt: &fileIndex)
+            if batch.isEmpty {
+                continue
+            }
 
-        while fileIndex < files.count && !isCancelled {
-            var batchFiles: [File] = []
-            var batchSha256s: [String] = []
-            let batchStartTime = Date()
-
-            while fileIndex < files.count && batchFiles.count < Self.maxBatchSize
-                && (batchFiles.isEmpty || Date().timeIntervalSince(batchStartTime) < Self.batchTimeLimit)
-            {
-
-                let file = files[fileIndex]
-                fileIndex += 1
-
-                do {
-                    let sha256 = try await calculateSHA256(for: file.asset)
-                    batchFiles.append(file)
-                    batchSha256s.append(sha256)
-                } catch {
-                    print("Error calculating SHA256 for \(file.name): \(error)")
-                    batchFiles.append(file)
-                    batchSha256s.append("")
+            var fileStatuses: [String: String] = [:]
+            do {
+                let results = try Bridge.checkFiles(sha256s: batch.map { $0.sha256 })
+                for (index, file) in batch.enumerated() {
+                    fileStatuses[file.file.id] = index < results.count ? results[index] : ""
                 }
-
-                if isCancelled {
-                    break
+            } catch {
+                for file in batch {
+                    fileStatuses[file.file.id] = ""
                 }
             }
 
-            if !batchSha256s.isEmpty {
-                var fileStatuses: [String: String] = [:]
+            processedCount += batch.count
+            fileStatusUpdate(fileStatuses)
+            progressUpdate(processedCount, totalFiles)
+        }
+        SHA256Cache.shared.save()
+    }
 
-                do {
-                    let results = try bridge.checkFiles(sha256s: batchSha256s)
+    private func nextBatch(startingAt fileIndex: inout Int) async throws -> [(file: MediaFile, sha256: String)] {
+        var batch: [(file: MediaFile, sha256: String)] = []
+        let batchStartTime = Date()
 
-                    for (index, file) in batchFiles.enumerated() {
-                        let repoPath = index < results.count ? results[index] : ""
-                        fileStatuses[file.name] = repoPath
+        while fileIndex < files.count,
+            batch.count < Self.maxBatchSize,
+            batch.isEmpty || Date().timeIntervalSince(batchStartTime) < Self.batchTimeLimit,
+            !isCancelled
+        {
+            let file = files[fileIndex]
+            fileIndex += 1
+            do {
+                batch.append((file, try await calculateSHA256(for: file)))
+            } catch {
+                batch.append((file, ""))
+            }
+        }
+        return batch
+    }
+
+    private func calculateSHA256(for file: MediaFile) async throws -> String {
+        let cache = SHA256Cache.shared
+        if let cached = cache.lookup(id: file.id, size: file.size, modificationDate: file.modificationDate) {
+            return cached
+        }
+        let hash: String
+        if let localFileURL = file.localFileURL {
+            let data = try Data(contentsOf: localFileURL)
+            hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        } else {
+            guard let resource = file.resource else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            hash = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                let options = PHAssetResourceRequestOptions()
+                options.isNetworkAccessAllowed = true
+
+                var hasher = SHA256()
+                PHAssetResourceManager.default().requestData(for: resource, options: options) { data in
+                    hasher.update(data: data)
+                } completionHandler: { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
                     }
-                } catch {
-                    print("Error checking files: \(error)")
-                    for file in batchFiles {
-                        fileStatuses[file.name] = ""
-                    }
+                    let digest = hasher.finalize()
+                    continuation.resume(returning: digest.map { String(format: "%02x", $0) }.joined())
                 }
-
-                processedCount += batchFiles.count
-                fileStatusUpdate(fileStatuses)
-                progressUpdate(processedCount, totalFiles)
             }
         }
+        cache.store(id: file.id, size: file.size, modificationDate: file.modificationDate, sha256: hash)
+        return hash
     }
-
-    private func calculateSHA256(for asset: PHAsset) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            options.isSynchronous = false
-
-            PHImageManager.default().requestImageDataAndOrientation(
-                for: asset,
-                options: options
-            ) { data, _, _, info in
-                if let error = info?[PHImageErrorKey] as? Error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-
-                guard let data = data else {
-                    continuation.resume(throwing: FileCheckerError.noImageData)
-                    return
-                }
-
-                let sha256 = self.calculateSHA256(data: data)
-                continuation.resume(returning: sha256)
-            }
-        }
-    }
-
-    private func calculateSHA256(data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-
-        data.withUnsafeBytes { bytes in
-            _ = CC_SHA256(bytes.baseAddress, CC_LONG(data.count), &hash)
-        }
-
-        return hash.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-enum FileCheckerError: Error {
-    case noImageData
 }

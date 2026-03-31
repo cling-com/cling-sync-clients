@@ -1,5 +1,6 @@
 import Photos
 import SwiftUI
+import UIKit
 
 enum FileStatus: Equatable {
     case none
@@ -12,26 +13,46 @@ enum FileStatus: Equatable {
     case done
 }
 
-class File: ObservableObject, Identifiable {
-    var id: String { name }
+final class MediaFile: ObservableObject, Identifiable {
+    let id: String
     let name: String
     let size: Int64
-    let asset: PHAsset
+    let modificationDate: Date
+    let asset: PHAsset?
+    let resource: PHAssetResource?
+    let localFileURL: URL?
     @Published var uploadState: FileStatus = .none
     @Published var revisionEntry: String?
 
-    init(name: String, size: Int64, asset: PHAsset) {
-        self.name = name
-        self.size = size
-        self.asset = asset
+    var syncedRecord: SyncedFileRecord {
+        SyncedFileRecord(name: name, size: size, modificationDate: modificationDate)
     }
 
+    init(name: String, size: Int64, asset: PHAsset, resource: PHAssetResource, modificationDate: Date) {
+        self.id = asset.localIdentifier + ":" + resource.originalFilename
+        self.name = name
+        self.size = size
+        self.modificationDate = modificationDate
+        self.asset = asset
+        self.resource = resource
+        self.localFileURL = nil
+    }
+
+    init(localFileURL: URL, size: Int64, modificationDate: Date) {
+        self.id = localFileURL.lastPathComponent
+        self.name = localFileURL.lastPathComponent
+        self.size = size
+        self.modificationDate = modificationDate
+        self.asset = nil
+        self.resource = nil
+        self.localFileURL = localFileURL
+    }
 }
 
-struct FileView: View {
-    @State private var isOn = false
+struct MediaFileView: View {
     @State private var thumbnail: UIImage?
-    @ObservedObject var file: File
+    @ObservedObject var file: MediaFile
+    let isSelected: Bool
 
     private var uploadStateText: String {
         switch file.uploadState {
@@ -102,24 +123,20 @@ struct FileView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
             default:
-                EmptyView()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
             }
         }
+        .contentShape(Rectangle())
         .onAppear {
             loadThumbnail()
         }
-        .selectionDisabled(
-            {
-                switch file.uploadState {
-                case .none, .new:
-                    return false
-                default:
-                    return true
-                }
-            }())
     }
 
     private func loadThumbnail() {
+        guard let asset = file.asset else {
+            return
+        }
         let manager = PHImageManager.default()
         let options = PHImageRequestOptions()
         options.isSynchronous = false
@@ -128,7 +145,7 @@ struct FileView: View {
         options.resizeMode = .fast
 
         manager.requestImage(
-            for: file.asset,
+            for: asset,
             targetSize: CGSize(width: 120, height: 120),
             contentMode: .aspectFill,
             options: options

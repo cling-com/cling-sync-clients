@@ -2,7 +2,6 @@ package com.clingsync.android
 
 import android.Manifest
 import android.content.Context
-import android.os.Environment
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
@@ -21,7 +20,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class IntegrationTest {
@@ -47,18 +45,7 @@ class IntegrationTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("cling_sync_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
-
-        val dcimDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DCIM), "Camera")
-        dcimDir.mkdirs()
-        File(dcimDir, "blue_sky.jpg").apply {
-            writeText("Blue sky")
-        }
-        File(dcimDir, "red_earth.jpg").apply {
-            writeText("Red earth")
-        }
-        File(dcimDir, "green_grass.jpg").apply {
-            writeText("Green grass")
-        }
+        // Test files are pushed to /sdcard/DCIM/Camera/ via adb in the Go test harness.
     }
 
     @After
