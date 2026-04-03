@@ -50,6 +50,9 @@ extension ContentView {
             return
         }
         let repositoryChanged = previousConfiguration.repositoryID != configuration.repositoryID
+        if repositoryChanged && !previousConfiguration.repositoryID.isEmpty {
+            try? PassphraseStore.shared.clear(for: previousConfiguration.repositoryID)
+        }
         repositoryConnected = repositoryVerified || (!repositoryChanged && repositoryConnected)
         appState = .ready
         if isUITestMode {
@@ -120,7 +123,7 @@ extension ContentView {
         // Check if the repository is already open for this URL and path prefix.
         // If the parameters don't match, the bridge closes the repository.
         let status = try await Task.detached(priority: .userInitiated) {
-            try Bridge.checkRepositoryOpen(url: configuration.hostURL, repoPathPrefix: configuration.repoPathPrefix)
+            try Bridge.checkRepositoryOpen(url: configuration.hostURL)
         }.value
         if status.open {
             return RepositoryConnectionInfo(headRevisionId: status.headRevisionId)
@@ -143,8 +146,7 @@ extension ContentView {
         let connection = try await Task.detached(priority: .userInitiated) {
             try Bridge.openRepository(
                 url: configuration.hostURL,
-                password: access.passphrase,
-                repoPathPrefix: configuration.repoPathPrefix
+                password: access.passphrase
             )
         }.value
 

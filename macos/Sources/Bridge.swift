@@ -58,6 +58,14 @@ enum Bridge {
             ])
     }
 
+    static func clearWorkspacePassphrase(hostURL: String) throws {
+        _ = try execute(
+            command: "clearWorkspacePassphrase",
+            params: [
+                "hostUrl": hostURL
+            ])
+    }
+
     static func testWorkspaceAccess(localPath: String, password: String?) throws {
         var params: [String: Any] = ["localPath": localPath]
         if let password {

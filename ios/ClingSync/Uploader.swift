@@ -155,9 +155,18 @@ final class Uploader: ObservableObject {
         }
     }
 
+    private func repoFilePath(for file: MediaFile) -> String {
+        let prefix = configuration.repoPathPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if prefix.isEmpty {
+            return file.name
+        }
+        return "\(prefix)/\(file.name)"
+    }
+
     private func upload(_ file: MediaFile) async throws -> String? {
+        let repoPath = repoFilePath(for: file)
         if let localFileURL = file.localFileURL {
-            return try Bridge.uploadFile(filePath: localFileURL.path)
+            return try Bridge.uploadFile(localFilePath: localFileURL.path, repoFilePath: repoPath)
         }
 
         guard let resource = file.resource else {
@@ -186,6 +195,6 @@ final class Uploader: ObservableObject {
         defer {
             try? FileManager.default.removeItem(at: tempDirectory)
         }
-        return try Bridge.uploadFile(filePath: tempURL.path)
+        return try Bridge.uploadFile(localFilePath: tempURL.path, repoFilePath: repoPath)
     }
 }

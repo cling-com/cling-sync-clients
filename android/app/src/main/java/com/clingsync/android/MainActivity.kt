@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.util.Log
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,8 +29,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -42,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,22 +60,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.clingsync.android.ui.ScrollAwareTopBar
 import com.clingsync.android.ui.formatFileSize
 import com.clingsync.android.ui.theme.ClingSyncTheme
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 sealed class FileStatus {
     object Scanning : FileStatus()
@@ -98,14 +103,14 @@ sealed class FileStatus {
 
 data class UploadInfo(
     val currentFile: String? = null,
-    val fileSize: Long? = null,
     val currentIndex: Int = 0,
     val totalFiles: Int = 0,
 )
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private val goBridge = GoBridgeProvider.getInstance()
     private lateinit var settingsManager: SettingsManager
+    private lateinit var passphraseStore: PassphraseStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,14 +119,17 @@ class MainActivity : ComponentActivity() {
         setTheme(R.style.Theme_ClingSync)
 
         settingsManager = SettingsManager(this)
+        passphraseStore = PassphraseStore(this)
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
             ClingSyncTheme {
                 MainScreen(
+                    activity = this@MainActivity,
                     goBridge = goBridge,
                     settingsManager = settingsManager,
+                    passphraseStore = passphraseStore,
                     workManager = WorkManager.getInstance(this@MainActivity),
                 )
             }
@@ -173,6 +181,7 @@ fun EmptyFilesScreen() {
 @Composable
 fun FileListItem(
     file: File,
+    folder: String?,
     isSelected: Boolean,
     uploadStatus: FileStatus?,
     isUploading: Boolean,
@@ -259,6 +268,16 @@ fun FileListItem(
             Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
+                if (folder != null) {
+                    Text(
+                        text = folder,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Text(
                     text = file.name,
                     style = MaterialTheme.typography.bodyMedium,
@@ -277,38 +296,38 @@ fun FileListItem(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     uploadStatus?.let { status ->
-                        Text(
-                            text = " • ",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text =
-                                when (status) {
-                                    is FileStatus.Scanning -> "Scanning..."
-                                    is FileStatus.New -> "New"
-                                    is FileStatus.Exists -> ""
-                                    is FileStatus.Waiting -> "Waiting..."
-                                    is FileStatus.Uploading -> "Sending..."
-                                    is FileStatus.Uploaded -> "Processing..."
-                                    is FileStatus.Committing -> "Committing..."
-                                    is FileStatus.Done -> ""
-                                    is FileStatus.Aborted -> "Aborted"
-                                    is FileStatus.Failed -> "Failed: ${status.error}"
-                                },
-                            style = MaterialTheme.typography.bodySmall,
-                            color =
-                                when (status) {
-                                    is FileStatus.Failed -> MaterialTheme.colorScheme.error
-                                    is FileStatus.Exists -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    is FileStatus.New -> MaterialTheme.colorScheme.primary
-                                    is FileStatus.Done -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    else -> MaterialTheme.colorScheme.primary
-                                },
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
+                        val statusText =
+                            when (status) {
+                                is FileStatus.Scanning -> "Scanning..."
+                                is FileStatus.New -> "New"
+                                is FileStatus.Exists, is FileStatus.Done -> null
+                                is FileStatus.Waiting -> "Waiting..."
+                                is FileStatus.Uploading -> "Sending..."
+                                is FileStatus.Uploaded -> "Processing..."
+                                is FileStatus.Committing -> "Committing..."
+                                is FileStatus.Aborted -> "Aborted"
+                                is FileStatus.Failed -> "Failed: ${status.error}"
+                            }
+                        if (statusText != null) {
+                            Text(
+                                text = " • ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = statusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color =
+                                    when (status) {
+                                        is FileStatus.Failed -> MaterialTheme.colorScheme.error
+                                        is FileStatus.New -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.primary
+                                    },
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
@@ -322,8 +341,10 @@ fun FileList(
     selectedFiles: Set<File>,
     fileStatus: Map<String, FileStatus>,
     isUploading: Boolean,
+    sourceDir: File,
     onSelectionChange: (File, Boolean) -> Unit,
     lazyListState: LazyListState = rememberLazyListState(),
+    topPadding: Dp = 88.dp,
 ) {
     LazyColumn(
         state = lazyListState,
@@ -332,14 +353,16 @@ fun FileList(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(top = 88.dp, bottom = 16.dp),
+        contentPadding = PaddingValues(top = topPadding, bottom = 16.dp),
     ) {
-        items(files) { file ->
+        items(files, key = { it.absolutePath }) { file ->
             val isSelected = selectedFiles.contains(file)
+            val status = fileStatus[file.absolutePath]
             FileListItem(
                 file = file,
+                folder = getFileFolder(file, sourceDir),
                 isSelected = isSelected,
-                uploadStatus = fileStatus[file.name],
+                uploadStatus = status,
                 isUploading = isUploading,
                 onSelectionChange = { checked -> onSelectionChange(file, checked) },
             )
@@ -349,129 +372,232 @@ fun FileList(
 
 @Composable
 fun MainScreen(
+    activity: FragmentActivity,
     goBridge: IGoBridge,
     settingsManager: SettingsManager,
+    passphraseStore: PassphraseStore,
     workManager: WorkManager = WorkManager.getInstance(LocalContext.current),
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     var cameraFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var selectedFiles by remember { mutableStateOf<Set<File>>(emptySet()) }
-    var fileStatus by remember { mutableStateOf<Map<String, FileStatus>>(emptyMap()) }
+    var fileStatus by remember { mutableStateOf(mapOf<String, FileStatus>()) }
     var hasPermission by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(settingsManager.getSettings()) }
     var showSettingsDialog by remember { mutableStateOf(!settings.isValid()) }
     var currentErrorDialog by remember { mutableStateOf<ErrorDialogState?>(null) }
     var isLoadingFiles by remember { mutableStateOf(false) }
+    var showStoragePermissionDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var currentUploadInfo by remember { mutableStateOf<UploadInfo?>(null) }
     var isUploading by remember { mutableStateOf(false) }
     var isUploadInitiated by remember { mutableStateOf(false) }
+    var currentUploadId by remember { mutableStateOf<UUID?>(null) }
     val lazyListState = rememberLazyListState()
     var checkFilesJob by remember { mutableStateOf<Job?>(null) }
-    val fileChecker = remember { FileChecker() }
+    var scanProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val sha256Cache = remember { SHA256Cache.getInstance(context) }
+    val fileChecker = remember { FileChecker(sha256Cache, ioDispatcher) }
     var isConnecting by remember { mutableStateOf(false) }
     var isConnected by remember { mutableStateOf(false) }
     var actualUploadedBytes by remember { mutableStateOf(0L) }
+    // When non-null, the passphrase prompt dialog is shown. The callback receives the passphrase.
+    var passphraseCallback by remember { mutableStateOf<((PassphraseResult) -> Unit)?>(null) }
+    // Callbacks to invoke when connection succeeds.
+    val pendingOnConnected = remember { mutableListOf<() -> Unit>() }
 
-    // Track uploaded bytes
-    val uploadedSizeMB =
-        remember(actualUploadedBytes) {
-            actualUploadedBytes / (1024 * 1024)
-        }
-
-    // Function to check files that haven't been scanned
-    fun checkUnscannedFiles() {
-        if (!settings.isValid() || cameraFiles.isEmpty() || !isConnected) return
-
-        val filesToCheck =
-            cameraFiles.filter { file ->
-                val status = fileStatus[file.name]
-                // Check files that haven't been scanned or weren't successfully uploaded
-                status == null ||
-                    status is FileStatus.Scanning ||
-                    status is FileStatus.New ||
-                    status is FileStatus.Failed ||
-                    status is FileStatus.Aborted
+    // Opens the repository with the given passphrase.
+    fun openRepository(
+        passphrase: String,
+        saveToKeychain: Boolean,
+    ) {
+        isConnecting = true
+        coroutineScope.launch {
+            try {
+                withContext(ioDispatcher) {
+                    goBridge.openRepository(settings.hostUrl, passphrase)
+                }
+                isConnecting = false
+                isConnected = true
+                val runPending = {
+                    pendingOnConnected.forEach { it() }
+                    pendingOnConnected.clear()
+                }
+                if (saveToKeychain) {
+                    passphraseStore.save(activity, passphrase, settings.repositoryID()) {
+                        runPending()
+                    }
+                } else {
+                    runPending()
+                }
+            } catch (e: Exception) {
+                isConnecting = false
+                isConnected = false
+                pendingOnConnected.clear()
+                if (currentErrorDialog == null) {
+                    currentErrorDialog =
+                        ErrorDialogState(
+                            title = "Connection Error",
+                            message = "Failed to connect: ${e.message}",
+                        )
+                }
             }
-
-        if (filesToCheck.isEmpty()) return
-
-        Log.d("MainActivity", "Starting file check for ${filesToCheck.size} files")
-
-        // Cancel any existing check job first
-        checkFilesJob?.cancel()
-
-        // Set files to scanning status
-        filesToCheck.forEach { file ->
-            fileStatus = fileStatus + (file.name to FileStatus.Scanning)
         }
+    }
 
-        // Start a single file check coroutine
-        checkFilesJob =
-            coroutineScope.launch {
-                // First collect updates in a separate coroutine
-                val updateJob =
-                    launch {
-                        fileChecker.updates.collectLatest { update ->
-                            fileStatus = fileStatus + (update.fileName to update.status)
+    // Resolves the passphrase and opens the repository.
+    // If stored in keychain → biometric prompt. Otherwise → passphrase dialog.
+    fun openRepositoryIfNeeded(onConnected: () -> Unit = {}) {
+        if (isConnected) {
+            onConnected()
+            return
+        }
+        pendingOnConnected.add(onConnected)
+        if (isConnecting) return // Connection already in progress, callback queued.
+        if (passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
+            passphraseStore.load(
+                activity = activity,
+                repositoryID = settings.repositoryID(),
+                onSuccess = { passphrase -> openRepository(passphrase, saveToKeychain = false) },
+                onError = { error ->
+                    pendingOnConnected.clear()
+                    if (error.contains("re-enter", ignoreCase = true)) {
+                        passphraseCallback = { result ->
+                            openRepository(result.passphrase, result.saveToKeychain)
                         }
                     }
+                },
+            )
+        } else {
+            passphraseCallback = { result ->
+                openRepository(result.passphrase, result.saveToKeychain)
+            }
+        }
+    }
 
-                // Run the check
-                val result =
-                    fileChecker.checkFiles(
-                        filePaths = filesToCheck.map { it.absolutePath },
-                        hostUrl = settings.hostUrl,
-                        password = settings.password,
-                        repoPathPrefix = settings.repoPathPrefix,
-                    )
+    // Starts an upload, opening the repository first if needed.
+    fun startUpload(filesToUpload: List<File>) {
+        openRepositoryIfNeeded {
+            checkFilesJob?.cancel()
+            selectedFiles = emptySet()
 
-                // Cancel update collection
-                updateJob.cancel()
+            isUploadInitiated = true
+            scanProgress = null
+            currentUploadInfo = UploadInfo(currentFile = null, currentIndex = 0, totalFiles = filesToUpload.size)
 
-                // Handle result
-                result.fold(
-                    onSuccess = { checkResult ->
-                        // Apply final result
-                        checkResult.statuses.forEach { (fileName, status) ->
-                            fileStatus = fileStatus + (fileName to status)
-                        }
-                        Log.d("MainActivity", "File check completed: ${checkResult.processedCount}/${checkResult.totalFiles}")
-                    },
-                    onFailure = { error ->
-                        Log.e("MainActivity", "File check failed", error)
-                        // Only show error dialog if no other error is showing
-                        if (currentErrorDialog == null) {
-                            currentErrorDialog =
-                                ErrorDialogState(
-                                    title = "File Scanning Error",
-                                    message = "Some files could not be scanned: ${error.message}",
-                                )
-                        }
-                        // Reset scanning files to new
-                        filesToCheck.forEach { file ->
-                            if (fileStatus[file.name] is FileStatus.Scanning) {
-                                fileStatus = fileStatus + (file.name to FileStatus.New)
-                            }
-                        }
-                    },
+            fileStatus = fileStatus + filesToUpload.associate { it.absolutePath to FileStatus.Waiting as FileStatus }
+
+            currentUploadId =
+                UploadWorker.enqueueUpload(
+                    context = context,
+                    filePaths = filesToUpload.map { it.absolutePath },
+                    author = settings.author,
                 )
+        }
+    }
+
+    suspend fun runFileCheck(filesToCheck: List<File>) {
+        scanProgress = 0 to filesToCheck.size
+        fileStatus = fileStatus + filesToCheck.associate { it.absolutePath to FileStatus.Scanning as FileStatus }
+
+        val result =
+            fileChecker.checkFiles(
+                filePaths = filesToCheck.map { it.absolutePath },
+                onProgress = { update ->
+                    withContext(Dispatchers.Main) {
+                        if (update.statuses.isNotEmpty()) {
+                            fileStatus = fileStatus + update.statuses
+                        }
+                        scanProgress = update.processedCount to update.totalFiles
+                    }
+                },
+            )
+
+        result.fold(
+            onSuccess = { checkResult ->
+                fileStatus = fileStatus + checkResult.statuses
+            },
+            onFailure = { error ->
+                Log.e("MainActivity", "File check failed", error)
+                if (currentErrorDialog == null) {
+                    currentErrorDialog =
+                        ErrorDialogState(
+                            title = "File Scanning Error",
+                            message = "Some files could not be scanned: ${error.message}",
+                        )
+                }
+                filesToCheck.forEach { file ->
+                    if (fileStatus[file.absolutePath] is FileStatus.Scanning) {
+                        fileStatus = fileStatus + (file.absolutePath to FileStatus.New)
+                    }
+                }
+            },
+        )
+        scanProgress = null
+    }
+
+    fun checkUnscannedFiles() {
+        if (!settings.isValid() || cameraFiles.isEmpty() || !isConnected) return
+        if (checkFilesJob != null) return
+
+        val filesToCheck = cameraFiles.filter { fileStatus[it.absolutePath] == null }
+        if (filesToCheck.isEmpty()) return
+
+        checkFilesJob =
+            coroutineScope.launch {
+                runFileCheck(filesToCheck)
+                checkFilesJob = null
             }
     }
 
     // Function to load files.
-    fun loadFiles() {
-        coroutineScope.launch {
-            isLoadingFiles = true
-            cameraFiles = withContext(Dispatchers.IO) { getCameraFiles() }
-            isLoadingFiles = false
+    suspend fun loadAndScanFiles() {
+        isLoadingFiles = true
+        val sourceDir = getSourceDirectory(settings)
+        cameraFiles = withContext(ioDispatcher) { getSourceFiles(sourceDir, settings.mediaOnly) }
+        isLoadingFiles = false
 
-            // Only start checking files if we're connected
-            if (isConnected) {
-                checkUnscannedFiles()
+        if (cameraFiles.isEmpty() &&
+            sourceDir.exists() &&
+            !settings.mediaOnly &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !Environment.isExternalStorageManager()
+        ) {
+            showStoragePermissionDialog = true
+        }
+
+        if (isConnected) {
+            val filesToCheck = cameraFiles.filter { fileStatus[it.absolutePath] == null }
+            if (filesToCheck.isNotEmpty()) {
+                runFileCheck(filesToCheck)
             }
         }
     }
+
+    fun loadFiles() {
+        coroutineScope.launch { loadAndScanFiles() }
+    }
+
+    var directoryPickerCallback by remember { mutableStateOf<((String) -> Unit)?>(null) }
+    val directoryPickerLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocumentTree(),
+        ) { uri ->
+            if (uri != null) {
+                if (uri.authority == "com.android.externalstorage.documents") {
+                    val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+                    val parts = docId.split(":")
+                    if (parts.size == 2 && parts[0] == "primary") {
+                        val path = "${Environment.getExternalStorageDirectory().path}/${parts[1]}"
+                        directoryPickerCallback?.invoke(path)
+                    }
+                }
+            }
+            directoryPickerCallback = null
+        }
 
     val permissionLauncher =
         rememberLauncherForActivityResult(
@@ -486,19 +612,34 @@ fun MainScreen(
     // Upload work observer effect.
     val uploadWorkInfos by workManager.getWorkInfosForUniqueWorkLiveData(UploadWorker.WORK_NAME).observeAsState()
 
-    LaunchedEffect(uploadWorkInfos) {
+    LaunchedEffect(uploadWorkInfos, currentUploadId) {
+        // 1. Try to find the exact work info if we have an ID.
+        // 2. Otherwise, find any active work (e.g. app restart).
+        // 3. Fallback to the latest terminal work info if we were already uploading.
         val workInfo =
-            uploadWorkInfos?.lastOrNull {
-                it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED
-            } ?: uploadWorkInfos?.lastOrNull()
+            uploadWorkInfos?.find { it.id == currentUploadId }
+                ?: uploadWorkInfos?.lastOrNull {
+                    it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED
+                } ?: if (isUploading || isUploadInitiated) uploadWorkInfos?.lastOrNull() else null
 
         workInfo?.let { info ->
-            // Only process recent work (ignore old failed work from previous sessions).
-            if (info.state == WorkInfo.State.FAILED && !isUploading) {
-                // Skip showing old errors on app start.
-                return@let
+            // Update current upload ID if we found an active job but didn't have the ID yet.
+            if (currentUploadId == null && (info.state == WorkInfo.State.RUNNING || info.state == WorkInfo.State.ENQUEUED)) {
+                currentUploadId = info.id
             }
+
+            // Only process terminal work info if it belongs to our current upload.
+            val isStaleTerminalState =
+                (info.state == WorkInfo.State.SUCCEEDED || info.state == WorkInfo.State.FAILED || info.state == WorkInfo.State.CANCELLED) &&
+                    info.id != currentUploadId &&
+                    !isUploading
+
+            if (isStaleTerminalState) return@let
+
             when (info.state) {
+                WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
+                    // Just wait, don't reset isUploadInitiated
+                }
                 WorkInfo.State.RUNNING -> {
                     isUploading = true
 
@@ -509,7 +650,7 @@ fun MainScreen(
 
                     if (statusFilePath != null) {
                         // Process status update in background
-                        coroutineScope.launch(Dispatchers.IO) {
+                        coroutineScope.launch(ioDispatcher) {
                             try {
                                 val statusFile = File(statusFilePath)
                                 if (statusFile.exists()) {
@@ -531,43 +672,39 @@ fun MainScreen(
                                     }
 
                                     withContext(Dispatchers.Main) {
-                                        // Update UI state on main thread
-                                        fileStatus = newFileStatus
+                                        // Merge worker statuses into existing map (preserve non-upload file statuses).
+                                        fileStatus = fileStatus + newFileStatus
 
                                         // Find current uploading file
-                                        val uploadingFiles = fileStatus.filter { it.value is FileStatus.Uploading }
-                                        val currentFileName = uploadingFiles.keys.firstOrNull()
+                                        val uploadingPath = newFileStatus.entries.firstOrNull { it.value is FileStatus.Uploading }?.key
+                                        val currentFileName = uploadingPath?.let { File(it).name }
 
-                                        // Count completed files
+                                        // Count completed files in this upload
                                         val completedFiles =
-                                            fileStatus.count {
+                                            newFileStatus.count {
                                                 it.value is FileStatus.Uploaded ||
                                                     it.value is FileStatus.Exists ||
                                                     it.value is FileStatus.Committing
                                             }
-                                        val totalFiles = fileStatus.size
+                                        val totalFiles = newFileStatus.size
 
                                         // Update upload info
                                         currentUploadInfo =
-                                            if (fileStatus.any { it.value is FileStatus.Committing }) {
+                                            if (newFileStatus.any { it.value is FileStatus.Committing }) {
                                                 UploadInfo(
                                                     currentFile = "Committing changes...",
-                                                    fileSize = null,
                                                     currentIndex = completedFiles,
                                                     totalFiles = totalFiles,
                                                 )
                                             } else if (currentFileName != null) {
-                                                val file = cameraFiles.find { it.name == currentFileName }
                                                 UploadInfo(
                                                     currentFile = currentFileName,
-                                                    fileSize = file?.length()?.div(1024),
                                                     currentIndex = completedFiles,
                                                     totalFiles = totalFiles,
                                                 )
                                             } else {
                                                 UploadInfo(
                                                     currentFile = null,
-                                                    fileSize = null,
                                                     currentIndex = completedFiles,
                                                     totalFiles = totalFiles,
                                                 )
@@ -587,6 +724,7 @@ fun MainScreen(
                 WorkInfo.State.SUCCEEDED -> {
                     isUploading = false
                     isUploadInitiated = false
+                    currentUploadId = null
                     currentUploadInfo = null
                     actualUploadedBytes = 0L
 
@@ -599,11 +737,17 @@ fun MainScreen(
                                 val resultJson = JSONObject(resultFile.readText())
                                 resultFile.delete() // Clean up the file
 
-                                // Mark all files from result as Done
+                                // Mark all files from result with their final status.
                                 resultJson.keys().forEach { fileName ->
                                     val statusValue = resultJson.getString(fileName)
-                                    if (statusValue == "committing") {
-                                        fileStatus = fileStatus + (fileName to FileStatus.Done)
+                                    val finalStatus =
+                                        when (statusValue) {
+                                            "committing", "uploaded" -> FileStatus.Done
+                                            "skipped" -> FileStatus.Exists("")
+                                            else -> null
+                                        }
+                                    if (finalStatus != null) {
+                                        fileStatus = fileStatus + (fileName to finalStatus)
                                     }
                                 }
 
@@ -629,6 +773,7 @@ fun MainScreen(
                 WorkInfo.State.CANCELLED -> {
                     isUploading = false
                     isUploadInitiated = false
+                    currentUploadId = null
                     currentUploadInfo = null
                     actualUploadedBytes = 0L
                     fileStatus.forEach { (fileName, status) ->
@@ -640,6 +785,7 @@ fun MainScreen(
                 WorkInfo.State.FAILED -> {
                     isUploading = false
                     isUploadInitiated = false
+                    currentUploadId = null
                     currentUploadInfo = null
                     actualUploadedBytes = 0L
                     val fullErrorMsg = info.outputData.getString("error") ?: "Upload failed"
@@ -662,48 +808,31 @@ fun MainScreen(
                 else -> {
                     isUploading = false
                     isUploadInitiated = false
+                    currentUploadId = null
                     currentUploadInfo = null
                 }
-            }
-
-            // After upload is done (succeeded, failed, or cancelled), check files still in Scanning status
-            if ((
-                    info.state == WorkInfo.State.SUCCEEDED ||
-                        info.state == WorkInfo.State.FAILED ||
-                        info.state == WorkInfo.State.CANCELLED
-                ) &&
-                settings.isValid() && cameraFiles.isNotEmpty()
-            ) {
-                // Check files that are still in Scanning status
-                checkUnscannedFiles()
             }
         }
     }
 
     LaunchedEffect(Unit) {
         if (settings.isValid()) {
-            withContext(Dispatchers.IO) {
-                try {
-                    goBridge.openRepository(settings.hostUrl, settings.password, settings.repoPathPrefix)
-                    Log.d("ClingSync", "Connected to repository")
-                    withContext(Dispatchers.Main) {
-                        isConnected = true
-                    }
-                } catch (e: Exception) {
-                    Log.e("ClingSync", "Failed to open repository", e)
-                    withContext(Dispatchers.Main) {
-                        isConnected = false
-                        // Only show error dialog if no other error is showing
-                        if (currentErrorDialog == null) {
-                            currentErrorDialog =
-                                ErrorDialogState(
-                                    title = "Connection Error",
-                                    message = "Failed to connect to repository: ${e.message}",
-                                )
-                        }
+            // Check if repo is already open (e.g. coming back to the app).
+            val alreadyOpen =
+                withContext(ioDispatcher) {
+                    try {
+                        goBridge.checkRepositoryOpen(settings.hostUrl)
+                    } catch (e: Exception) {
+                        false
                     }
                 }
+            if (alreadyOpen) {
+                isConnected = true
+            } else if (passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
+                // Passphrase stored — try biometric silently.
+                openRepositoryIfNeeded()
             }
+            // Otherwise: stay disconnected, show "Connect" banner.
         }
 
         val permissions =
@@ -719,18 +848,15 @@ fun MainScreen(
             }
 
         if (hasPermission && cameraFiles.isEmpty()) {
-            loadFiles()
+            loadAndScanFiles()
         } else if (!hasPermission) {
             permissionLauncher.launch(permissions)
         }
     }
 
-    // Watch for connection status changes
-    LaunchedEffect(isConnected) {
-        if (isConnected && cameraFiles.isNotEmpty()) {
-            // When we become connected, check any unscanned files
-            checkUnscannedFiles()
-        }
+    // When we become connected and files are loaded, scan them.
+    LaunchedEffect(isConnected, cameraFiles) {
+        checkUnscannedFiles()
     }
 
     Scaffold(
@@ -757,31 +883,34 @@ fun MainScreen(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
 
-                        Row {
-                            IconButton(onClick = { loadFiles() }) {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(24.dp),
-                                )
+                        val topBarDisabled = isUploading || isUploadInitiated
+                        val iconTint =
+                            if (topBarDisabled) {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             }
 
+                        Row {
                             IconButton(
-                                onClick = { showSettingsDialog = true },
-                                enabled = !(isUploading || isUploadInitiated),
+                                onClick = {
+                                    showSearch = !showSearch
+                                    if (!showSearch) searchQuery = "" else selectedFiles = emptySet()
+                                },
+                                enabled = !topBarDisabled,
                             ) {
                                 Icon(
-                                    Icons.Default.Settings,
-                                    contentDescription = "Settings",
-                                    tint =
-                                        if (isUploading || isUploadInitiated) {
-                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                    modifier = Modifier.size(24.dp),
+                                    if (showSearch) Icons.Default.Close else Icons.Default.Search,
+                                    if (showSearch) "Close search" else "Search",
+                                    Modifier.size(24.dp),
+                                    iconTint,
                                 )
+                            }
+                            IconButton(onClick = { loadFiles() }, enabled = !topBarDisabled) {
+                                Icon(Icons.Default.Refresh, "Refresh", Modifier.size(24.dp), iconTint)
+                            }
+                            IconButton(onClick = { showSettingsDialog = true }, enabled = !topBarDisabled) {
+                                Icon(Icons.Default.Settings, "Settings", Modifier.size(24.dp), iconTint)
                             }
                         }
                     }
@@ -830,31 +959,115 @@ fun MainScreen(
                 return@Column
             }
 
-            // Calculate selectable files and select all state.
-            val selectableFiles =
-                remember(cameraFiles, fileStatus) {
-                    cameraFiles.filter { file ->
-                        val status = fileStatus[file.name]
-                        status is FileStatus.New ||
-                            status is FileStatus.Failed ||
-                            status is FileStatus.Aborted ||
-                            status == null
+            // Search bar.
+            if (showSearch) {
+                androidx.compose.material3.TextField(
+                    value = searchQuery,
+                    onValueChange = {
+                        searchQuery = it
+                        selectedFiles = emptySet()
+                    },
+                    placeholder = { Text("Filter files...") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, "Search", Modifier.size(20.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, "Clear", Modifier.size(20.dp))
+                            }
+                        }
+                    },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            // Filter files by search query.
+            val displayedFiles =
+                remember(cameraFiles, searchQuery, settings) {
+                    if (searchQuery.isBlank()) {
+                        cameraFiles
+                    } else {
+                        val query = searchQuery.lowercase()
+                        val srcDir = getSourceDirectory(settings)
+                        cameraFiles.filter { file ->
+                            val folder = getFileFolder(file, srcDir)
+                            val displayName =
+                                if (folder != null) "$folder/${file.name}" else file.name
+                            displayName.lowercase().contains(query)
+                        }
                     }
                 }
 
-            val selectAllChecked =
-                remember(selectableFiles, selectedFiles) {
-                    selectableFiles.isNotEmpty() && selectedFiles.containsAll(selectableFiles)
+            // Scanning progress banner (hidden during upload).
+            if (!isUploading && !isUploadInitiated) {
+                scanProgress?.let { (scanned, total) ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Scanning $scanned/$total files",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
                 }
+            }
+
+            // "Repository access needed" banner when not connected.
+            if (!isConnected && !isConnecting && !isUploading && settings.isValid()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "Repository access needed",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        )
+                        Button(onClick = { openRepositoryIfNeeded() }) {
+                            Text("Connect")
+                        }
+                    }
+                }
+            }
 
             // Main content with unified top bar.
             Box(modifier = Modifier.weight(1f)) {
+                val sourceDir = getSourceDirectory(settings)
+
                 FileList(
-                    files = cameraFiles,
+                    files = displayedFiles,
                     selectedFiles = selectedFiles,
                     fileStatus = fileStatus,
-                    isUploading = isUploading,
+                    isUploading = isUploading || !isConnected,
+                    sourceDir = sourceDir,
                     lazyListState = lazyListState,
+                    topPadding = if (isConnected) 88.dp else 8.dp,
                     onSelectionChange = { file, checked ->
                         selectedFiles =
                             if (checked) {
@@ -865,106 +1078,27 @@ fun MainScreen(
                     },
                 )
 
-                // Unified top bar with scroll behavior.
-                ScrollAwareTopBar(
-                    lazyListState = lazyListState,
-                    selectedFiles = selectedFiles,
-                    isUploading = isUploading || isUploadInitiated,
-                    uploadInfo = currentUploadInfo,
-                    selectAllChecked = selectAllChecked,
-                    onSelectAllChange = { checked ->
-                        selectedFiles =
-                            if (checked) {
-                                selectableFiles.toSet()
-                            } else {
-                                emptySet()
-                            }
-                    },
-                    onUploadClick = {
-                        // Cancel any file checking in progress
-                        checkFilesJob?.cancel()
-
-                        // Preserve the order from cameraFiles (newest first)
-                        val filePaths = cameraFiles.filter { it in selectedFiles }.map { it.absolutePath }
-                        Log.d("ClingSync", "Scheduling upload for files: $filePaths")
-
-                        // Immediately switch to upload mode
-                        isUploadInitiated = true
-                        currentUploadInfo =
-                            UploadInfo(
-                                // Will show "Preparing..."
-                                currentFile = null,
-                                fileSize = null,
-                                currentIndex = 0,
-                                totalFiles = selectedFiles.size,
-                            )
-
-                        selectedFiles.forEach { file ->
-                            fileStatus = fileStatus + (file.name to FileStatus.Waiting)
-                        }
-
-                        UploadWorker.enqueueUpload(
-                            context = context,
-                            filePaths = filePaths,
-                            repoPathPrefix = settings.repoPathPrefix,
-                            author = settings.author,
-                            message =
-                                "Backup ${selectedFiles.size} file${if (selectedFiles.size == 1) "" else "s"}" +
-                                    " from ${Build.MANUFACTURER} ${Build.MODEL}",
-                            hostUrl = settings.hostUrl,
-                            password = settings.password,
-                        )
-                    },
-                    onUploadAllClick = {
-                        // Cancel any file checking in progress
-                        checkFilesJob?.cancel()
-
-                        // Upload all camera files
-                        val allFiles = cameraFiles
-                        Log.d(
-                            "ClingSync",
-                            "Upload All clicked - ${allFiles.size} files, " +
-                                "isUploadInitiated=$isUploadInitiated, isUploading=$isUploading",
-                        )
-
-                        // Clear any selected files to ensure clean state
-                        selectedFiles = emptySet()
-
-                        // Immediately switch to upload mode
-                        isUploadInitiated = true
-                        currentUploadInfo =
-                            UploadInfo(
-                                currentFile = null,
-                                fileSize = null,
-                                currentIndex = 0,
-                                totalFiles = allFiles.size,
-                            )
-
-                        // Mark all files as waiting
-                        allFiles.forEach { file ->
-                            fileStatus = fileStatus + (file.name to FileStatus.Waiting)
-                        }
-
-                        UploadWorker.enqueueUpload(
-                            context = context,
-                            // allFiles is already in correct order
-                            filePaths = allFiles.map { it.absolutePath },
-                            repoPathPrefix = settings.repoPathPrefix,
-                            author = settings.author,
-                            message =
-                                "Backup ${allFiles.size} file${if (allFiles.size == 1) "" else "s"}" +
-                                    " from ${Build.MANUFACTURER} ${Build.MODEL}",
-                            hostUrl = settings.hostUrl,
-                            password = settings.password,
-                        )
-                    },
-                    onAbortClick = {
-                        workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
-                        isUploadInitiated = false
-                    },
-                    isSelectAllEnabled = !(isUploading || isUploadInitiated),
-                    uploadedSizeMB = uploadedSizeMB,
-                )
+                // Hide top bar when not connected (banner is shown instead).
+                if (isConnected) {
+                    ScrollAwareTopBar(
+                        lazyListState = lazyListState,
+                        selectedFiles = selectedFiles,
+                        isUploading = isUploading || isUploadInitiated,
+                        isScanning = checkFilesJob != null,
+                        uploadInfo = currentUploadInfo,
+                        onUploadClick = {
+                            startUpload(displayedFiles.filter { it in selectedFiles })
+                        },
+                        onUploadAllClick = {
+                            startUpload(displayedFiles)
+                        },
+                        onAbortClick = {
+                            workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
+                            isUploadInitiated = false
+                        },
+                        uploadedBytes = actualUploadedBytes,
+                    )
+                }
             }
         }
 
@@ -973,51 +1107,37 @@ fun MainScreen(
             SettingsDialog(
                 settings = settings,
                 onSave = { newSettings ->
-                    isConnecting = true
+                    val oldRepositoryID = settings.repositoryID()
+                    val repositoryChanged = oldRepositoryID != newSettings.repositoryID()
+                    val sourceChanged =
+                        settings.sourceDirectory != newSettings.sourceDirectory ||
+                            settings.mediaOnly != newSettings.mediaOnly
 
-                    coroutineScope.launch {
-                        // Dismiss dialog and save settings immediately
-                        showSettingsDialog = false
+                    settings = newSettings
+                    settingsManager.saveSettings(newSettings)
+                    showSettingsDialog = false
 
-                        // Check if host URL changed
-                        val hostUrlChanged = settings.hostUrl != newSettings.hostUrl
-
-                        // Always save settings
-                        settings = newSettings
-                        settingsManager.saveSettings(newSettings)
-
-                        if (hostUrlChanged) {
-                            // Clear all file statuses when host URL changes
-                            fileStatus = emptyMap()
-                            Log.d("MainActivity", "Host URL changed, clearing file statuses")
-                        }
-
-                        try {
-                            withContext(Dispatchers.IO) {
-                                goBridge.openRepository(newSettings.hostUrl, newSettings.password, newSettings.repoPathPrefix)
-                            }
-
-                            isConnecting = false
-                            isConnected = true
-                            Log.d("ClingSync", "Connected to repository via settings")
-
-                            // File checking will be triggered by the LaunchedEffect watching isConnected
-                        } catch (e: Exception) {
-                            Log.e("ClingSync", "Failed to open repository with new settings", e)
-                            isConnecting = false
-                            isConnected = false
-                            // Reopen settings dialog on connection failure
-                            showSettingsDialog = true
-                            // Only show error dialog if no other error is showing
-                            if (currentErrorDialog == null) {
-                                currentErrorDialog =
-                                    ErrorDialogState(
-                                        title = "Connection Error",
-                                        message = "Failed to connect to repository: ${e.message}",
-                                    )
-                            }
-                        }
+                    if (repositoryChanged) {
+                        passphraseStore.delete(oldRepositoryID)
+                        fileStatus = emptyMap()
+                        isConnected = false
+                        selectedFiles = emptySet()
+                        loadFiles()
+                    } else if (sourceChanged) {
+                        fileStatus = emptyMap()
+                        selectedFiles = emptySet()
+                        loadFiles()
                     }
+                },
+                onTestConnection = { testSettings ->
+                    // Just update the settings in memory for the test, don't save to Disk yet.
+                    // This allows the openRepository logic to use the new hostUrl.
+                    settings = testSettings
+                    openRepositoryIfNeeded()
+                },
+                onBrowseDirectory = { onResult ->
+                    directoryPickerCallback = onResult
+                    directoryPickerLauncher.launch(null)
                 },
                 onDismiss =
                     if (settings.isValid()) {
@@ -1035,6 +1155,57 @@ fun MainScreen(
                 currentErrorDialog = null
             },
         )
+
+        // Storage permission dialog.
+        if (showStoragePermissionDialog) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showStoragePermissionDialog = false },
+                title = { Text("Storage Permission Required") },
+                text = {
+                    Text(
+                        "To access all file types, enable \"All files access\" for Cling Sync.",
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showStoragePermissionDialog = false
+                        try {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    android.net.Uri.parse("package:${context.packageName}"),
+                                ),
+                            )
+                        } catch (_: Exception) {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
+                                ),
+                            )
+                        }
+                    }) {
+                        Text("Open Settings")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showStoragePermissionDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+            )
+        }
+
+        // Passphrase prompt dialog.
+        passphraseCallback?.let { callback ->
+            PassphrasePromptDialog(
+                showKeychainOption = passphraseStore.canUseBiometric(),
+                onConfirm = { result ->
+                    passphraseCallback = null
+                    callback(result)
+                },
+                onDismiss = { passphraseCallback = null },
+            )
+        }
 
         // Connecting overlay
         if (isConnecting) {
@@ -1069,29 +1240,51 @@ fun MainScreen(
     }
 }
 
-fun getCameraFiles(): List<File> {
-    val cameraDir =
-        File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
-            "Camera",
-        )
+fun getSourceDirectory(settings: AppSettings): File = File(settings.sourceDirectory)
 
-    return if (cameraDir.exists() && cameraDir.isDirectory) {
-        cameraDir.listFiles()?.filter { file ->
-            file.isFile && !file.name.startsWith(".") && file.canRead()
-        }?.sortedByDescending { it.lastModified() } ?: emptyList()
-    } else {
-        emptyList()
+private val MEDIA_EXTENSIONS =
+    setOf(
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "heif", "heic",
+        "mp4", "mkv", "avi", "mov", "3gp", "webm",
+        "mp3", "m4a", "ogg", "wav", "flac", "aac",
+    )
+
+fun getSourceFiles(
+    sourceDir: File,
+    mediaOnly: Boolean = true,
+): List<File> {
+    if (!sourceDir.isDirectory) return emptyList()
+
+    val files = mutableListOf<File>()
+
+    fun walk(dir: File) {
+        val entries = dir.list() ?: return
+        for (name in entries) {
+            if (name.startsWith(".")) continue
+            val file = File(dir, name)
+            if (file.isDirectory) {
+                walk(file)
+            } else if (!mediaOnly || name.substringAfterLast('.', "").lowercase() in MEDIA_EXTENSIONS) {
+                files.add(file)
+            }
+        }
     }
+    walk(sourceDir)
+
+    // Read lastModified once per file for sorting (avoids repeated syscalls during sort).
+    return files
+        .map { it to it.lastModified() }
+        .sortedByDescending { it.second }
+        .map { it.first }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    ClingSyncTheme {
-        MainScreen(
-            goBridge = GoBridgeProvider.getInstance(),
-            settingsManager = SettingsManager(androidx.compose.ui.platform.LocalContext.current),
-        )
-    }
+fun getFileFolder(
+    file: File,
+    sourceDir: File,
+): String? {
+    if (!file.absolutePath.startsWith(sourceDir.absolutePath)) return null
+    val relative = file.relativeTo(sourceDir).path
+    val parts = relative.split(File.separator)
+    val folder = parts.dropLast(1).joinToString(File.separator.toString())
+    return folder.ifEmpty { null }
 }

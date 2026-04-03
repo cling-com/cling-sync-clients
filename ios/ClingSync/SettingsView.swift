@@ -193,8 +193,7 @@ struct SettingsView: View {
         try await Task.detached(priority: .userInitiated) {
             _ = try Bridge.openRepository(
                 url: currentConfiguration.hostURL,
-                password: resolved.passphrase,
-                repoPathPrefix: currentConfiguration.repoPathPrefix
+                password: resolved.passphrase
             )
         }.value
 

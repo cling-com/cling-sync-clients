@@ -55,7 +55,7 @@ type mergeWorkspaceState struct {
 	detailedOutput  string
 }
 
-//nolint:gochecknoglobals
+//nolint:gochecknoglobals,exhaustruct
 var mergeWorkspaceStateStore = struct {
 	mu     sync.Mutex
 	states map[string]*mergeWorkspaceState
@@ -166,6 +166,13 @@ func SaveWorkspacePassphrase(localPath, password string) error {
 	return nil
 }
 
+func ClearWorkspacePassphrase(hostURL string) error {
+	if err := keychain.DeleteKeychainEntry(context.Background(), keychainService, hostURL); err != nil {
+		return lib.WrapErrorf(err, "failed to delete keychain entry")
+	}
+	return nil
+}
+
 func TestWorkspaceAccess(localPath, password string) error {
 	ws, err := openWorkspace(localPath)
 	if err != nil {
@@ -187,8 +194,14 @@ func MergeWorkspace(localPath, password, author, message string) (string, bool, 
 		return "", false, err
 	}
 	opts := &workspace.MergeOptions{
-		StagingMonitor:         workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
-		CpMonitor:              workspace.NewDefaultCpMonitor(workspace.DefaultMonitorModeSilent, nil, nil, workspace.CpOnExistsOverwrite, false),
+		StagingMonitor: workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
+		CpMonitor: workspace.NewDefaultCpMonitor(
+			workspace.DefaultMonitorModeSilent,
+			nil,
+			nil,
+			workspace.CpOnExistsOverwrite,
+			false,
+		),
 		CommitMonitor:          workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
 		Author:                 author,
 		Message:                message,
@@ -221,7 +234,7 @@ func StartMergeWorkspace(localPath, password, author, message string, storePassw
 		mergeWorkspaceStateStore.mu.Unlock()
 		return ErrMergeAlreadyRunning
 	}
-	state := &mergeWorkspaceState{status: MergeWorkspaceStatus{
+	state := &mergeWorkspaceState{status: MergeWorkspaceStatus{ //nolint:exhaustruct
 		Running:       true,
 		CanCancel:     true,
 		StatusMessage: "Preparing merge...",
@@ -253,7 +266,7 @@ func CancelMergeWorkspace(localPath string) error {
 		return ErrMergeNotRunning
 	}
 	state.requestCancel()
-	state.setStatus(MergeWorkspaceStatus{
+	state.setStatus(MergeWorkspaceStatus{ //nolint:exhaustruct
 		Running:       true,
 		CanCancel:     false,
 		StatusMessage: "Cancelling merge...",
@@ -281,7 +294,7 @@ func prepareMergeWorkspaceAccess(localPath, password string, storePassword bool)
 
 func runMergeWorkspace(localPath, password, author, message string, state *mergeWorkspaceState) {
 	revisionID, upToDate, err := mergeWorkspaceAsync(localPath, password, author, message, state)
-	status := MergeWorkspaceStatus{Completed: true, UpToDate: upToDate, RevisionID: revisionID}
+	status := MergeWorkspaceStatus{Completed: true, UpToDate: upToDate, RevisionID: revisionID} //nolint:exhaustruct
 	switch {
 	case errors.Is(err, lib.ErrCancel):
 		status.Cancelled = true
@@ -297,7 +310,7 @@ func runMergeWorkspace(localPath, password, author, message string, state *merge
 	state.setStatus(status)
 }
 
-func mergeWorkspaceAsync(
+func mergeWorkspaceAsync( //nolint:funlen
 	localPath, password, author, message string,
 	state *mergeWorkspaceState,
 ) (_ string, _ bool, err error) {
@@ -372,6 +385,7 @@ type asyncStagingMonitor struct {
 	verbose  *workspace.DefaultStagingMonitor
 }
 
+//nolint:wrapcheck // Monitor delegates forward errors from the inner monitors.
 func (m *asyncStagingMonitor) OnStart(path lib.Path, dirEntry fs.DirEntry) error {
 	if err := m.verbose.OnStart(path, dirEntry); err != nil {
 		return err
@@ -379,6 +393,7 @@ func (m *asyncStagingMonitor) OnStart(path lib.Path, dirEntry fs.DirEntry) error
 	return m.progress.OnStart(path, dirEntry)
 }
 
+//nolint:wrapcheck
 func (m *asyncStagingMonitor) OnEnd(path lib.Path, excluded bool, metadata *lib.FileMetadata) error {
 	if err := m.verbose.OnEnd(path, excluded, metadata); err != nil {
 		return err
@@ -391,6 +406,7 @@ type asyncCpMonitor struct {
 	verbose  *workspace.DefaultCpMonitor
 }
 
+//nolint:wrapcheck // Monitor delegates forward errors from the inner monitors.
 func (m *asyncCpMonitor) OnStart(entry *lib.RevisionEntry, targetPath string) error {
 	if err := m.verbose.OnStart(entry, targetPath); err != nil {
 		return err
@@ -403,6 +419,7 @@ func (m *asyncCpMonitor) OnExists(entry *lib.RevisionEntry, targetPath string) w
 	return m.progress.OnExists(entry, targetPath)
 }
 
+//nolint:wrapcheck
 func (m *asyncCpMonitor) OnWrite(entry *lib.RevisionEntry, targetPath string, blockID lib.BlockId, data []byte) error {
 	if err := m.verbose.OnWrite(entry, targetPath, blockID, data); err != nil {
 		return err
@@ -410,6 +427,7 @@ func (m *asyncCpMonitor) OnWrite(entry *lib.RevisionEntry, targetPath string, bl
 	return m.progress.OnWrite(entry, targetPath, blockID, data)
 }
 
+//nolint:wrapcheck
 func (m *asyncCpMonitor) OnEnd(entry *lib.RevisionEntry, targetPath string) error {
 	if err := m.verbose.OnEnd(entry, targetPath); err != nil {
 		return err
@@ -427,6 +445,7 @@ type asyncCommitMonitor struct {
 	verbose  *workspace.DefaultCommitMonitor
 }
 
+//nolint:wrapcheck
 func (m *asyncCommitMonitor) OnBeforeCommit() error {
 	if err := m.verbose.OnBeforeCommit(); err != nil {
 		return err
@@ -434,6 +453,7 @@ func (m *asyncCommitMonitor) OnBeforeCommit() error {
 	return m.progress.OnBeforeCommit()
 }
 
+//nolint:wrapcheck
 func (m *asyncCommitMonitor) OnStart(entry *lib.RevisionEntry) error {
 	if err := m.verbose.OnStart(entry); err != nil {
 		return err
@@ -441,6 +461,7 @@ func (m *asyncCommitMonitor) OnStart(entry *lib.RevisionEntry) error {
 	return m.progress.OnStart(entry)
 }
 
+//nolint:wrapcheck
 func (m *asyncCommitMonitor) OnAddBlock(
 	entry *lib.RevisionEntry,
 	header *lib.BlockHeader,
@@ -453,6 +474,7 @@ func (m *asyncCommitMonitor) OnAddBlock(
 	return m.progress.OnAddBlock(entry, header, existed, dataSize)
 }
 
+//nolint:wrapcheck
 func (m *asyncCommitMonitor) OnEnd(entry *lib.RevisionEntry) error {
 	if err := m.verbose.OnEnd(entry); err != nil {
 		return err

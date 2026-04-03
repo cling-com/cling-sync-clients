@@ -21,14 +21,12 @@ fun ScrollAwareTopBar(
     lazyListState: LazyListState,
     selectedFiles: Set<File>,
     isUploading: Boolean,
+    isScanning: Boolean,
     uploadInfo: UploadInfo?,
-    selectAllChecked: Boolean,
-    onSelectAllChange: (Boolean) -> Unit,
     onUploadClick: () -> Unit,
     onUploadAllClick: () -> Unit,
     onAbortClick: () -> Unit,
-    isSelectAllEnabled: Boolean = true,
-    uploadedSizeMB: Long = 0L,
+    uploadedBytes: Long = 0L,
 ) {
     // Derive scroll state.
     val firstVisibleIndex by remember { derivedStateOf { lazyListState.firstVisibleItemIndex } }
@@ -74,14 +72,12 @@ fun ScrollAwareTopBar(
         TopBar(
             selectedFiles = selectedFiles,
             isUploading = isUploading,
+            isScanning = isScanning,
             uploadInfo = uploadInfo,
-            selectAllChecked = selectAllChecked,
-            onSelectAllChange = onSelectAllChange,
             onUploadClick = onUploadClick,
             onUploadAllClick = onUploadAllClick,
             onAbortClick = onAbortClick,
-            isSelectAllEnabled = isSelectAllEnabled,
-            uploadedSizeMB = uploadedSizeMB,
+            uploadedBytes = uploadedBytes,
         )
     }
 }

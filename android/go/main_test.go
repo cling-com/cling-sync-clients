@@ -33,17 +33,35 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		server.Close() //nolint:errcheck,gosec
 	})
 
-	// Push test files to emulator's public DCIM/Camera directory.
 	t.Log("Pushing test files to emulator")
 	adb := "../tools/android-sdk/platform-tools/adb"
-	for _, f := range []struct{ name, content string }{
-		{"blue_sky.jpg", "Blue sky"},
-		{"red_earth.jpg", "Red earth"},
-		{"green_grass.jpg", "Green grass"},
+
+	// Create test directories.
+	for _, dir := range []string{
+		"/sdcard/DCIM/Camera/vacation",
+		"/sdcard/ClingSyncTest/docs",
+	} {
+		out, err := exec.CommandContext(t.Context(), adb, "shell", "mkdir", "-p", dir).
+			CombinedOutput()
+		assert.NoError(err, string(out))
+	}
+
+	// Push test files: media files to DCIM/Camera, mixed files to ClingSyncTest.
+	for _, f := range []struct{ name, path, content string }{
+		// DCIM/Camera files (used by testBackupFiles).
+		{"blue_sky.jpg", "/sdcard/DCIM/Camera/blue_sky.jpg", "Blue sky"},
+		{"red_earth.jpg", "/sdcard/DCIM/Camera/red_earth.jpg", "Red earth"},
+		{"green_grass.jpg", "/sdcard/DCIM/Camera/green_grass.jpg", "Green grass"},
+		{"sunset.jpg", "/sdcard/DCIM/Camera/vacation/sunset.jpg", "Sunset"},
+		// ClingSyncTest files (used by testCustomFolder).
+		{"photo.jpg", "/sdcard/ClingSyncTest/photo.jpg", "Test photo"},
+		{"video.mp4", "/sdcard/ClingSyncTest/video.mp4", "Test video"},
+		{"notes.txt", "/sdcard/ClingSyncTest/notes.txt", "Test notes"},
+		{"report.pdf", "/sdcard/ClingSyncTest/docs/report.pdf", "Test report"},
 	} {
 		tmpFile := t.TempDir() + "/" + f.name
 		assert.NoError(os.WriteFile(tmpFile, []byte(f.content), 0o644)) //nolint:gosec
-		out, err := exec.CommandContext(t.Context(), adb, "push", tmpFile, "/sdcard/DCIM/Camera/"+f.name).
+		out, err := exec.CommandContext(t.Context(), adb, "push", tmpFile, f.path).
 			CombinedOutput()
 		assert.NoError(err, string(out))
 	}
@@ -63,15 +81,24 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	newHead := r.Head()
 	assert.NotEqual(head, newHead, "Head should have changed")
 
+	// Most recent commit (HEAD): media file uploaded from ClingSyncTest.
 	assert.Equal([]lib.TestRevisionEntryInfo{
-		{"phone", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"phone/camera", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"phone/camera/blue_sky.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Blue sky")},
-		{"phone/camera/red_earth.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Red earth")},
+		{"backup", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/photo.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Test photo")},
 	}, r.RevisionInfos(newHead))
 
 	revision, err := r.ReadRevision(newHead)
 	assert.NoError(err)
-	assert.Contains(revision.Message, "Backup 2 files from Google")
+	assert.Contains(revision.Message, "Backup 1 file")
 	assert.Equal("Testinger", revision.Author)
+
+	// Previous commit (HEAD~1): DCIM files.
+	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"phone", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera/blue_sky.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Blue sky")},
+		{"phone/Camera/red_earth.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Red earth")},
+		{"phone/Camera/vacation", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera/vacation/sunset.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Sunset")},
+	}, r.RevisionInfos(revision.Parent))
 }

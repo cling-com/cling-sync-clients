@@ -29,8 +29,6 @@ struct RepositoryConfiguration: Equatable {
     }
 
     var repositoryID: String {
-        let normalizedURL = hostURL.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let normalizedPrefix = repoPathPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return normalizedURL + "|" + normalizedPrefix
+        hostURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 }

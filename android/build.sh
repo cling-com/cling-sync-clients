@@ -22,9 +22,10 @@ if [ $# -eq 0 ]; then
     echo "  tools"
     echo "      Install Android SDK and Gradle under ./tools/"
     echo
-    echo "  run [--create-samples]"
+    echo "  run [--emulator] [--create-samples]"
     echo "      Build and run the app on connected device/emulator"
     echo "      If no device is connected, start the first available emulator"
+    echo "      --emulator: Force using the emulator"
     echo "      --create-samples: Create sample image files in the camera folder"
     echo
     echo "  fmt"
@@ -267,22 +268,42 @@ start_emulator_if_needed() {
 run_app() {
     echo ">>> Running app"
     set_local_path
-    
+
     # Parse command line options
     local create_samples=false
-    if [ $# -gt 0 ] && [ "$1" = "--create-samples" ]; then
-        create_samples=true
-    fi
-    
+    local use_emulator=false
+    for arg in "$@"; do
+        case "$arg" in
+            --create-samples) create_samples=true ;;
+            --emulator) use_emulator=true ;;
+        esac
+    done
+
     build_all
-    start_emulator_if_needed
+
+    if [ "$use_emulator" = true ]; then
+        start_emulator_if_needed
+    else
+        # Re-attach USB devices that may have been disconnected during testing.
+        adb kill-server 2>/dev/null || true
+        adb start-server 2>/dev/null || true
+        # Wait briefly for devices to appear.
+        sleep 2
+
+        # If no device connected, fall back to emulator.
+        if ! adb devices | grep -q "device$"; then
+            echo "    No device found, starting emulator..."
+            start_emulator_if_needed
+        fi
+    fi
+
     ./gradlew installDebug -q
-    
+
     if [ "$create_samples" = true ]; then
-        echo ">>> Creating sample files in emulator"
+        echo ">>> Creating sample files"
         create_sample_files
     fi
-    
+
     adb shell am start -n com.clingsync.android/.MainActivity
     echo "    App launched successfully"
 }
@@ -291,6 +312,10 @@ test_integration() {
     echo ">>> Running integration tests"
     set_local_path
     build_go
+    # Disconnect physical devices to avoid "more than one device" errors.
+    adb devices | grep -v emulator | grep "device$" | awk '{print $1}' | while read dev; do
+        adb disconnect "$dev" 2>/dev/null || true
+    done
     start_emulator_if_needed
     cd go
     go test -v -count=1 ./... "$@"
@@ -303,9 +328,9 @@ test_unit() {
 }
 
 test_all() {
+    test_unit "$@"
     test_integration "$@"
     cd $root
-    test_unit "$@"
 }
 
 fmt() {

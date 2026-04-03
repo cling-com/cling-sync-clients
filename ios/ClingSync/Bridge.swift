@@ -14,17 +14,17 @@ struct RepositoryStatus {
 }
 
 class Bridge {
-    static func checkRepositoryOpen(url: String, repoPathPrefix: String) throws(BridgeError) -> RepositoryStatus {
+    static func checkRepositoryOpen(url: String) throws(BridgeError) -> RepositoryStatus {
         let result = try execute(
             command: "checkRepositoryOpen",
-            params: ["hostUrl": url, "repoPathPrefix": repoPathPrefix])
+            params: ["hostUrl": url])
         return RepositoryStatus(
             open: result["open"] as? Bool ?? false,
             headRevisionId: result["headRevisionId"] as? String ?? ""
         )
     }
 
-    static func openRepository(url: String, password: String, repoPathPrefix: String) throws(BridgeError)
+    static func openRepository(url: String, password: String) throws(BridgeError)
         -> RepositoryConnectionInfo
     {
         let result = try execute(
@@ -32,13 +32,14 @@ class Bridge {
             params: [
                 "hostUrl": url,
                 "password": password,
-                "repoPathPrefix": repoPathPrefix,
             ])
         return RepositoryConnectionInfo(headRevisionId: result["headRevisionId"] as? String ?? "")
     }
 
-    static func uploadFile(filePath: String) throws(BridgeError) -> String? {
-        let result = try execute(command: "uploadFile", params: ["filePath": filePath])
+    static func uploadFile(localFilePath: String, repoFilePath: String) throws(BridgeError) -> String? {
+        let result = try execute(
+            command: "uploadFile",
+            params: ["localFilePath": localFilePath, "repoFilePath": repoFilePath])
 
         if let skipped = result["skipped"] as? Bool, skipped {
             return nil

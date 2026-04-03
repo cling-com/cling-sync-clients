@@ -40,17 +40,15 @@ final class ClingSyncUITests: XCTestCase {
         waitForUploadSuccess(fileCount: 1)
         app.buttons["OK"].tap()
 
-        // Change path prefix — this invalidates the open repository.
+        // Change path prefix — connection stays open (prefix is client-side only).
         openSettingsFromMainScreen()
         changeRepoPathPrefix("uitest/sub")
         app.navigationBars["Repository Settings"].buttons["Save"].tap()
         waitForMainScreen()
 
-        // Upload second photo — needs re-authentication due to path prefix change.
+        // Upload second photo — no re-authentication needed.
         selectPhoto("IMG_0004.JPG")
         app.buttons["Upload"].tap()
-        XCTAssertTrue(app.navigationBars["Repository Passphrase"].waitForExistence(timeout: 5))
-        enterPassphrase(saveToKeychain: false)
         waitForUploadSuccess(fileCount: 1)
     }
 

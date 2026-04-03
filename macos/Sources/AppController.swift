@@ -290,6 +290,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func removeWorkspace(id: UUID) {
         if let workspace = workspace(for: id) {
+            try? Bridge.clearWorkspacePassphrase(hostURL: workspace.normalizedHostURL)
             mergeStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             mergeShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
         }
@@ -479,10 +480,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func upsertWorkspace(_ config: WorkspaceConfig) {
         if let index = workspaceConfigs.firstIndex(where: { $0.id == config.id }) {
-            let previousPath = workspaceConfigs[index].normalizedLocalDirectory
-            if previousPath != config.normalizedLocalDirectory {
-                mergeStatusesByPath.removeValue(forKey: previousPath)
-                mergeShowsDetailsByPath.removeValue(forKey: previousPath)
+            let previous = workspaceConfigs[index]
+            if previous.normalizedLocalDirectory != config.normalizedLocalDirectory
+                || previous.normalizedHostURL != config.normalizedHostURL
+            {
+                try? Bridge.clearWorkspacePassphrase(hostURL: previous.normalizedHostURL)
+                mergeStatusesByPath.removeValue(forKey: previous.normalizedLocalDirectory)
+                mergeShowsDetailsByPath.removeValue(forKey: previous.normalizedLocalDirectory)
             }
             workspaceConfigs[index] = config
         } else {

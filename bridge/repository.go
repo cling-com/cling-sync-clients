@@ -22,22 +22,15 @@ var (
 	head              lib.RevisionId                    //nolint:gochecknoglobals
 	snapshot          *lib.Temp[lib.RevisionEntry]      //nolint:gochecknoglobals
 	snapshotCache     *lib.TempCache[lib.RevisionEntry] //nolint:gochecknoglobals
-	repoPathPrefix    lib.Path                          //nolint:gochecknoglobals
 )
 
-// CheckRepositoryOpen returns true if a repository is currently open for the given host URL
-// and path prefix. If the repository is open but the parameters do not match, it is closed
-// to prevent misuse.
-func CheckRepositoryOpen(hostURL, repoPathPrefix_ string) bool {
+// CheckRepositoryOpen returns true if a repository is currently open for the given host URL.
+// If the repository is open but the host URL does not match, it is closed to prevent misuse.
+func CheckRepositoryOpen(hostURL string) bool {
 	if repository == nil {
 		return false
 	}
-	prefix, err := lib.NewPath(strings.Trim(repoPathPrefix_, "/"))
-	if err != nil {
-		closeRepository()
-		return false
-	}
-	if repositoryHostURL != hostURL || prefix != repoPathPrefix {
+	if repositoryHostURL != hostURL {
 		closeRepository()
 		return false
 	}
@@ -53,18 +46,14 @@ func GetRepositoryHeadRevisionID() string {
 }
 
 // OpenRepository closes any existing repository and opens a new one.
-func OpenRepository(hostURL, password, repoPathPrefix_ string) error {
+func OpenRepository(hostURL, password string) error {
 	closeRepository()
-	var err error
-	repoPathPrefix, err = lib.NewPath(strings.Trim(repoPathPrefix_, "/"))
-	if err != nil {
-		return lib.WrapErrorf(err, "failed to create repo path prefix %s", repoPathPrefix_)
-	}
 	httpClient := &http.Client{ //nolint:exhaustruct
 		Timeout: 30 * time.Second,
 	}
 	client := clinghttp.NewDefaultHTTPClient(httpClient)
 	storage := clinghttp.NewHTTPStorageClient(hostURL, client)
+	var err error
 	repository, err = lib.OpenRepository(storage, []byte(password))
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open repository")
@@ -136,27 +125,31 @@ func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 	return res, nil
 }
 
+// UploadFile uploads a file to the repository.
+// `localFilePath` is the absolute path on disk.
+// `repoFilePath` is the full path in the repository (including any prefix).
 // Return `true` if the file was uploaded, `false` if it was skipped.
-func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
+func UploadFile(localFilePath string, repoFilePath string) (*lib.RevisionEntry, bool, error) {
 	if repository == nil {
 		return nil, false, lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
-	fileInfo, err := os.Stat(filePath)
+	fileInfo, err := os.Stat(localFilePath)
 	if err != nil {
-		return nil, false, lib.WrapErrorf(err, "failed to stat file %s", filePath)
+		return nil, false, lib.WrapErrorf(err, "failed to stat file %s", localFilePath)
 	}
 	if fileInfo.IsDir() {
-		return nil, false, lib.Errorf("cannot add directory %s to repository", filePath)
+		return nil, false, lib.Errorf("cannot add directory %s to repository", localFilePath)
 	}
-	filename := filepath.Base(filePath)
-	dir := filepath.Dir(filePath)
-	fs := lib.NewRealFS(dir)
-	// Ensure the final repoPath is not absolute.
-	filenamePath, err := lib.NewPath(strings.Trim(filename, "/"))
+	dir := filepath.Dir(localFilePath)
+	localFileName, err := lib.NewPath(filepath.Base(localFilePath))
 	if err != nil {
-		return nil, false, lib.WrapErrorf(err, "invalid path %s", filename)
+		return nil, false, lib.WrapErrorf(err, "invalid filename %s", localFilePath)
 	}
-	repoPath := repoPathPrefix.Join(filenamePath)
+	fs := lib.NewRealFS(dir)
+	repoPath, err := lib.NewPath(strings.Trim(repoFilePath, "/"))
+	if err != nil {
+		return nil, false, lib.WrapErrorf(err, "invalid repo path %s", repoFilePath)
+	}
 
 	// Check if file already exists in the current head of the repository.
 	existingEntry, found, err := snapshotCache.Get(lib.PathCompareString(repoPath, false))
@@ -165,15 +158,15 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	}
 	if found {
 		// File exists, calculate its hash to compare.
-		file, err := os.Open(filePath)
+		file, err := os.Open(localFilePath)
 		if err != nil {
-			return nil, false, lib.WrapErrorf(err, "failed to open file %s", filePath)
+			return nil, false, lib.WrapErrorf(err, "failed to open file %s", localFilePath)
 		}
 		defer file.Close() //nolint:errcheck
 
 		hasher := sha256.New()
 		if _, err := io.Copy(hasher, file); err != nil {
-			return nil, false, lib.WrapErrorf(err, "failed to calculate hash for file %s", filePath)
+			return nil, false, lib.WrapErrorf(err, "failed to calculate hash for file %s", localFilePath)
 		}
 		fileHash := lib.Sha256(hasher.Sum(nil))
 
@@ -185,14 +178,14 @@ func UploadFile(filePath string) (*lib.RevisionEntry, bool, error) {
 	// File does not exist or has changed, proceed with upload.
 	md, err := workspace.AddFileToRepository(
 		fs,
-		filenamePath,
+		localFileName,
 		fileInfo,
 		repository,
 		nil,
 		workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
 	)
 	if err != nil {
-		return nil, false, lib.WrapErrorf(err, "failed to add file %s to repository", filePath)
+		return nil, false, lib.WrapErrorf(err, "failed to add file %s to repository", localFilePath)
 	}
 	// We want to have predictable file permissions and modes.
 	md.ModeAndPerm = 0o600
@@ -213,10 +206,14 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to create commit")
 	}
-	if err := commit.EnsureDirExists(repoPathPrefix, snapshotCache, head); err != nil {
-		return "", lib.WrapErrorf(err, "failed to ensure path prefix exists as a directory in the repository")
-	}
 	for _, entry := range entries {
+		// Ensure parent directories exist for entries with subdirectories.
+		parent := entry.Path.Dir()
+		if !parent.IsEmpty() {
+			if err := commit.EnsureDirExists(parent, snapshotCache, head); err != nil {
+				return "", lib.WrapErrorf(err, "failed to ensure directory %s exists", parent)
+			}
+		}
 		if err := commit.Add(entry); err != nil {
 			return "", lib.WrapErrorf(err, "failed to add entry to commit")
 		}
@@ -228,6 +225,9 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	revisionId, err := commit.Commit(commitInfo)
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to commit")
+	}
+	if err := refreshSnapshot(); err != nil {
+		return "", lib.WrapErrorf(err, "failed to refresh snapshot after commit")
 	}
 	return hex.EncodeToString(revisionId[:]), nil
 }

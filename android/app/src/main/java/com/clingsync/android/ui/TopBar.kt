@@ -30,15 +30,13 @@ import java.io.File
 fun TopBar(
     selectedFiles: Set<File>,
     isUploading: Boolean,
+    isScanning: Boolean,
     uploadInfo: UploadInfo?,
-    selectAllChecked: Boolean,
-    onSelectAllChange: (Boolean) -> Unit,
     onUploadClick: () -> Unit,
     onUploadAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     modifier: Modifier = Modifier,
-    isSelectAllEnabled: Boolean = true,
-    uploadedSizeMB: Long = 0L,
+    uploadedBytes: Long = 0L,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().height(80.dp),
@@ -93,7 +91,7 @@ fun TopBar(
                         // During upload: show current file and progress.
                         UploadProgressDisplay(
                             uploadInfo = uploadInfo,
-                            uploadedSizeMB = uploadedSizeMB,
+                            uploadedBytes = uploadedBytes,
                         )
                     }
                     isUploading -> {
@@ -161,6 +159,7 @@ fun TopBar(
                     // Show Upload All button when no files selected
                     Button(
                         onClick = onUploadAllClick,
+                        enabled = !isScanning,
                         modifier =
                             Modifier
                                 .height(40.dp)
@@ -171,7 +170,7 @@ fun TopBar(
                             ),
                     ) {
                         Text(
-                            text = "Upload All",
+                            text = if (isScanning) "Scanning..." else "Upload All",
                             fontWeight = FontWeight.Medium,
                         )
                     }

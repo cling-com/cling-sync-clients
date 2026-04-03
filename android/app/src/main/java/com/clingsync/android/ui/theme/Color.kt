@@ -75,9 +75,3 @@ val md_theme_dark_surfaceContainerLow = Color(0xFF22191A)
 val md_theme_dark_surfaceContainer = Color(0xFF261D1E)
 val md_theme_dark_surfaceContainerHigh = Color(0xFF312829)
 val md_theme_dark_surfaceContainerHighest = Color(0xFF3C3233)
-
-// Legacy compatibility aliases
-val Purple40 = md_theme_light_primary
-val PurpleGrey40 = md_theme_light_secondary
-val Purple80 = md_theme_dark_primary
-val PurpleGrey80 = md_theme_dark_secondary

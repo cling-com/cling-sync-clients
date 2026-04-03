@@ -39,11 +39,7 @@ class UploadWorker(
     companion object {
         const val WORK_NAME = "upload_work"
         const val KEY_FILE_PATHS_FILE = "file_paths_file"
-        const val KEY_REPO_PATH_PREFIX = "repo_path_prefix"
         const val KEY_AUTHOR = "author"
-        const val KEY_MESSAGE = "message"
-        const val KEY_HOST_URL = "host_url"
-        const val KEY_PASSWORD = "password"
         const val KEY_REVISION_ID = "revision_id"
 
         private const val NOTIFICATION_ID = 1
@@ -54,12 +50,8 @@ class UploadWorker(
         fun enqueueUpload(
             context: Context,
             filePaths: List<String>,
-            repoPathPrefix: String,
             author: String,
-            message: String,
-            hostUrl: String,
-            password: String,
-        ) {
+        ): java.util.UUID {
             // Always write paths to a file to avoid size limits.
             val tempFile = File(context.cacheDir, TEMP_FILE_NAME)
             tempFile.writeText(filePaths.joinToString("\n"))
@@ -67,11 +59,7 @@ class UploadWorker(
             val inputData =
                 workDataOf(
                     KEY_FILE_PATHS_FILE to tempFile.absolutePath,
-                    KEY_REPO_PATH_PREFIX to repoPathPrefix,
                     KEY_AUTHOR to author,
-                    KEY_MESSAGE to message,
-                    KEY_HOST_URL to hostUrl,
-                    KEY_PASSWORD to password,
                 )
 
             val workRequest =
@@ -81,7 +69,9 @@ class UploadWorker(
                     .build()
 
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, workRequest)
+                .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, workRequest)
+
+            return workRequest.id
         }
     }
 
@@ -110,11 +100,7 @@ class UploadWorker(
                 tempFile.delete() // Delete immediately after reading.
 
                 // Extract other parameters.
-                val repoPathPrefix = inputData.getString(KEY_REPO_PATH_PREFIX) ?: return@withContext Result.failure()
                 val author = inputData.getString(KEY_AUTHOR) ?: return@withContext Result.failure()
-                val message = inputData.getString(KEY_MESSAGE) ?: return@withContext Result.failure()
-                val hostUrl = inputData.getString(KEY_HOST_URL) ?: return@withContext Result.failure()
-                val password = inputData.getString(KEY_PASSWORD) ?: return@withContext Result.failure()
 
                 Log.d("Worker", "Starting upload of ${filePaths.size} files")
 
@@ -126,50 +112,52 @@ class UploadWorker(
                     totalBytes += File(path).length()
                 }
 
-                // Initialize all files as waiting
-                val fileNames = filePaths.map { File(it).name }
-                fileNames.forEach { fileName ->
-                    fileStatuses[fileName] = "waiting"
+                // Initialize all files as waiting (keyed by absolute path).
+                filePaths.forEach { path ->
+                    fileStatuses[path] = "waiting"
                 }
 
-                // Open repository if not already open.
-                if (!goBridge.checkRepositoryOpen(hostUrl, repoPathPrefix)) {
-                    goBridge.openRepository(hostUrl, password, repoPathPrefix)
+                // Verify repository is open. The UI must open it before starting the worker.
+                val settings = SettingsManager(applicationContext).getSettings()
+                if (!goBridge.checkRepositoryOpen(settings.hostUrl)) {
+                    return@withContext Result.failure(
+                        workDataOf("error" to "Repository not authenticated. Please open the app and try again."),
+                    )
                 }
 
                 // List to collect revision entries.
                 val revisionEntries = mutableListOf<String>()
 
                 // Upload each file.
+                val sourceDir = getSourceDirectory(settings)
+                val prefix = settings.repoPathPrefix.trim('/')
                 filePaths.forEachIndexed { index, filePath ->
-                    val fileName = File(filePath).name
                     val fileSize = File(filePath).length()
                     Log.d("Worker", "Uploading file ${index + 1}/${filePaths.size}: $filePath")
 
-                    fileStatuses[fileName] = "uploading"
-                    Log.d("Worker", "Marking $fileName as uploading (file ${index + 1}/${filePaths.size})")
+                    fileStatuses[filePath] = "uploading"
 
                     // Update progress notification.
-                    setForeground(createForegroundInfo(index + 1, filePaths.size, fileName))
+                    setForeground(createForegroundInfo(index + 1, filePaths.size, File(filePath).name))
 
-                    val revisionEntry = goBridge.uploadFile(filePath)
+                    val relativePath = File(filePath).relativeTo(sourceDir).path
+                    val repoFilePath = if (prefix.isEmpty()) relativePath else "$prefix/$relativePath"
+                    val revisionEntry = goBridge.uploadFile(filePath, repoFilePath)
                     if (revisionEntry != null) {
                         revisionEntries.add(revisionEntry)
                         uploadedBytes += fileSize
-                        fileStatuses[fileName] = "uploaded"
-                        Log.d("Worker", "Marked $fileName as uploaded with size $fileSize")
+                        fileStatuses[filePath] = "uploaded"
                     } else {
-                        // File was skipped (already exists with same hash)
-                        Log.d("Worker", "Skipped file $fileName - already exists with same hash")
-                        fileStatuses[fileName] = "skipped"
-                        uploadedBytes += fileSize // Count skipped files as uploaded
+                        Log.d("Worker", "Skipped file $filePath - already exists with same hash")
+                        fileStatuses[filePath] = "skipped"
+                        uploadedBytes += fileSize
                     }
                 }
 
                 // Mark all files as committing.
-                fileNames.forEach { fileName ->
-                    if (fileStatuses[fileName] == "uploading" || fileStatuses[fileName] == "uploaded") {
-                        fileStatuses[fileName] = "committing"
+                filePaths.forEach { path ->
+                    if (fileStatuses[path] == "uploading" || fileStatuses[path] == "uploaded") {
+                        fileStatuses[path] = "committing"
                     }
                 }
 
@@ -179,8 +167,12 @@ class UploadWorker(
                 // Only commit if we have revision entries
                 val revisionId =
                     if (revisionEntries.isNotEmpty()) {
-                        // Commit all entries.
-                        val id = goBridge.commit(revisionEntries, author, message)
+                        // Use actual upload count in commit message.
+                        val count = revisionEntries.size
+                        val actualMessage =
+                            "Backup $count file${if (count == 1) "" else "s"}" +
+                                " from ${Build.MANUFACTURER} ${Build.MODEL}"
+                        val id = goBridge.commit(revisionEntries, author, actualMessage)
                         Log.d("Worker", "Commit successful: $id")
                         id
                     } else {

@@ -15,7 +15,7 @@ import com.clingsync.android.UploadInfo
 @Composable
 fun UploadProgressDisplay(
     uploadInfo: UploadInfo,
-    uploadedSizeMB: Long,
+    uploadedBytes: Long,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -47,7 +47,7 @@ fun UploadProgressDisplay(
                 )
 
                 // Progress info - always visible.
-                val uploadedStr = formatFileSize(uploadedSizeMB * 1024 * 1024)
+                val uploadedStr = formatFileSize(uploadedBytes)
                 val fileCounter =
                     if (uploadInfo.totalFiles > 0) {
                         " (${uploadInfo.currentIndex}/${uploadInfo.totalFiles})"

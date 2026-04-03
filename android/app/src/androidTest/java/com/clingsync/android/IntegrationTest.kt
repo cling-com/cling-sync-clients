@@ -2,6 +2,7 @@ package com.clingsync.android
 
 import android.Manifest
 import android.content.Context
+import android.os.Environment
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
@@ -15,7 +16,6 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
 class IntegrationTest {
     private val serverUrl = System.getenv("TEST_SERVER_URL") ?: "http://10.0.2.2:9124"
     private val testPassphrase = System.getenv("TEST_PASSPHRASE") ?: "testpassphrase"
-    private val repoPathPrefix = System.getenv("TEST_DESTINATION_PATH") ?: "/phone/camera/"
+    private val repoPathPrefix = System.getenv("TEST_DESTINATION_PATH") ?: "/phone/"
 
     @get:Rule(order = 1)
     val permissionRule: GrantPermissionRule =
@@ -41,33 +41,21 @@ class IntegrationTest {
 
     @Before
     fun setup() {
-        // Clear SharedPreferences to ensure settings dialog appears.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("cling_sync_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
-        // Test files are pushed to /sdcard/DCIM/Camera/ via adb in the Go test harness.
-    }
-
-    @After
-    fun teardown() {
-        // file1.delete()
-        // file2.delete()
-        // file3.delete()
+        PassphraseStore(context).deleteAll()
     }
 
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun testBackupFiles() {
-        // Wait for activity to load and settings dialog to appear.
         composeTestRule.waitForIdle()
 
-        // Fill in settings and save.
+        // Configure settings with default DCIM source.
         composeTestRule.waitUntilExactlyOneExists(hasText("Host URL"), 5000)
         composeTestRule.onNodeWithText("Host URL").performClick()
         composeTestRule.onNodeWithText("Host URL").performTextInput(serverUrl)
-
-        composeTestRule.onNodeWithText("Password").performClick()
-        composeTestRule.onNodeWithText("Password").performTextInput(testPassphrase)
 
         composeTestRule.onNodeWithText("Destination Path (optional)").performClick()
         composeTestRule.onNodeWithText("Destination Path (optional)").performTextInput(repoPathPrefix)
@@ -75,23 +63,64 @@ class IntegrationTest {
         composeTestRule.onNodeWithText("Author").performClick()
         composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
 
-        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.onNodeWithText("Test").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Enter Passphrase"), 5000)
+        composeTestRule.onNodeWithText("Passphrase").performClick()
+        composeTestRule.onNodeWithText("Passphrase").performTextInput(testPassphrase)
+        composeTestRule.onNodeWithText("Continue").performClick()
         composeTestRule.waitForIdle()
 
-        // Wait for file cards to be displayed.
-        composeTestRule.waitUntilExactlyOneExists(hasText("blue_sky.jpg"), 5000)
-        composeTestRule.waitUntilExactlyOneExists(hasText("red_earth.jpg"), 5000)
+        composeTestRule.waitUntilExactlyOneExists(hasText("Save"), 10000)
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
 
-        // Select files.
+        // Select and upload DCIM files (including one from a subfolder).
         composeTestRule.onNodeWithText("blue_sky.jpg", substring = true).performClick()
         composeTestRule.onNodeWithText("red_earth.jpg", substring = true).performClick()
-
-        // Upload.
+        composeTestRule.onNodeWithText("sunset.jpg", substring = true).performClick()
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
         composeTestRule.onNodeWithText("Upload Selected").performClick()
-        composeTestRule.waitForIdle()
+        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 3, 10000)
 
-        // Wait for both files to show "Synced" status
-        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 2, 10000)
+        // Verify non-uploaded files kept their status.
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("checkbox_green_grass.jpg"), 5000)
+
+        // --- Switch to custom folder with media-only ---
+        composeTestRule.onNode(hasContentDescription("Settings")).performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Source Directory"), 5000)
+
+        // Change source directory to ClingSyncTest.
+        val customDir = "${Environment.getExternalStorageDirectory().path}/ClingSyncTest"
+        composeTestRule.onNodeWithText("Source Directory").performClick()
+        composeTestRule.onNodeWithText(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath,
+        ).performTextReplacement(customDir)
+
+        // Change destination path for custom folder uploads.
+        composeTestRule.onNodeWithText("Destination Path (optional)").performClick()
+        composeTestRule.onNodeWithText(repoPathPrefix).performTextReplacement("/backup")
+
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
+
+        // With media-only, should see photo.jpg and video.mp4 but NOT notes.txt or report.pdf.
+        composeTestRule.waitUntilExactlyOneExists(hasText("photo.jpg", substring = true), 5000)
+        composeTestRule.waitUntilExactlyOneExists(hasText("video.mp4", substring = true), 5000)
+
+        // Upload the media file.
+        composeTestRule.onNodeWithText("photo.jpg", substring = true).performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
+        composeTestRule.onNodeWithText("Upload Selected").performClick()
+        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 1, 10000)
+
+        // --- Toggle media-only setting ---
+        // Verify we can open settings and toggle the checkbox (non-media files won't
+        // show on the emulator because MANAGE_EXTERNAL_STORAGE doesn't fully propagate
+        // to the FUSE layer — this works on real devices).
+        composeTestRule.onNode(hasContentDescription("Settings")).performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Media files only"), 5000)
+        composeTestRule.onNodeWithText("Media files only").performClick()
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
     }
 }

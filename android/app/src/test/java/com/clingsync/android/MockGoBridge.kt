@@ -1,7 +1,5 @@
 package com.clingsync.android
 
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicInteger
 
 class MockGoBridge : IGoBridge {
@@ -24,19 +22,13 @@ class MockGoBridge : IGoBridge {
     var lastCommitMessage: String? = null
     var lastCommitAuthor: String? = null
 
-    val selectedFiles = mutableListOf<String>()
-
-    override fun checkRepositoryOpen(
-        hostUrl: String,
-        repoPathPrefix: String,
-    ): Boolean {
+    override fun checkRepositoryOpen(hostUrl: String): Boolean {
         return isOpen
     }
 
     override fun openRepository(
         hostUrl: String,
         password: String,
-        repoPathPrefix: String,
     ) {
         if (shouldFailOpenRepository) {
             val error = "Failed to connect to repository: Connection refused"
@@ -47,6 +39,8 @@ class MockGoBridge : IGoBridge {
         isOpen = true
     }
 
+    var checkFilesResults: List<String>? = null
+
     override fun checkFiles(sha256s: List<String>): List<String> {
         if (!isOpen) {
             val error = "Repository not open"
@@ -54,14 +48,18 @@ class MockGoBridge : IGoBridge {
             throw Exception(error)
         }
 
-        val res = mutableListOf<String>()
-        for (sha256 in sha256s) {
-            res.add("path/to/file/$sha256")
+        if (checkFilesResults != null) {
+            return checkFilesResults!!
         }
-        return res
+
+        // Default: return empty strings (files not found in repo).
+        return List(sha256s.size) { "" }
     }
 
-    override fun uploadFile(filePath: String): String? {
+    override fun uploadFile(
+        localFilePath: String,
+        repoFilePath: String,
+    ): String? {
         if (!isOpen) {
             val error = "Repository not open"
             errors.add(error)
@@ -82,13 +80,8 @@ class MockGoBridge : IGoBridge {
             throw Exception(error)
         }
 
-        // Simulate upload delay.
-        runBlocking {
-            delay(uploadDelay)
-        }
-
-        uploadedFiles.add(filePath)
-        uploadCalls.add(filePath)
+        uploadedFiles.add(localFilePath)
+        uploadCalls.add(localFilePath)
         return "revision-entry-$currentIndex"
     }
 
@@ -130,7 +123,7 @@ class MockGoBridge : IGoBridge {
         uploadCalls.clear()
         commitCalls.clear()
         errors.clear()
-        selectedFiles.clear()
+        checkFilesResults = null
         isOpen = false
         lastCommitMessage = null
         lastCommitAuthor = null

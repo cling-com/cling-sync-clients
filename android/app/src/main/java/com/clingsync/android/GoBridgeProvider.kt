@@ -14,8 +14,4 @@ object GoBridgeProvider {
     fun reset() {
         instance = null
     }
-
-    fun setInstanceForTesting(bridge: IGoBridge) {
-        instance = bridge
-    }
 }
