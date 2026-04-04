@@ -24,7 +24,7 @@ fun ScrollAwareTopBar(
     isScanning: Boolean,
     uploadInfo: UploadInfo?,
     onUploadClick: () -> Unit,
-    onUploadAllClick: () -> Unit,
+    onSelectAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     uploadedBytes: Long = 0L,
 ) {
@@ -75,7 +75,7 @@ fun ScrollAwareTopBar(
             isScanning = isScanning,
             uploadInfo = uploadInfo,
             onUploadClick = onUploadClick,
-            onUploadAllClick = onUploadAllClick,
+            onSelectAllClick = onSelectAllClick,
             onAbortClick = onAbortClick,
             uploadedBytes = uploadedBytes,
         )

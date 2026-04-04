@@ -33,7 +33,7 @@ fun TopBar(
     isScanning: Boolean,
     uploadInfo: UploadInfo?,
     onUploadClick: () -> Unit,
-    onUploadAllClick: () -> Unit,
+    onSelectAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     modifier: Modifier = Modifier,
     uploadedBytes: Long = 0L,
@@ -150,27 +150,26 @@ fun TopBar(
                             ),
                     ) {
                         Text(
-                            text = "Upload Selected",
+                            text = "Upload",
                             fontWeight = FontWeight.Medium,
                         )
                     }
                 }
                 else -> {
-                    // Show Upload All button when no files selected
                     Button(
-                        onClick = onUploadAllClick,
+                        onClick = onSelectAllClick,
                         enabled = !isScanning,
                         modifier =
                             Modifier
                                 .height(40.dp)
-                                .testTag("upload_all_button"),
+                                .testTag("select_all_button"),
                         colors =
                             ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary,
                             ),
                     ) {
                         Text(
-                            text = if (isScanning) "Scanning..." else "Upload All",
+                            text = if (isScanning) "Scanning..." else "Select All",
                             fontWeight = FontWeight.Medium,
                         )
                     }

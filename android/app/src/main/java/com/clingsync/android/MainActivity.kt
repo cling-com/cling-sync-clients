@@ -396,6 +396,7 @@ fun MainScreen(
     var isUploading by remember { mutableStateOf(false) }
     var isUploadInitiated by remember { mutableStateOf(false) }
     var currentUploadId by remember { mutableStateOf<UUID?>(null) }
+    var currentUploadPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     val lazyListState = rememberLazyListState()
     var checkFilesJob by remember { mutableStateOf<Job?>(null) }
     var scanProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -488,6 +489,7 @@ fun MainScreen(
             scanProgress = null
             currentUploadInfo = UploadInfo(currentFile = null, currentIndex = 0, totalFiles = filesToUpload.size)
 
+            currentUploadPaths = filesToUpload.map { it.absolutePath }.toSet()
             fileStatus = fileStatus + filesToUpload.associate { it.absolutePath to FileStatus.Waiting as FileStatus }
 
             currentUploadId =
@@ -725,6 +727,7 @@ fun MainScreen(
                     isUploading = false
                     isUploadInitiated = false
                     currentUploadId = null
+                    currentUploadPaths = emptySet()
                     currentUploadInfo = null
                     actualUploadedBytes = 0L
 
@@ -776,11 +779,13 @@ fun MainScreen(
                     currentUploadId = null
                     currentUploadInfo = null
                     actualUploadedBytes = 0L
-                    fileStatus.forEach { (fileName, status) ->
-                        if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
-                            fileStatus = fileStatus + (fileName to FileStatus.Aborted)
+                    for (path in currentUploadPaths) {
+                        val status = fileStatus[path]
+                        if (status !is FileStatus.Done && status !is FileStatus.Exists) {
+                            fileStatus = fileStatus + (path to FileStatus.Aborted)
                         }
                     }
+                    currentUploadPaths = emptySet()
                 }
                 WorkInfo.State.FAILED -> {
                     isUploading = false
@@ -799,16 +804,19 @@ fun MainScreen(
                             )
                     }
 
-                    fileStatus.forEach { (fileName, status) ->
-                        if (status !is FileStatus.Done && status !is FileStatus.Failed && status !is FileStatus.Aborted) {
-                            fileStatus = fileStatus + (fileName to FileStatus.Failed("Error"))
+                    for (path in currentUploadPaths) {
+                        val status = fileStatus[path]
+                        if (status !is FileStatus.Done && status !is FileStatus.Exists) {
+                            fileStatus = fileStatus + (path to FileStatus.Failed("Error"))
                         }
                     }
+                    currentUploadPaths = emptySet()
                 }
                 else -> {
                     isUploading = false
                     isUploadInitiated = false
                     currentUploadId = null
+                    currentUploadPaths = emptySet()
                     currentUploadInfo = null
                 }
             }
@@ -1089,8 +1097,15 @@ fun MainScreen(
                         onUploadClick = {
                             startUpload(displayedFiles.filter { it in selectedFiles })
                         },
-                        onUploadAllClick = {
-                            startUpload(displayedFiles)
+                        onSelectAllClick = {
+                            selectedFiles =
+                                displayedFiles.filter { file ->
+                                    val status = fileStatus[file.absolutePath]
+                                    status is FileStatus.New ||
+                                        status is FileStatus.Failed ||
+                                        status is FileStatus.Aborted ||
+                                        status == null
+                                }.toSet()
                         },
                         onAbortClick = {
                             workManager.cancelUniqueWork(UploadWorker.WORK_NAME)

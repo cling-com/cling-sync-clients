@@ -72,14 +72,14 @@ class IntegrationTest {
 
         composeTestRule.waitUntilExactlyOneExists(hasText("Save"), 10000)
         composeTestRule.onNodeWithText("Save").performClick()
-        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 10000)
 
         // Select and upload DCIM files (including one from a subfolder).
         composeTestRule.onNodeWithText("blue_sky.jpg", substring = true).performClick()
         composeTestRule.onNodeWithText("red_earth.jpg", substring = true).performClick()
         composeTestRule.onNodeWithText("sunset.jpg", substring = true).performClick()
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
-        composeTestRule.onNodeWithText("Upload Selected").performClick()
+        composeTestRule.onNodeWithText("Upload").performClick()
         composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 3, 10000)
 
         // Verify non-uploaded files kept their status.
@@ -101,7 +101,7 @@ class IntegrationTest {
         composeTestRule.onNodeWithText(repoPathPrefix).performTextReplacement("/backup")
 
         composeTestRule.onNodeWithText("Save").performClick()
-        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 10000)
 
         // With media-only, should see photo.jpg and video.mp4 but NOT notes.txt or report.pdf.
         composeTestRule.waitUntilExactlyOneExists(hasText("photo.jpg", substring = true), 5000)
@@ -110,7 +110,7 @@ class IntegrationTest {
         // Upload the media file.
         composeTestRule.onNodeWithText("photo.jpg", substring = true).performClick()
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()))
-        composeTestRule.onNodeWithText("Upload Selected").performClick()
+        composeTestRule.onNodeWithText("Upload").performClick()
         composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 1, 10000)
 
         // --- Toggle media-only setting ---
@@ -121,6 +121,6 @@ class IntegrationTest {
         composeTestRule.waitUntilExactlyOneExists(hasText("Media files only"), 5000)
         composeTestRule.onNodeWithText("Media files only").performClick()
         composeTestRule.onNodeWithText("Save").performClick()
-        composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_all_button"), 10000)
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 10000)
     }
 }

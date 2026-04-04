@@ -196,7 +196,7 @@ class MainScreenTest {
             // Select first file.
             onNode(hasTestTag("checkbox_IMG_001.jpg")).performClickWorkaround()
             onNode(hasTestTag("upload_button")).assertIsDisplayed()
-            onNode(hasText("Upload Selected")).assertIsDisplayed()
+            onNode(hasText("Upload")).assertIsDisplayed()
 
             // Select second file.
             onNode(hasTestTag("checkbox_IMG_002.jpg")).performClickWorkaround()
@@ -210,6 +210,8 @@ class MainScreenTest {
             onNode(hasTestTag("checkbox_IMG_002.jpg")).performClickWorkaround()
             onNode(hasText("No files selected")).assertIsDisplayed()
             onNode(hasTestTag("upload_button")).assertDoesNotExist()
+            onNode(hasTestTag("select_all_button")).assertIsDisplayed()
+            onNode(hasText("Select All")).assertIsDisplayed()
         }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -250,10 +252,10 @@ class MainScreenTest {
             // Select first two files.
             onNode(hasTestTag("checkbox_IMG_001.jpg")).performClickWorkaround()
             onNode(hasTestTag("checkbox_IMG_002.jpg")).performClickWorkaround()
-            onNode(hasText("Upload Selected")).assertIsDisplayed()
+            onNode(hasText("Upload")).assertIsDisplayed()
 
             // Click upload button.
-            onNode(hasText("Upload Selected")).performClickWorkaround()
+            onNode(hasText("Upload")).performClickWorkaround()
 
             // Wait for work to complete.
             composeTestRule.waitUntil(timeoutMillis = 10000) {
