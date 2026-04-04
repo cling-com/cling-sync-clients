@@ -21,11 +21,11 @@ final class ClingSyncMacUITests: XCTestCase {
         let config = loadConfig()
         let app = launchApp(defaultsSuiteSuffix: "configure")
 
-        let addFolderButton = app.buttons["addFolderButton"]
-        XCTAssertTrue(addFolderButton.waitForExistence(timeout: 5))
-        addFolderButton.tap()
+        // Settings auto-creates a workspace when empty.
+        let localFolderField = app.textFields["localFolderField"]
+        XCTAssertTrue(localFolderField.waitForExistence(timeout: 5))
 
-        replaceText(in: app.textFields["localFolderField"], with: config.localDir)
+        replaceText(in: localFolderField, with: config.localDir)
         replaceText(in: app.textFields["serverURLField"], with: config.serverUrl)
         replaceText(in: app.textFields["authorField"], with: config.author)
 
@@ -40,17 +40,21 @@ final class ClingSyncMacUITests: XCTestCase {
         saveButton.tap()
         waitForElementToDisappear(saveButton)
 
-        openTrayMenu(app, expecting: "Manage Folders...")
+        openTrayMenu(app, expecting: "Settings")
         XCTAssertTrue(app.menuItems[config.localDir].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Merge Now"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["Merge"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["Status"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.menuItems["Open Local Folder"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Edit..."].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Remove Folder"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Manage Folders..."].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.menuItems["Add Folder..."].firstMatch.exists)
+        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitForExistence(timeout: 5))
 
-        clickWorkspaceMergeMenuItem(for: config.localDir, in: app)
+        // Run status first.
+        clickWorkspaceStatusMenuItem(for: config.localDir, in: app)
         enterPassphraseIfNeeded(in: app, saveToKeychain: true)
+        waitForStatusToFinish(in: app)
+        closeStatusProgressWindow(in: app)
+
+        clickWorkspaceMerge(app, localDir: config.localDir)
+        assertNoPassphrasePrompt(in: app)
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
 
@@ -64,10 +68,10 @@ final class ClingSyncMacUITests: XCTestCase {
         let config = loadConfig()
         let app = launchApp(defaultsSuiteSuffix: "merge")
 
-        openTrayMenu(app, expecting: "Manage Folders...")
-        let manageFolders = app.menuItems["Manage Folders..."].firstMatch
-        XCTAssertTrue(manageFolders.waitForExistence(timeout: 5))
-        manageFolders.click()
+        openTrayMenu(app, expecting: "Settings")
+        let settingsItem = app.menuItems["Settings"].firstMatch
+        XCTAssertTrue(settingsItem.waitForExistence(timeout: 5))
+        settingsItem.click()
 
         app.buttons["addFolderButton"].tap()
         replaceText(in: app.textFields["localFolderField"], with: config.secondLocalDir)
@@ -84,11 +88,10 @@ final class ClingSyncMacUITests: XCTestCase {
         saveButton.tap()
         waitForElementToDisappear(saveButton)
 
-        openTrayMenu(app, expecting: "Manage Folders...")
+        openTrayMenu(app, expecting: "Settings")
         XCTAssertTrue(app.menuItems[displayName(for: config.localDir)].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.menuItems[displayName(for: config.secondLocalDir)].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Manage Folders..."].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.menuItems["Add Folder..."].firstMatch.exists)
+        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitForExistence(timeout: 5))
         dismissMenuBarMenu(in: app)
 
         openTrayMenu(app, expecting: displayName(for: config.secondLocalDir))
@@ -134,13 +137,13 @@ final class ClingSyncMacUITests: XCTestCase {
     }
 
     private func dismissMenuBarMenu(in app: XCUIApplication) {
-        if app.menuItems["Manage Folders..."].exists {
+        if app.menuItems["Settings"].exists {
             app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         }
     }
 
     private func clickWorkspaceMerge(_ app: XCUIApplication, localDir: String) {
-        openTrayMenu(app, expecting: "Merge Now")
+        openTrayMenu(app, expecting: "Merge")
         clickWorkspaceMergeMenuItem(for: localDir, in: app)
     }
 
@@ -150,10 +153,37 @@ final class ClingSyncMacUITests: XCTestCase {
         item.click()
     }
 
+    private func clickWorkspaceStatusMenuItem(for localDir: String, in app: XCUIApplication) {
+        let item = app.menuItems[workspaceStatusIdentifier(for: localDir)].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "status menu item not found for \(localDir)")
+        item.click()
+    }
+
     private func clickWorkspaceMergeMenuItem(for localDir: String, in app: XCUIApplication) {
         let item = app.menuItems[workspaceMergeIdentifier(for: localDir)].firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "merge menu item not found for \(localDir)")
         item.click()
+    }
+
+    private func waitForStatusToFinish(in app: XCUIApplication) {
+        let status = app.staticTexts["testStatusLabel"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
+
+        let predicate = NSPredicate(
+            format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
+            "added",
+            "No changes",
+            "added",
+            "No changes",
+        )
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: status)
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 30), .completed)
+    }
+
+    private func closeStatusProgressWindow(in app: XCUIApplication) {
+        let closeButton = app.buttons["Close"]
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "Close button not found in status progress window")
+        closeButton.tap()
     }
 
     private func waitForMergeToFinish(in app: XCUIApplication) {
@@ -222,6 +252,10 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func displayName(for path: String) -> String {
         URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private func workspaceStatusIdentifier(for path: String) -> String {
+        "workspace.status.\(path)"
     }
 
     private func workspaceMergeIdentifier(for path: String) -> String {

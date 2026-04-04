@@ -363,6 +363,45 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
+	case "startStatusWorkspace":
+		var params struct {
+			LocalPath     string `json:"localPath"`
+			Password      string `json:"password"`
+			StorePassword bool   `json:"storePassword"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		err := StartStatusWorkspace(params.LocalPath, params.Password, params.StorePassword)
+		if err != nil {
+			if errors.Is(err, ErrPassphraseRequired) {
+				return errorResponseWithCode(err.Error(), "passphrase_required")
+			}
+			if errors.Is(err, ErrStatusAlreadyRunning) {
+				return errorResponseWithCode(err.Error(), "status_already_running")
+			}
+			return errorResponse(err.Error())
+		}
+		response := struct {
+			Success bool `json:"success"`
+		}{Success: true}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "getStatusWorkspaceStatus":
+		var params struct {
+			LocalPath string `json:"localPath"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		jsonBytes, err := json.Marshal(GetStatusWorkspaceStatus(params.LocalPath))
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
 	default:
 		return errorResponse(fmt.Sprintf("Unknown command: %s", command))
 	}

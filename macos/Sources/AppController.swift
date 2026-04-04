@@ -20,6 +20,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     @Published var lastResultMessage = ""
     @Published var mergeStatusesByPath: [String: MergeWorkspaceStatus] = [:]
     @Published var mergeShowsDetailsByPath: [String: Bool] = [:]
+    @Published var statusStatusesByPath: [String: StatusWorkspaceStatus] = [:]
+    @Published var statusShowsDetailsByPath: [String: Bool] = [:]
 
     private let defaults: UserDefaults
     private let workspaceConfigsKey = "workspaceConfigs"
@@ -30,8 +32,11 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     private var testStatusLabel: NSTextField?
     private var mergeProgressWindow: NSWindow?
     private var mergeProgressWorkspaceID: UUID?
+    private var statusProgressWindow: NSWindow?
+    private var statusProgressWorkspaceID: UUID?
     private var statusMenuItem: NSMenuItem?
     private var mergePollTask: Task<Void, Never>?
+    private var statusPollTask: Task<Void, Never>?
 
     private var menuBuilder: AppMenuBuilder {
         AppMenuBuilder(controller: self)
@@ -174,6 +179,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func showPreferences() {
+        if workspaceConfigs.isEmpty {
+            let config = WorkspaceConfig()
+            workspaceConfigs.append(config)
+            persistWorkspaceConfigs()
+            selectedWorkspaceID = config.id
+            draftConfig = config
+        }
         if let window = preferencesWindow {
             updateDraftFromSelection()
             refreshMenu()
@@ -183,7 +195,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
         let hostingController = NSHostingController(rootView: PreferencesView(controller: self))
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "Cling Sync Folders"
+        window.title = "Cling Sync Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 860, height: 500))
         window.center()
@@ -222,6 +234,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         window.setContentSize(NSSize(width: 760, height: 420))
         window.minSize = NSSize(width: 640, height: 320)
         window.center()
+        window.level = .floating
         window.isReleasedWhenClosed = false
         window.delegate = self
         mergeProgressWindow = window
@@ -233,6 +246,43 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         mergeProgressWindow?.close()
         mergeProgressWindow = nil
         mergeProgressWorkspaceID = nil
+    }
+
+    func showStatusProgressWindow(for workspace: WorkspaceConfig) {
+        statusProgressWorkspaceID = workspace.id
+        if let window = statusProgressWindow,
+            let hostingController = window.contentViewController as? NSHostingController<StatusProgressView>
+        {
+            hostingController.rootView = StatusProgressView(controller: self, workspace: workspace)
+            window.title = workspace.displayName + " Status"
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let hostingController = NSHostingController(
+            rootView: StatusProgressView(controller: self, workspace: workspace))
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = workspace.displayName + " Status"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 760, height: 420))
+        window.minSize = NSSize(width: 640, height: 320)
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        statusProgressWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeStatusProgressWindow() {
+        if let id = statusProgressWorkspaceID, let workspace = workspace(for: id) {
+            statusStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
+        }
+        statusProgressWindow?.close()
+        statusProgressWindow = nil
+        statusProgressWorkspaceID = nil
     }
 
     func chooseLocalDirectory() {
@@ -400,6 +450,25 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func setMergeShowsDetails(_ showsDetails: Bool, for workspace: WorkspaceConfig) {
         mergeShowsDetailsByPath[workspace.normalizedLocalDirectory] = showsDetails
+    }
+
+    func statusStatus(for workspace: WorkspaceConfig) -> StatusWorkspaceStatus {
+        statusStatusesByPath[workspace.normalizedLocalDirectory]
+            ?? StatusWorkspaceStatus(
+                running: false,
+                completed: false,
+                statusMessage: "",
+                detailedOutput: "",
+                errorMessage: ""
+            )
+    }
+
+    func statusShowsDetails(for workspace: WorkspaceConfig) -> Bool {
+        statusShowsDetailsByPath[workspace.normalizedLocalDirectory] ?? false
+    }
+
+    func setStatusShowsDetails(_ showsDetails: Bool, for workspace: WorkspaceConfig) {
+        statusShowsDetailsByPath[workspace.normalizedLocalDirectory] = showsDetails
     }
 
     func mergeStatusText(for workspace: WorkspaceConfig) -> String {
@@ -655,6 +724,119 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
+    // MARK: - Status
+
+    func startStatusFromMenu(_ workspace: WorkspaceConfig) async {
+        guard !statusStatus(for: workspace).running else { return }
+        errorMessage = ""
+        do {
+            try await startStatusWorkspace(workspace, password: nil, storePassword: false)
+        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+            guard let prompt = promptForPassphrase(for: workspace) else { return }
+            do {
+                try await startStatusWorkspace(
+                    workspace,
+                    password: prompt.passphrase,
+                    storePassword: prompt.rememberInKeychain,
+                )
+            } catch {
+                showAlert(
+                    title: "Status Failed",
+                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                )
+            }
+        } catch {
+            showAlert(
+                title: "Status Failed",
+                message: (error as? BridgeError)?.message ?? error.localizedDescription,
+            )
+        }
+    }
+
+    func startStatusWorkspace(_ workspace: WorkspaceConfig, password: String?, storePassword: Bool) async throws {
+        let runningStatus = StatusWorkspaceStatus(
+            running: true,
+            completed: false,
+            statusMessage: "Scanning workspace...",
+            detailedOutput: "",
+            errorMessage: ""
+        )
+        statusStatusesByPath[workspace.normalizedLocalDirectory] = runningStatus
+        refreshMenu()
+        showStatusProgressWindow(for: workspace)
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.startStatusWorkspace(
+                localPath: workspace.normalizedLocalDirectory,
+                password: password,
+                storePassword: storePassword,
+            )
+        }.value
+        beginStatusPolling()
+    }
+
+    func beginStatusPolling() {
+        guard statusPollTask == nil else { return }
+        statusPollTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await self.pollStatusStatuses()
+                if !self.hasActiveStatuses {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            await MainActor.run {
+                self.statusPollTask = nil
+                self.refreshMenu()
+            }
+        }
+    }
+
+    var hasActiveStatuses: Bool {
+        statusStatusesByPath.values.contains(where: { $0.running })
+    }
+
+    func pollStatusStatuses() async {
+        let workspaces = workspaceConfigs
+        var statuses: [String: StatusWorkspaceStatus] = [:]
+        for workspace in workspaces {
+            let localPath = workspace.normalizedLocalDirectory
+            guard !localPath.isEmpty else { continue }
+            do {
+                let status = try await Task.detached(priority: .userInitiated) {
+                    try Bridge.getStatusWorkspaceStatus(localPath: localPath)
+                }.value
+                if status.running || status.completed || !status.statusMessage.isEmpty || !status.errorMessage.isEmpty {
+                    statuses[localPath] = status
+                }
+            } catch {
+                statuses[localPath] = StatusWorkspaceStatus(
+                    running: false,
+                    completed: true,
+                    statusMessage: "Status failed",
+                    detailedOutput: "",
+                    errorMessage: (error as? BridgeError)?.message ?? error.localizedDescription
+                )
+            }
+        }
+        await MainActor.run {
+            let previousStatuses = statusStatusesByPath
+            statusStatusesByPath = statuses
+            for workspace in workspaceConfigs {
+                let localPath = workspace.normalizedLocalDirectory
+                guard let status = statuses[localPath], status.completed else { continue }
+                let previous = previousStatuses[localPath]
+                if previous?.running == true || previous?.statusMessage != status.statusMessage {
+                    if !status.errorMessage.isEmpty {
+                        showAlert(title: "Status Failed", message: status.errorMessage)
+                    }
+                    lastResultMessage = "\(workspace.displayName): \(status.statusMessage)"
+                }
+            }
+            refreshMenu()
+        }
+    }
+
     func promptForPassphrase(for workspace: WorkspaceConfig) -> PassphrasePromptResult? {
         while true {
             let alert = NSAlert()
@@ -715,9 +897,22 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         alert.runModal()
     }
 
+    @objc func handleStatusWorkspace(_ sender: NSMenuItem) {
+        guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
+        let status = statusStatus(for: workspace)
+        if status.running || status.completed {
+            showStatusProgressWindow(for: workspace)
+        } else {
+            Task { await startStatusFromMenu(workspace) }
+        }
+    }
     @objc func handleMergeWorkspace(_ sender: NSMenuItem) {
         guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
-        Task { await startMergeFromMenu(workspace) }
+        if mergeStatus(for: workspace).running {
+            showMergeProgressWindow(for: workspace)
+        } else {
+            Task { await startMergeFromMenu(workspace) }
+        }
     }
     @objc func handleOpenMergeProgress(_ sender: NSMenuItem) {
         guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }

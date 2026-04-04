@@ -20,13 +20,14 @@ import (
 
 const keychainService = "com.cling.sync"
 
-const maxMergeOutputBytes = 16 * 1024
+const maxOutputBytes = 16 * 1024
 
 var ErrPassphraseRequired = lib.Errorf("passphrase required")
 
 var (
-	ErrMergeAlreadyRunning = lib.Errorf("merge already running")
-	ErrMergeNotRunning     = lib.Errorf("merge not running")
+	ErrMergeAlreadyRunning  = lib.Errorf("merge already running")
+	ErrMergeNotRunning      = lib.Errorf("merge not running")
+	ErrStatusAlreadyRunning = lib.Errorf("status already running")
 )
 
 type WorkspaceInfo struct {
@@ -57,6 +58,16 @@ type mergeWorkspaceState struct {
 
 //nolint:gochecknoglobals,exhaustruct
 var mergeWorkspaceStateStore = struct {
+	mu     sync.Mutex
+	states map[string]*mergeWorkspaceState
+}{states: map[string]*mergeWorkspaceState{}}
+
+// StatusWorkspaceStatus is the status of a workspace status operation.
+// We reuse the same struct shape as MergeWorkspaceStatus.
+type StatusWorkspaceStatus = MergeWorkspaceStatus
+
+//nolint:gochecknoglobals,exhaustruct
+var statusWorkspaceStateStore = struct {
 	mu     sync.Mutex
 	states map[string]*mergeWorkspaceState
 }{states: map[string]*mergeWorkspaceState{}}
@@ -173,6 +184,109 @@ func ClearWorkspacePassphrase(hostURL string) error {
 	return nil
 }
 
+func StartStatusWorkspace(localPath, password string, storePassword bool) error {
+	localPath = normalizeWorkspacePath(localPath)
+	password, err := prepareMergeWorkspaceAccess(localPath, password, storePassword)
+	if err != nil {
+		return err
+	}
+
+	statusWorkspaceStateStore.mu.Lock()
+	if state := statusWorkspaceStateStore.states[localPath]; state != nil && state.snapshot().Running {
+		statusWorkspaceStateStore.mu.Unlock()
+		return ErrStatusAlreadyRunning
+	}
+	state := &mergeWorkspaceState{status: MergeWorkspaceStatus{ //nolint:exhaustruct
+		Running:       true,
+		StatusMessage: "Scanning workspace...",
+	}}
+	statusWorkspaceStateStore.states[localPath] = state
+	statusWorkspaceStateStore.mu.Unlock()
+
+	go runStatusWorkspace(localPath, password, state)
+	return nil
+}
+
+func GetStatusWorkspaceStatus(localPath string) StatusWorkspaceStatus {
+	localPath = normalizeWorkspacePath(localPath)
+	statusWorkspaceStateStore.mu.Lock()
+	state := statusWorkspaceStateStore.states[localPath]
+	statusWorkspaceStateStore.mu.Unlock()
+	if state == nil {
+		return StatusWorkspaceStatus{}
+	}
+	return state.snapshot()
+}
+
+func runStatusWorkspace(localPath, password string, state *mergeWorkspaceState) {
+	result, err := statusWorkspaceSync(localPath, password, state)
+	status := StatusWorkspaceStatus{Completed: true} //nolint:exhaustruct
+	switch {
+	case err != nil:
+		status.StatusMessage = "Status failed"
+		status.ErrorMessage = err.Error()
+	default:
+		status.StatusMessage = result
+	}
+	state.setStatus(status)
+}
+
+func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState) (_ string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = lib.Errorf("panic: %v", r)
+		}
+	}()
+
+	ws, err := openWorkspace(localPath)
+	if err != nil {
+		return "", err
+	}
+	defer ws.Close() //nolint:errcheck
+
+	repository, err := openWorkspaceRepository(ws, password)
+	if err != nil {
+		return "", err
+	}
+
+	progressEmit := func(text string) { state.setRunningMessage(text) }
+	verboseEmit := func(text string) { state.appendOutput(text) }
+	stagingMonitor := &asyncStagingMonitor{
+		progress: workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeProgress, nil, progressEmit),
+		verbose:  workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeVerbose, nil, verboseEmit),
+	}
+
+	tmpFS := lib.NewMemoryFS(500_000_000)
+	opts := &workspace.StatusOptions{
+		Monitor:                stagingMonitor,
+		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
+		UseStagingCache:        true,
+	}
+	statusFiles, err := workspace.Status(ws, repository, opts, tmpFS)
+	if err != nil {
+		return "", err
+	}
+
+	summary := statusFiles.Summary()
+	var output strings.Builder
+	for _, f := range statusFiles {
+		output.WriteString(f.Format())
+		output.WriteByte('\n')
+	}
+	if output.Len() > 0 {
+		output.WriteString("\n")
+	}
+	output.WriteString(summary)
+	// Replace scan output with status results.
+	state.mu.Lock()
+	state.detailedOutput = output.String()
+	state.status.DetailedOutput = state.detailedOutput
+	state.status.StatusMessage = summary
+	state.mu.Unlock()
+
+	return summary, nil
+}
+
 func TestWorkspaceAccess(localPath, password string) error {
 	ws, err := openWorkspace(localPath)
 	if err != nil {
@@ -205,7 +319,7 @@ func MergeWorkspace(localPath, password, author, message string) (string, bool, 
 		CommitMonitor:          workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
 		Author:                 author,
 		Message:                message,
-		RestorableMetadataFlag: lib.RestorableMetadataAll,
+		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	}
 	revisionID, err := workspace.Merge(ws, repository, opts)
@@ -364,7 +478,7 @@ func mergeWorkspaceAsync( //nolint:funlen
 		CommitMonitor:          commit,
 		Author:                 author,
 		Message:                message,
-		RestorableMetadataFlag: lib.RestorableMetadataAll,
+		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	})
 	if errors.Is(err, workspace.ErrUpToDate) {
@@ -520,8 +634,8 @@ func (s *mergeWorkspaceState) appendOutput(text string) {
 	} else {
 		s.detailedOutput += "\n" + text
 	}
-	if len(s.detailedOutput) > maxMergeOutputBytes {
-		s.detailedOutput = s.detailedOutput[len(s.detailedOutput)-maxMergeOutputBytes:]
+	if len(s.detailedOutput) > maxOutputBytes {
+		s.detailedOutput = s.detailedOutput[len(s.detailedOutput)-maxOutputBytes:]
 		if idx := strings.IndexByte(s.detailedOutput, '\n'); idx >= 0 {
 			s.detailedOutput = s.detailedOutput[idx+1:]
 		}

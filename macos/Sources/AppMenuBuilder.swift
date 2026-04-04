@@ -9,6 +9,10 @@ struct AppMenuBuilder {
             NSUserInterfaceItemIdentifier("workspace.menu.\(workspace.normalizedLocalDirectory)")
         }
 
+        static func status(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
+            NSUserInterfaceItemIdentifier("workspace.status.\(workspace.normalizedLocalDirectory)")
+        }
+
         static func merge(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
             NSUserInterfaceItemIdentifier("workspace.merge.\(workspace.normalizedLocalDirectory)")
         }
@@ -17,13 +21,6 @@ struct AppMenuBuilder {
             NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.normalizedLocalDirectory)")
         }
 
-        static func edit(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.edit.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func remove(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.remove.\(workspace.normalizedLocalDirectory)")
-        }
     }
 
     func buildRootMenu() -> NSMenu {
@@ -79,7 +76,7 @@ struct AppMenuBuilder {
         }
 
         let manageItem = NSMenuItem(
-            title: "Manage Folders...",
+            title: "Settings",
             action: #selector(AppController.handleOpenPreferences),
             keyEquivalent: ",",
         )
@@ -112,18 +109,27 @@ struct AppMenuBuilder {
         menu.addItem(pathItem)
         menu.addItem(.separator())
 
-        if !controller.mergeStatus(for: workspace).running {
-            let mergeItem = NSMenuItem(
-                title: "Merge Now",
-                action: #selector(AppController.handleMergeWorkspace(_:)),
-                keyEquivalent: "",
-            )
-            mergeItem.target = controller
-            mergeItem.representedObject = workspace.id.uuidString
-            mergeItem.isEnabled = !controller.isSaving && !controller.isTesting
-            mergeItem.identifier = MenuItemID.merge(workspace)
-            menu.addItem(mergeItem)
-        }
+        let mergeItem = NSMenuItem(
+            title: "Merge",
+            action: #selector(AppController.handleMergeWorkspace(_:)),
+            keyEquivalent: "",
+        )
+        mergeItem.target = controller
+        mergeItem.representedObject = workspace.id.uuidString
+        mergeItem.isEnabled = !controller.isSaving && !controller.isTesting
+        mergeItem.identifier = MenuItemID.merge(workspace)
+        menu.addItem(mergeItem)
+
+        let statusItem = NSMenuItem(
+            title: "Status",
+            action: #selector(AppController.handleStatusWorkspace(_:)),
+            keyEquivalent: "",
+        )
+        statusItem.target = controller
+        statusItem.representedObject = workspace.id.uuidString
+        statusItem.isEnabled = !controller.isSaving && !controller.isTesting
+        statusItem.identifier = MenuItemID.status(workspace)
+        menu.addItem(statusItem)
 
         let openFolderItem = NSMenuItem(
             title: "Open Local Folder",
@@ -134,25 +140,5 @@ struct AppMenuBuilder {
         openFolderItem.representedObject = workspace.id.uuidString
         openFolderItem.identifier = MenuItemID.openFolder(workspace)
         menu.addItem(openFolderItem)
-
-        let editItem = NSMenuItem(
-            title: "Edit...",
-            action: #selector(AppController.handleEditWorkspace(_:)),
-            keyEquivalent: "",
-        )
-        editItem.target = controller
-        editItem.representedObject = workspace.id.uuidString
-        editItem.identifier = MenuItemID.edit(workspace)
-        menu.addItem(editItem)
-
-        let removeItem = NSMenuItem(
-            title: "Remove Folder",
-            action: #selector(AppController.handleRemoveWorkspace(_:)),
-            keyEquivalent: "",
-        )
-        removeItem.target = controller
-        removeItem.representedObject = workspace.id.uuidString
-        removeItem.identifier = MenuItemID.remove(workspace)
-        menu.addItem(removeItem)
     }
 }

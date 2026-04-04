@@ -1,18 +1,15 @@
 import SwiftUI
 
-struct MergeProgressView: View {
+struct StatusProgressView: View {
     @ObservedObject var controller: AppController
     let workspace: WorkspaceConfig
 
-    private let bottomAnchorID = "merge-output-bottom"
+    private let bottomAnchorID = "status-output-bottom"
 
     var body: some View {
-        let status = controller.mergeStatus(for: workspace)
-        let showsDetails = controller.mergeShowsDetails(for: workspace)
-        let statusText =
-            status.statusMessage.isEmpty
-            ? controller.lastMergeLabel(for: workspace)
-            : status.statusMessage
+        let status = controller.statusStatus(for: workspace)
+        let showsDetails = controller.statusShowsDetails(for: workspace)
+        let isRunning = status.running
 
         VStack(alignment: .leading, spacing: 16) {
             Text(workspace.displayName)
@@ -27,8 +24,8 @@ struct MergeProgressView: View {
             Toggle(
                 "Detailed Output",
                 isOn: Binding(
-                    get: { controller.mergeShowsDetails(for: workspace) },
-                    set: { controller.setMergeShowsDetails($0, for: workspace) }
+                    get: { controller.statusShowsDetails(for: workspace) },
+                    set: { controller.setStatusShowsDetails($0, for: workspace) }
                 ))
 
             ScrollViewReader { proxy in
@@ -38,17 +35,20 @@ struct MergeProgressView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Output")
                                     .font(.headline)
-                                Text(status.detailedOutput.isEmpty ? "No detailed output yet." : status.detailedOutput)
-                                    .font(.system(.body, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    status.detailedOutput.isEmpty
+                                        ? "No detailed output yet." : status.detailedOutput
+                                )
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Status")
                                     .font(.headline)
-                                Text(statusText)
+                                Text(status.statusMessage.isEmpty ? "Scanning..." : status.statusMessage)
                                     .font(.body.monospacedDigit())
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -87,17 +87,19 @@ struct MergeProgressView: View {
             }
 
             HStack {
-                if status.running {
+                if isRunning {
                     ProgressView()
                         .controlSize(.small)
                 }
                 Spacer()
-                Button("Cancel Merge") {
-                    controller.cancelMerge(workspace: workspace)
+                if status.completed && !controller.mergeStatus(for: workspace).running {
+                    Button("Merge") {
+                        controller.closeStatusProgressWindow()
+                        Task { await controller.startMergeFromMenu(workspace) }
+                    }
                 }
-                .disabled(!status.running || !status.canCancel)
                 Button("Close") {
-                    controller.closeMergeProgressWindow()
+                    controller.closeStatusProgressWindow()
                 }
                 .keyboardShortcut(.defaultAction)
             }

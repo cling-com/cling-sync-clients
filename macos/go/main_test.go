@@ -65,10 +65,26 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 	assert.Equal("hello from remote", mustReadFile(t, filepath.Join(localDir, "remote.txt")))
 	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
 
-	t.Log("Adding local file and syncing back to repository")
+	t.Log("Adding local file and checking status before merge")
 	localContents := []byte("hello from local")
 	writeErr := os.WriteFile(filepath.Join(localDir, "local.txt"), localContents, 0o600)
 	assert.NoError(writeErr)
+
+	// Run status and verify the new file is detected.
+	assert.NoError(bridgepkg.StartStatusWorkspace(localDir, "", false))
+	var statusResult bridgepkg.StatusWorkspaceStatus
+	for range 100 {
+		statusResult = bridgepkg.GetStatusWorkspaceStatus(localDir)
+		if statusResult.Completed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.Equal(true, statusResult.Completed)
+	assert.Equal("", statusResult.ErrorMessage)
+	assert.Contains(statusResult.StatusMessage, "1 added")
+	assert.Contains(statusResult.DetailedOutput, "local.txt")
+
 	_, upToDate, err = bridgepkg.MergeWorkspace(localDir, "", "Mac Test User", "second macOS test sync")
 	assert.NoError(err)
 	assert.Equal(false, upToDate)

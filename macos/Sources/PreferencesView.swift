@@ -17,9 +17,10 @@ struct PreferencesView: View {
     }
 
     private var workspaceListPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Folders")
                 .font(.headline)
+                .padding(.bottom, 8)
 
             List(selection: selectedWorkspaceBinding) {
                 ForEach(controller.workspaceConfigs) { workspace in
@@ -30,20 +31,32 @@ struct PreferencesView: View {
             .accessibilityIdentifier("workspaceList")
             .frame(minWidth: 240)
 
-            HStack {
-                Button("Remove Folder") {
-                    controller.removeSelectedWorkspace()
-                }
-                .accessibilityIdentifier("removeFolderButton")
-                .disabled(controller.selectedWorkspaceID == nil)
+            Divider()
 
-                Button("Add Folder") {
+            HStack(spacing: 0) {
+                Button {
                     controller.addWorkspace()
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 24, height: 24)
                 }
                 .accessibilityIdentifier("addFolderButton")
+                .buttonStyle(.borderless)
+
+                Button {
+                    controller.removeSelectedWorkspace()
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 24, height: 24)
+                }
+                .accessibilityIdentifier("removeFolderButton")
+                .buttonStyle(.borderless)
+                .disabled(controller.selectedWorkspaceID == nil)
 
                 Spacer()
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
         }
         .padding(18)
     }
@@ -83,11 +96,6 @@ struct PreferencesView: View {
                     TextField("Commit author", text: $controller.draftConfig.author)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("authorField")
-                }
-                GridRow {
-                    Text("Last Merge")
-                    Text(controller.lastMergeLabel(for: controller.draftConfig))
-                        .foregroundStyle(.secondary)
                 }
             }
 

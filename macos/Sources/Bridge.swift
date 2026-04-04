@@ -21,6 +21,14 @@ struct MergeWorkspaceStatus {
     let errorMessage: String
 }
 
+struct StatusWorkspaceStatus {
+    let running: Bool
+    let completed: Bool
+    let statusMessage: String
+    let detailedOutput: String
+    let errorMessage: String
+}
+
 struct WorkspaceInspection {
     let exists: Bool
     let hostURL: String
@@ -109,6 +117,32 @@ enum Bridge {
 
     static func cancelMergeWorkspace(localPath: String) throws {
         _ = try execute(command: "cancelMergeWorkspace", params: ["localPath": localPath])
+    }
+
+    static func startStatusWorkspace(
+        localPath: String,
+        password: String?,
+        storePassword: Bool,
+    ) throws {
+        var params: [String: Any] = [
+            "localPath": localPath,
+            "storePassword": storePassword,
+        ]
+        if let password {
+            params["password"] = password
+        }
+        _ = try execute(command: "startStatusWorkspace", params: params)
+    }
+
+    static func getStatusWorkspaceStatus(localPath: String) throws -> StatusWorkspaceStatus {
+        let result = try execute(command: "getStatusWorkspaceStatus", params: ["localPath": localPath])
+        return StatusWorkspaceStatus(
+            running: result["running"] as? Bool ?? false,
+            completed: result["completed"] as? Bool ?? false,
+            statusMessage: result["statusMessage"] as? String ?? "",
+            detailedOutput: result["detailedOutput"] as? String ?? "",
+            errorMessage: result["errorMessage"] as? String ?? ""
+        )
     }
 
     private static func execute(command: String, params: [String: Any]) throws -> [String: Any] {
