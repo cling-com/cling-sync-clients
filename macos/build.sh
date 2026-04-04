@@ -75,6 +75,10 @@ usage() {
     echo
     echo "  clean"
     echo "      Clean build artifacts"
+    echo
+    echo "  deploy_new_version"
+    echo "      Build universal release with incremented build number and upload"
+    echo "      to App Store Connect. Reads API credentials from project root .env."
     exit 1
 }
 
@@ -127,6 +131,43 @@ build_go() {
     CGO_LDFLAGS="-mmacosx-version-min=13.0" \
     CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
     go build $build_tags_args -buildmode=c-archive -o "$root/build/go/gobridge.a" ./...
+    cd "$root"
+}
+
+build_go_universal() {
+    echo ">>> Building universal Go bridge (arm64 + amd64)"
+    mkdir -p "$root/build/go"
+    cd "$root/go"
+    build_tags_args=""
+    if [ -n "${CLING_SYNC_GO_BUILD_TAGS:-}" ]; then
+        build_tags_args="-tags ${CLING_SYNC_GO_BUILD_TAGS}"
+    fi
+
+    echo "    Building arm64..."
+    MACOSX_DEPLOYMENT_TARGET=13.0 \
+    CGO_CFLAGS="-mmacosx-version-min=13.0" \
+    CGO_LDFLAGS="-mmacosx-version-min=13.0" \
+    CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+    go build $build_tags_args -buildmode=c-archive -o "$root/build/go/gobridge-arm64.a" ./...
+
+    echo "    Building amd64..."
+    MACOSX_DEPLOYMENT_TARGET=13.0 \
+    CGO_CFLAGS="-mmacosx-version-min=13.0 -target x86_64-apple-macos13.0" \
+    CGO_LDFLAGS="-mmacosx-version-min=13.0 -target x86_64-apple-macos13.0" \
+    CC="clang -target x86_64-apple-macos13.0" \
+    CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+    go build $build_tags_args -buildmode=c-archive -o "$root/build/go/gobridge-amd64.a" ./...
+
+    echo "    Creating universal binary..."
+    lipo -create \
+        "$root/build/go/gobridge-arm64.a" \
+        "$root/build/go/gobridge-amd64.a" \
+        -output "$root/build/go/gobridge.a"
+    # Use the arm64 header (identical across architectures).
+    cp "$root/build/go/gobridge-arm64.h" "$root/build/go/gobridge.h"
+    rm -f "$root/build/go/gobridge-arm64.a" "$root/build/go/gobridge-amd64.a" \
+          "$root/build/go/gobridge-arm64.h" "$root/build/go/gobridge-amd64.h"
+
     cd "$root"
 }
 
@@ -191,6 +232,95 @@ integration_test_xcuitest() {
         -default-test-execution-time-allowance 30 \
         -maximum-test-execution-time-allowance 90 \
         test
+}
+
+development_team_id="253W4734C9"
+
+build_release() {
+    echo ">>> Building macOS app for App Store"
+    sync_icon
+
+    # Increment build number if requested.
+    if [ $# -gt 0 ] && [ "$1" = "--inc-build-number" ]; then
+        cd "$root"
+        current_build=$(xcrun agvtool what-version -terse)
+        xcrun agvtool next-version -all 2>/dev/null
+        new_build=$(xcrun agvtool what-version -terse)
+        echo ">>> Build number: $current_build -> $new_build"
+    fi
+
+    build_go_universal
+
+    rm -rf build/ClingSyncMac.xcarchive build/export
+
+    echo ">>> Creating archive..."
+    run_xcodebuild xcodebuild-archive.log \
+        archive \
+        -project "$xcode_project" \
+        -scheme "$xcode_scheme" \
+        -configuration Release \
+        -destination 'generic/platform=macOS' \
+        -archivePath build/ClingSyncMac.xcarchive \
+        CODE_SIGNING_ALLOWED=YES \
+        CODE_SIGN_STYLE=Automatic \
+        CODE_SIGN_ENTITLEMENTS=ClingSyncMac.entitlements \
+        ENABLE_HARDENED_RUNTIME=YES \
+        DEVELOPMENT_TEAM="$development_team_id" \
+        -allowProvisioningUpdates
+
+    echo ">>> Exporting for App Store..."
+    PATH="/usr/bin:$PATH" run_xcodebuild xcodebuild-export.log \
+        -exportArchive \
+        -archivePath build/ClingSyncMac.xcarchive \
+        -exportPath build/export \
+        -exportOptionsPlist ExportOptions.plist \
+        -allowProvisioningUpdates
+
+    echo ">>> Build complete"
+    echo "    Archive: build/ClingSyncMac.xcarchive"
+    echo "    PKG:     build/export/"
+}
+
+load_env() {
+    env_file="$root/../.env"
+    if [ ! -f "$env_file" ]; then
+        echo "Error: .env file not found at $env_file"
+        exit 1
+    fi
+    set -a
+    . "$env_file"
+    set +a
+}
+
+deploy_new_version() {
+    load_env
+
+    if [ -z "${APP_STORE_CONNECT_API_KEY:-}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
+        echo "Error: APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID must be set in .env"
+        exit 1
+    fi
+
+    build_release --inc-build-number
+
+    pkg=$(find "$root/build/export" -name "*.pkg" | head -1)
+    if [ -z "$pkg" ]; then
+        echo "Error: No .pkg found in build/export/"
+        exit 1
+    fi
+
+    echo ">>> Validating package..."
+    xcrun altool --validate-app \
+        -f "$pkg" \
+        --api-key "$APP_STORE_CONNECT_API_KEY" \
+        --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+    echo ">>> Uploading to App Store Connect..."
+    xcrun altool --upload-app \
+        -f "$pkg" \
+        --api-key "$APP_STORE_CONNECT_API_KEY" \
+        --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+    echo ">>> Upload complete. Check App Store Connect for processing status."
 }
 
 run_app() {
@@ -261,6 +391,9 @@ case "$cmd" in
         ;;
     clean)
         clean
+        ;;
+    deploy_new_version)
+        deploy_new_version
         ;;
     *)
         echo "Unknown command: $cmd"

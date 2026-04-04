@@ -29,6 +29,22 @@ if [ $# -eq 0 ]; then
     echo "            --inc-build-number increment the build number before building"
     echo "        all               - build everything (default)"
     echo
+    echo "  deploy_new_version"
+    echo "      Build with incremented build number and upload to App Store Connect."
+    echo "      Reads APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID from"
+    echo "      the project root .env file."
+    echo
+    echo "  App Store Connect API Key Setup:"
+    echo "    1. Go to https://appstoreconnect.apple.com/access/integrations/api"
+    echo "    2. Create a new key with 'App Manager' role"
+    echo "    3. Note the Issuer ID and Key ID"
+    echo "    4. Download the .p8 file"
+    echo "    5. mkdir -p ~/.appstoreconnect/private_keys"
+    echo "    6. mv AuthKey_<KeyID>.p8 ~/.appstoreconnect/private_keys/"
+    echo "    7. Add to project root .env file:"
+    echo "       APP_STORE_CONNECT_API_KEY=<KeyID>"
+    echo "       APP_STORE_CONNECT_ISSUER_ID=<IssuerID>"
+    echo
     echo "  fmt"
     echo "      Format code"
     echo
@@ -148,32 +164,26 @@ build_go() {
 #   $1: "--inc-build-number" to increment the build number before building (optional).
 build_app() {
     echo ">>> Building iOS app archive for App Store"
-    
+
     # Increment build number if requested.
     if [ $# -gt 0 ] && [ "$1" == "--inc-build-number" ]; then
-        echo ">>> Incrementing build number..."
-        
-        # Use agvtool to increment the build number.
-        # This works with modern Xcode projects that don't have Info.plist files.
         cd "$root"
-        
-        # Get current version and increment it.
         local current_build=$(xcrun agvtool what-version -terse)
-    xcrun agvtool next-version -all
+        xcrun agvtool next-version -all 2>/dev/null
         local new_build=$(xcrun agvtool what-version -terse)
-        
         echo ">>> Build number: $current_build -> $new_build"
     fi
-    
+
     # Build Go library for device first.
     build_go
-    
+
     # Clean build folder.
-    rm -rf build/ClingSync.xcarchive
-    
+    rm -rf build/ClingSync.xcarchive build/export
+
     # Create archive.
     echo ">>> Creating archive..."
     run_xcodebuild xcodebuild-archive.log \
+        archive \
         -project ClingSync.xcodeproj \
         -scheme ClingSync \
         -configuration Release \
@@ -181,24 +191,63 @@ build_app() {
         -archivePath build/ClingSync.xcarchive \
         CODE_SIGN_STYLE=Automatic \
         DEVELOPMENT_TEAM="$development_team_id"
-    
-    # Export archive for App Store.
-    echo ">>> Exporting archive for App Store..."
-    
-    run_xcodebuild xcodebuild-export.log \
+
+    # Export IPA for App Store.
+    # Use system PATH to avoid Homebrew rsync incompatibility with Xcode's export.
+    echo ">>> Exporting IPA for App Store..."
+    PATH="/usr/bin:$PATH" run_xcodebuild xcodebuild-export.log \
         -exportArchive \
         -archivePath build/ClingSync.xcarchive \
         -exportPath build/export \
-        -exportOptionsPlist build/ExportOptions.plist
-    
-    echo ">>> Successfully created App Store archive"
-    echo "    Archive location: build/ClingSync.xcarchive"
-    echo "    IPA location: build/export/ClingSync.ipa"
+        -exportOptionsPlist ExportOptions.plist
+
+    echo ">>> Build complete"
+    echo "    Archive: build/ClingSync.xcarchive"
+    echo "    IPA:     build/export/ClingSync.ipa"
+}
+
+load_env() {
+    local env_file="$root/../.env"
+    if [ ! -f "$env_file" ]; then
+        echo "Error: .env file not found at $env_file"
+        echo "Run './build.sh' for setup instructions."
+        exit 1
+    fi
+    set -a
+    . "$env_file"
+    set +a
+}
+
+deploy_new_version() {
+    load_env
+
+    if [ -z "${APP_STORE_CONNECT_API_KEY:-}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
+        echo "Error: APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID must be set in .env"
+        echo "Run './build.sh' for setup instructions."
+        exit 1
+    fi
+
+    build_app --inc-build-number
+
+    local ipa="$root/build/export/ClingSync.ipa"
+
+    echo ">>> Validating IPA..."
+    xcrun altool --validate-app \
+        -f "$ipa" \
+        --api-key "$APP_STORE_CONNECT_API_KEY" \
+        --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+    echo ">>> Uploading IPA to App Store Connect..."
+    xcrun altool --upload-app \
+        -f "$ipa" \
+        --api-key "$APP_STORE_CONNECT_API_KEY" \
+        --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+    echo ">>> Upload complete. Check App Store Connect for processing status."
 }
 
 build_all() {
-    build_go 
-    build_app
+    build_go
 }
 
 # Install and launch the app.
@@ -408,6 +457,9 @@ case "$cmd" in
                 exit 1
                 ;;
         esac
+        ;;
+    deploy_new_version)
+        deploy_new_version
         ;;
     fmt)
         fmt

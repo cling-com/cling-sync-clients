@@ -191,7 +191,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\ncd \"$PROJECT_DIR/go\"\nmkdir -p ../build/go\nbuild_tags_args=\"\"\nif [ -n \"${CLING_SYNC_GO_BUILD_TAGS:-}\" ]; then\n  build_tags_args=\"-tags ${CLING_SYNC_GO_BUILD_TAGS}\"\nfi\nMACOSX_DEPLOYMENT_TARGET=13.0 \\\nCGO_CFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_LDFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \\\ngo build $build_tags_args -buildmode=c-archive -o ../build/go/gobridge.a ./...\n";
+			shellScript = "set -eu\nif [ -f \"$PROJECT_DIR/build/go/gobridge.a\" ] && [ -f \"$PROJECT_DIR/build/go/gobridge.h\" ]; then\n  echo \"Go bridge already built, skipping.\"\n  exit 0\nfi\ncd \"$PROJECT_DIR/go\"\nmkdir -p ../build/go\nbuild_tags_args=\"\"\nif [ -n \"${CLING_SYNC_GO_BUILD_TAGS:-}\" ]; then\n  build_tags_args=\"-tags ${CLING_SYNC_GO_BUILD_TAGS}\"\nfi\nMACOSX_DEPLOYMENT_TARGET=13.0 \\\nCGO_CFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_LDFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \\\ngo build $build_tags_args -buildmode=c-archive -o ../build/go/gobridge.a ./...\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -337,9 +337,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 8;
+				DEVELOPMENT_TEAM = 253W4734C9;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -361,8 +363,9 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/build/go/gobridge.a",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSyncMac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/ClingSyncMac-Bridging-Header.h";
@@ -374,9 +377,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 8;
+				DEVELOPMENT_TEAM = 253W4734C9;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -398,8 +403,9 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/build/go/gobridge.a",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSyncMac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/ClingSyncMac-Bridging-Header.h";
@@ -410,9 +416,9 @@
 		A10000212F70000100000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_IDENTITY = "-";
+				CURRENT_PROJECT_VERSION = 8;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
@@ -428,9 +434,9 @@
 		A10000222F70000100000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_IDENTITY = "-";
+				CURRENT_PROJECT_VERSION = 8;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;

@@ -258,13 +258,14 @@ func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState)
 
 	tmpFS := lib.NewMemoryFS(500_000_000)
 	opts := &workspace.StatusOptions{
+		PathFilter:             nil,
 		Monitor:                stagingMonitor,
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	}
 	statusFiles, err := workspace.Status(ws, repository, opts, tmpFS)
 	if err != nil {
-		return "", err
+		return "", lib.WrapErrorf(err, "failed to get workspace status")
 	}
 
 	summary := statusFiles.Summary()
