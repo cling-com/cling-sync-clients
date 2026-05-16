@@ -121,6 +121,7 @@ sync_icon() {
 build_go() {
     echo ">>> Building Go bridge"
     mkdir -p "$root/build/go"
+    rm -f "$root/build/go/gobridge.a" "$root/build/go/gobridge.h"
     cd "$root/go"
     build_tags_args=""
     if [ -n "${CLING_SYNC_GO_BUILD_TAGS:-}" ]; then
@@ -137,6 +138,7 @@ build_go() {
 build_go_universal() {
     echo ">>> Building universal Go bridge (arm64 + amd64)"
     mkdir -p "$root/build/go"
+    rm -f "$root/build/go/gobridge.a" "$root/build/go/gobridge.h"
     cd "$root/go"
     build_tags_args=""
     if [ -n "${CLING_SYNC_GO_BUILD_TAGS:-}" ]; then
