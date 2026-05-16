@@ -49,19 +49,19 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	// Second commit (HEAD): uploaded IMG_0004.JPG to uitest/sub/.
 	shaImg0004 := sha256.Sum256([]byte("ui test image 4\n"))
 	assert.Equal([]lib.TestRevisionEntryInfo{
-		{"uitest/sub", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"uitest/sub/IMG_0004.JPG", lib.RevisionEntryAdd, 0o600, lib.Sha256(shaImg0004[:])},
+		{"uitest/sub", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"uitest/sub/IMG_0004.JPG", lib.RevisionEntryKindAdd, 0o600, lib.Sha256(shaImg0004[:])},
 	}, r.RevisionInfos(newHead))
 
-	revision, err := r.ReadRevision(newHead)
+	revision, err := r.ReadRevision(newHead, lib.NewBlockBuf())
 	assert.NoError(err)
-	assert.Equal("Testinger", revision.Author)
-	assert.Contains(revision.Message, "Backup 1 file")
+	assert.Equal("Testinger", *revision.Author)
+	assert.Contains(*revision.Message, "Backup 1 file")
 
 	// First commit (HEAD~1): uploaded IMG_0001.JPG to uitest/.
 	shaImg0001 := sha256.Sum256([]byte("ui test image 1\n"))
 	assert.Equal([]lib.TestRevisionEntryInfo{
-		{"uitest", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"uitest/IMG_0001.JPG", lib.RevisionEntryAdd, 0o600, lib.Sha256(shaImg0001[:])},
-	}, r.RevisionInfos(revision.Parent))
+		{"uitest", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"uitest/IMG_0001.JPG", lib.RevisionEntryKindAdd, 0o600, lib.Sha256(shaImg0001[:])},
+	}, r.RevisionInfos(revision.ParentRevisionId))
 }

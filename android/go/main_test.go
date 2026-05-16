@@ -83,22 +83,22 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 
 	// Most recent commit (HEAD): media file uploaded from ClingSyncTest.
 	assert.Equal([]lib.TestRevisionEntryInfo{
-		{"backup", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"backup/photo.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Test photo")},
+		{"backup", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/photo.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Test photo")},
 	}, r.RevisionInfos(newHead))
 
-	revision, err := r.ReadRevision(newHead)
+	revision, err := r.ReadRevision(newHead, lib.NewBlockBuf())
 	assert.NoError(err)
-	assert.Contains(revision.Message, "Backup 1 file")
-	assert.Equal("Testinger", revision.Author)
+	assert.Contains(*revision.Message, "Backup 1 file")
+	assert.Equal("Testinger", *revision.Author)
 
 	// Previous commit (HEAD~1): DCIM files.
 	assert.Equal([]lib.TestRevisionEntryInfo{
-		{"phone", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"phone/Camera", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"phone/Camera/blue_sky.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Blue sky")},
-		{"phone/Camera/red_earth.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Red earth")},
-		{"phone/Camera/vacation", lib.RevisionEntryAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"phone/Camera/vacation/sunset.jpg", lib.RevisionEntryAdd, 0o600, td.SHA256("Sunset")},
-	}, r.RevisionInfos(revision.Parent))
+		{"phone", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera/blue_sky.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Blue sky")},
+		{"phone/Camera/red_earth.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Red earth")},
+		{"phone/Camera/vacation", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"phone/Camera/vacation/sunset.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Sunset")},
+	}, r.RevisionInfos(revision.ParentRevisionId))
 }

@@ -33,6 +33,7 @@ final class ClingSyncMacUITests: XCTestCase {
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
         enterPassphraseIfNeeded(in: app, saveToKeychain: false)
+        assertNoPreferencesError(in: app, context: "after testWorkspace")
 
         let saveButton = app.buttons["saveWorkspaceButton"]
         XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
@@ -82,6 +83,7 @@ final class ClingSyncMacUITests: XCTestCase {
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
         enterPassphraseIfNeeded(in: app, saveToKeychain: false)
+        assertNoPreferencesError(in: app, context: "after testWorkspace (second workspace)")
 
         let saveButton = app.buttons["saveWorkspaceButton"]
         waitForButtonToEnable(saveButton)
@@ -169,15 +171,31 @@ final class ClingSyncMacUITests: XCTestCase {
         let status = app.staticTexts["testStatusLabel"]
         XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
 
-        let predicate = NSPredicate(
+        // Race the success predicate against the error label so a failure
+        // surfaces with the actual error text instead of timing out.
+        let successPredicate = NSPredicate(
             format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
             "added",
             "No changes",
             "added",
             "No changes",
         )
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: status)
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 30), .completed)
+        let errorLabel = app.staticTexts["statusErrorMessage"]
+        let result = waitForFirstMatch(
+            success: successPredicate,
+            successObject: status,
+            failure: existsPredicate(),
+            failureObject: errorLabel,
+            timeout: 30,
+        )
+        switch result {
+        case .success:
+            return
+        case .failure:
+            XCTFail("status failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+        case .timeout:
+            XCTFail("status did not finish in time; last status: \(status.value as? String ?? status.label)")
+        }
     }
 
     private func closeStatusProgressWindow(in app: XCUIApplication) {
@@ -190,15 +208,29 @@ final class ClingSyncMacUITests: XCTestCase {
         let status = app.staticTexts["testStatusLabel"]
         XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
 
-        let predicate = NSPredicate(
+        let successPredicate = NSPredicate(
             format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
             "merged",
             "up to date",
             "merged",
             "up to date",
         )
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: status)
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 30), .completed)
+        let errorLabel = app.staticTexts["mergeErrorMessage"]
+        let result = waitForFirstMatch(
+            success: successPredicate,
+            successObject: status,
+            failure: existsPredicate(),
+            failureObject: errorLabel,
+            timeout: 30,
+        )
+        switch result {
+        case .success:
+            return
+        case .failure:
+            XCTFail("merge failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+        case .timeout:
+            XCTFail("merge did not finish in time; last status: \(status.value as? String ?? status.label)")
+        }
     }
 
     private func closeMergeProgressWindow(in app: XCUIApplication) {
@@ -241,6 +273,50 @@ final class ClingSyncMacUITests: XCTestCase {
     private func assertNoPassphrasePrompt(in app: XCUIApplication) {
         let field = app.secureTextFields["passphrasePromptField"]
         XCTAssertFalse(field.waitForExistence(timeout: 2), "passphrase prompt unexpectedly appeared")
+    }
+
+    private func assertNoPreferencesError(in app: XCUIApplication, context: String) {
+        let errorLabel = app.staticTexts["preferencesErrorMessage"]
+        // Give SwiftUI a brief moment to bind the error message before asserting.
+        if errorLabel.waitForExistence(timeout: 2) {
+            let message = (errorLabel.value as? String) ?? errorLabel.label
+            XCTFail("preferences error \(context): \(message)")
+        }
+    }
+
+    private enum WaitOutcome {
+        case success
+        case failure
+        case timeout
+    }
+
+    // Polls both predicates roughly every 200ms and returns on the first hit.
+    // XCTWaiter has no native race; it only completes when ALL expectations
+    // are fulfilled, which would mask an error path entirely.
+    private func waitForFirstMatch(
+        success: NSPredicate,
+        successObject: Any,
+        failure: NSPredicate,
+        failureObject: Any,
+        timeout: TimeInterval,
+    ) -> WaitOutcome {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if success.evaluate(with: successObject) {
+                return .success
+            }
+            if failure.evaluate(with: failureObject) {
+                return .failure
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return success.evaluate(with: successObject)
+            ? .success
+            : (failure.evaluate(with: failureObject) ? .failure : .timeout)
+    }
+
+    private func existsPredicate() -> NSPredicate {
+        NSPredicate(format: "exists == true")
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {

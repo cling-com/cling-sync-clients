@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	cryptoCipher "crypto/cipher"
 	"encoding/hex"
 	"errors"
 	"io/fs"
@@ -83,7 +84,7 @@ func InspectWorkspace(localPath string) (*WorkspaceInfo, error) {
 	defer ws.Close() //nolint:errcheck
 	remote := string(ws.RemoteRepository)
 	_, err = keychain.GetKeychainEntry(context.Background(), keychainService, remote)
-	hasStoredAccess := ws.HasRepositoryKeys() && err == nil
+	hasStoredAccess := ws.HasSavedPassphrase() && err == nil
 	return &WorkspaceInfo{
 		Exists:          true,
 		HostURL:         remote,
@@ -140,41 +141,57 @@ func SaveWorkspacePassphrase(localPath, password string) error {
 	if err != nil {
 		return err
 	}
-	keys, err := lib.DecryptRepositoryKeys(storage, []byte(password))
+	// Verify the passphrase actually opens the repository before persisting it.
+	if _, err := lib.OpenRepository(storage, []byte(password)); err != nil {
+		return lib.WrapErrorf(err, "failed to open repository")
+	}
+	encKeyCipher, err := loadOrCreateWorkspaceEncKey(string(ws.RemoteRepository))
 	if err != nil {
-		return lib.WrapErrorf(err, "failed to decrypt repository keys")
+		return err
 	}
-	encKey, err := lib.NewRawKey()
-	if err != nil {
-		return lib.WrapErrorf(err, "failed to generate local encryption key")
-	}
-	encKeyStr := hex.EncodeToString(encKey[:])
-	encKeyCipher, err := lib.NewCipher(encKey)
-	if err != nil {
-		return lib.WrapErrorf(err, "failed to create cipher")
-	}
-	err = keychain.AddKeychainEntry(context.Background(), keychainService, string(ws.RemoteRepository), encKeyStr)
-	if errors.Is(err, keychain.ErrKeychainEntryAlreadyExists) {
-		encKeyStr, err = keychain.GetKeychainEntry(context.Background(), keychainService, string(ws.RemoteRepository))
-		if err != nil {
-			return lib.WrapErrorf(err, "failed to get encryption key from keychain")
-		}
-		encKeyBytes, err := hex.DecodeString(encKeyStr)
-		if err != nil {
-			return lib.WrapErrorf(err, "failed to decode encryption key from keychain")
-		}
-		encKeyCipher, err = lib.NewCipher(lib.RawKey(encKeyBytes))
-		if err != nil {
-			return lib.WrapErrorf(err, "failed to create cipher")
-		}
-	}
-	if err != nil {
-		return lib.WrapErrorf(err, "failed to add repository keys to keychain")
-	}
-	if err := ws.WriteRepositoryKeys(keys, encKeyCipher); err != nil {
-		return lib.WrapErrorf(err, "failed to write repository keys")
+	if err := ws.WriteSavedPassphrase([]byte(password), encKeyCipher); err != nil {
+		return lib.WrapErrorf(err, "failed to write saved passphrase")
 	}
 	return nil
+}
+
+// loadOrCreateWorkspaceEncKey returns an AEAD cipher built from the keychain
+// entry for `remote`, creating a fresh random key in the keychain if none
+// exists. Multiple workspaces of the same remote share the same key.
+func loadOrCreateWorkspaceEncKey(remote string) (cryptoCipher.AEAD, error) {
+	existing, err := keychain.GetKeychainEntry(context.Background(), keychainService, remote)
+	switch {
+	case err == nil:
+		decoded, decodeErr := hex.DecodeString(existing)
+		if decodeErr != nil {
+			return nil, lib.WrapErrorf(decodeErr, "failed to decode existing keychain entry")
+		}
+		cipher, cipherErr := lib.NewCipher(lib.RawKey(decoded))
+		if cipherErr != nil {
+			return nil, lib.WrapErrorf(cipherErr, "failed to create cipher")
+		}
+		return cipher, nil
+	case errors.Is(err, keychain.ErrKeychainEntryNotFound):
+		encKey, keyErr := lib.NewRawKey()
+		if keyErr != nil {
+			return nil, lib.WrapErrorf(keyErr, "failed to generate local encryption key")
+		}
+		if addErr := keychain.AddKeychainEntry(
+			context.Background(),
+			keychainService,
+			remote,
+			hex.EncodeToString(encKey[:]),
+		); addErr != nil {
+			return nil, lib.WrapErrorf(addErr, "failed to save local encryption key to keychain")
+		}
+		cipher, cipherErr := lib.NewCipher(encKey)
+		if cipherErr != nil {
+			return nil, lib.WrapErrorf(cipherErr, "failed to create cipher")
+		}
+		return cipher, nil
+	default:
+		return nil, lib.WrapErrorf(err, "failed to read local encryption key from keychain")
+	}
 }
 
 func ClearWorkspacePassphrase(hostURL string) error {
@@ -509,7 +526,7 @@ func (m *asyncStagingMonitor) OnStart(path lib.Path, dirEntry fs.DirEntry) error
 }
 
 //nolint:wrapcheck
-func (m *asyncStagingMonitor) OnEnd(path lib.Path, excluded bool, metadata *lib.FileMetadata) error {
+func (m *asyncStagingMonitor) OnEnd(path lib.Path, excluded bool, metadata *lib.PathMetadata) error {
 	if err := m.verbose.OnEnd(path, excluded, metadata); err != nil {
 		return err
 	}
@@ -579,14 +596,14 @@ func (m *asyncCommitMonitor) OnStart(entry *lib.RevisionEntry) error {
 //nolint:wrapcheck
 func (m *asyncCommitMonitor) OnAddBlock(
 	entry *lib.RevisionEntry,
-	header *lib.BlockHeader,
-	existed bool,
-	dataSize int64,
+	blockId lib.BlockId,
+	dataSize int,
+	bytesWritten *int,
 ) error {
-	if err := m.verbose.OnAddBlock(entry, header, existed, dataSize); err != nil {
+	if err := m.verbose.OnAddBlock(entry, blockId, dataSize, bytesWritten); err != nil {
 		return err
 	}
-	return m.progress.OnAddBlock(entry, header, existed, dataSize)
+	return m.progress.OnAddBlock(entry, blockId, dataSize, bytesWritten)
 }
 
 //nolint:wrapcheck
@@ -689,36 +706,34 @@ func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Rep
 		}
 		return repository, nil
 	}
-	if ws.HasRepositoryKeys() {
-		encKeyStr, keyErr := keychain.GetKeychainEntry(
-			context.Background(),
-			keychainService,
-			string(ws.RemoteRepository),
-		)
-		if keyErr == nil {
-			encKey, decodeErr := hex.DecodeString(encKeyStr)
-			if decodeErr != nil {
-				return nil, ErrPassphraseRequired
-			}
-			encKeyCipher, cipherErr := lib.NewCipher(lib.RawKey(encKey))
-			if cipherErr != nil {
-				return nil, ErrPassphraseRequired
-			}
-			keys, readErr := ws.ReadRepositoryKeys(encKeyCipher)
-			if readErr != nil {
-				return nil, ErrPassphraseRequired
-			}
-			repository, openErr := lib.OpenRepositoryWithKeys(storage, keys)
-			if openErr != nil {
-				return nil, ErrPassphraseRequired
-			}
-			return repository, nil
-		}
-		if !errors.Is(keyErr, keychain.ErrKeychainEntryNotFound) {
-			return nil, ErrPassphraseRequired
-		}
+	if !ws.HasSavedPassphrase() {
+		return nil, ErrPassphraseRequired
 	}
-	return nil, ErrPassphraseRequired
+	encKeyStr, keyErr := keychain.GetKeychainEntry(
+		context.Background(),
+		keychainService,
+		string(ws.RemoteRepository),
+	)
+	if keyErr != nil {
+		return nil, ErrPassphraseRequired
+	}
+	encKey, decodeErr := hex.DecodeString(encKeyStr)
+	if decodeErr != nil {
+		return nil, ErrPassphraseRequired
+	}
+	encKeyCipher, cipherErr := lib.NewCipher(lib.RawKey(encKey))
+	if cipherErr != nil {
+		return nil, ErrPassphraseRequired
+	}
+	passphrase, readErr := ws.ReadSavedPassphrase(encKeyCipher)
+	if readErr != nil {
+		return nil, ErrPassphraseRequired
+	}
+	repository, openErr := lib.OpenRepository(storage, passphrase)
+	if openErr != nil {
+		return nil, ErrPassphraseRequired
+	}
+	return repository, nil
 }
 
 func openWorkspace(localPath string) (*workspace.Workspace, error) {

@@ -191,7 +191,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nif [ -f \"$PROJECT_DIR/build/go/gobridge.a\" ] && [ -f \"$PROJECT_DIR/build/go/gobridge.h\" ]; then\n  echo \"Go bridge already built, skipping.\"\n  exit 0\nfi\ncd \"$PROJECT_DIR/go\"\nmkdir -p ../build/go\nbuild_tags_args=\"\"\nif [ -n \"${CLING_SYNC_GO_BUILD_TAGS:-}\" ]; then\n  build_tags_args=\"-tags ${CLING_SYNC_GO_BUILD_TAGS}\"\nfi\nMACOSX_DEPLOYMENT_TARGET=13.0 \\\nCGO_CFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_LDFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \\\ngo build $build_tags_args -buildmode=c-archive -o ../build/go/gobridge.a ./...\n";
+			shellScript = "set -eu\ncd \"$PROJECT_DIR/go\"\nmkdir -p ../build/go\nbuild_tags_args=\"\"\nif [ -n \"${CLING_SYNC_GO_BUILD_TAGS:-}\" ]; then\n  build_tags_args=\"-tags ${CLING_SYNC_GO_BUILD_TAGS}\"\nfi\nMACOSX_DEPLOYMENT_TARGET=13.0 \\\nCGO_CFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_LDFLAGS=\"-mmacosx-version-min=13.0\" \\\nCGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \\\ngo build $build_tags_args -buildmode=c-archive -o ../build/go/gobridge.a ./...\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

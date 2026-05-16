@@ -17,11 +17,11 @@ import (
 )
 
 var (
-	repository        *lib.Repository                   //nolint:gochecknoglobals
-	repositoryHostURL string                            //nolint:gochecknoglobals
-	head              lib.RevisionId                    //nolint:gochecknoglobals
-	snapshot          *lib.Temp[lib.RevisionEntry]      //nolint:gochecknoglobals
-	snapshotCache     *lib.TempCache[lib.RevisionEntry] //nolint:gochecknoglobals
+	repository        *lib.Repository                    //nolint:gochecknoglobals
+	repositoryHostURL string                             //nolint:gochecknoglobals
+	head              lib.RevisionId                     //nolint:gochecknoglobals
+	snapshot          *lib.Temp[*lib.RevisionEntry]      //nolint:gochecknoglobals
+	snapshotCache     *lib.TempCache[*lib.RevisionEntry] //nolint:gochecknoglobals
 )
 
 // CheckRepositoryOpen returns true if a repository is currently open for the given host URL.
@@ -104,15 +104,18 @@ func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
 	}
 	r := snapshot.Reader(nil)
 	res := make([]string, len(sha256s))
+	// Reused within this call only — we can't assume CheckFiles is never
+	// invoked concurrently from the native side.
+	buf := lib.NewBlockBuf()
 	for {
-		re, err := r.Read()
+		re, err := r.Read(buf)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return nil, lib.WrapErrorf(err, "failed to read revision")
 		}
-		if re.Type == lib.RevisionEntryDelete {
+		if re.Kind == lib.RevisionEntryKindDelete {
 			// This should never happen because we are reading from a snapshot.
 			continue
 		}
@@ -188,11 +191,11 @@ func UploadFile(localFilePath string, repoFilePath string) (*lib.RevisionEntry, 
 		return nil, false, lib.WrapErrorf(err, "failed to add file %s to repository", localFilePath)
 	}
 	// We want to have predictable file permissions and modes.
-	md.ModeAndPerm = 0o600
+	md.FileMode = 0o600
 	entry := &lib.RevisionEntry{
 		Path:     repoPath,
-		Type:     lib.RevisionEntryAdd,
-		Metadata: &md,
+		Kind:     lib.RevisionEntryKindAdd,
+		Metadata: md,
 	}
 	return entry, true, nil
 }

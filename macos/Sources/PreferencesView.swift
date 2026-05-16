@@ -103,6 +103,7 @@ struct PreferencesView: View {
                 Text(controller.errorMessage)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("preferencesErrorMessage")
             }
 
             Spacer()

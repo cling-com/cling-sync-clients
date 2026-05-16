@@ -26,9 +26,9 @@ func (nopCommitMonitor) OnStart(entry *lib.RevisionEntry) error { return nil }
 
 func (nopCommitMonitor) OnAddBlock(
 	entry *lib.RevisionEntry,
-	header *lib.BlockHeader,
-	existed bool,
-	dataSize int64,
+	blockId lib.BlockId,
+	dataSize int,
+	bytesWritten *int,
 ) error {
 	return nil
 }
@@ -95,10 +95,10 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 		{Path: "local.txt", Mode: 0o600, Size: len("hello from local"), Content: "hello from local"},
 		{Path: "remote.txt", Mode: 0o600, Size: len("hello from remote"), Content: "hello from remote"},
 	}, repo.RevisionSnapshotFileInfos(newHead, nil))
-	revision, err := repo.ReadRevision(newHead)
+	revision, err := repo.ReadRevision(newHead, lib.NewBlockBuf())
 	assert.NoError(err)
-	assert.Equal("Mac Test User", revision.Author)
-	assert.Equal("second macOS test sync", revision.Message)
+	assert.Equal("Mac Test User", *revision.Author)
+	assert.Equal("second macOS test sync", *revision.Message)
 	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
 
 	wsTmp := td.NewRealFS(t)
@@ -305,7 +305,7 @@ func commitFileToRepository(t *testing.T, repo *lib.Repository, path, content, a
 	assert.NoError(err)
 	commit, err := lib.NewCommit(repo, td.NewFS(t))
 	assert.NoError(err)
-	assert.NoError(commit.Add(&lib.RevisionEntry{Path: repoPath, Type: lib.RevisionEntryAdd, Metadata: &md}))
+	assert.NoError(commit.Add(&lib.RevisionEntry{Path: repoPath, Kind: lib.RevisionEntryKindAdd, Metadata: md}))
 	revisionID, err := commit.Commit(&lib.CommitInfo{Author: author, Message: message})
 	assert.NoError(err)
 	return revisionID

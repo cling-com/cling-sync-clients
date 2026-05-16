@@ -63,6 +63,7 @@ struct MergeProgressView: View {
                                     .foregroundStyle(.red)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("mergeErrorMessage")
                             }
                         }
 

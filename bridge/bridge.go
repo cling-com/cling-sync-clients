@@ -6,7 +6,6 @@
 package bridge
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -116,14 +115,13 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			}
 			return string(jsonBytes)
 		}
-		// Marshal the entry to bytes
-		var buf bytes.Buffer
-		if err := lib.MarshalRevisionEntry(entry, &buf); err != nil {
+		w := lib.NewProtobufWriter(make([]byte, entry.MarshallSize()+64))
+		if err := entry.Marshall(w); err != nil {
 			return errorResponse("Failed to marshal revision entry: " + err.Error())
 		}
 
 		// Encode as base64
-		entryBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+		entryBase64 := base64.StdEncoding.EncodeToString(w.Bytes())
 
 		response := struct {
 			RevisionEntry string `json:"revisionEntry"`
@@ -151,9 +149,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 				return errorResponse("Failed to decode base64 entry: " + err.Error())
 			}
 
-			// Unmarshal from bytes
-			buf := bytes.NewReader(entryBytes)
-			entry, err := lib.UnmarshalRevisionEntry(buf)
+			entry, err := lib.UnmarshallRevisionEntry(lib.NewProtobufReader(entryBytes))
 			if err != nil {
 				return errorResponse("Failed to unmarshal revision entry: " + err.Error())
 			}
