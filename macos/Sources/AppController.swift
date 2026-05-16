@@ -365,6 +365,25 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         let config = normalizedDraftConfig()
         Task {
             do {
+                if isFileRepositoryPath(config.normalizedHostURL),
+                    try await !fileRepositoryExists(config)
+                {
+                    guard confirmCreateNewRepository(at: config.normalizedHostURL) else {
+                        isTesting = false
+                        refreshMenu()
+                        return
+                    }
+                    guard let passphrase = promptForNewRepositoryPassphrase(at: config.normalizedHostURL) else {
+                        isTesting = false
+                        refreshMenu()
+                        return
+                    }
+                    try await initNewFileRepository(config, passphrase: passphrase)
+                    try await configureWorkspace(config)
+                    try await testWorkspaceAccess(config, password: passphrase)
+                    markDraftVerified(config)
+                    return
+                }
                 try await configureWorkspace(config)
                 try await testWorkspaceAccess(config, password: nil)
                 markDraftVerified(config)
@@ -389,6 +408,62 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 isTesting = false
                 errorMessage = (error as? BridgeError)?.message ?? error.localizedDescription
                 refreshMenu()
+            }
+        }
+    }
+
+    func isFileRepositoryPath(_ hostURL: String) -> Bool {
+        let lower = hostURL.lowercased()
+        return !lower.hasPrefix("http://") && !lower.hasPrefix("https://")
+    }
+
+    func fileRepositoryExists(_ config: WorkspaceConfig) async throws -> Bool {
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.checkFileRepositoryExists(localPath: config.normalizedHostURL)
+        }.value
+    }
+
+    func initNewFileRepository(_ config: WorkspaceConfig, passphrase: String) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.initNewFileRepository(localPath: config.normalizedHostURL, password: passphrase)
+        }.value
+    }
+
+    func confirmCreateNewRepository(at path: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Create New Repository?"
+        alert.informativeText = "No repository was found at \(path). Do you want to create a new repository there?"
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func promptForNewRepositoryPassphrase(at path: String) -> String? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Set Repository Passphrase"
+            alert.informativeText =
+                "Choose a passphrase to protect the new repository at \(path). "
+                + "This passphrase cannot be recovered if lost."
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            field.placeholderString = "Passphrase"
+            field.setAccessibilityIdentifier("newRepositoryPassphraseField")
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Create")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = field
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(field)
+                field.selectText(nil)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let passphrase = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !passphrase.isEmpty {
+                return passphrase
             }
         }
     }

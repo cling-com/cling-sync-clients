@@ -37,6 +37,60 @@ func CheckRepositoryOpen(hostURL string) bool {
 	return true
 }
 
+// CheckFileRepositoryExists reports whether a cling repository exists on the local
+// filesystem at the given path. Callers must only invoke this for local paths; HTTP(S)
+// URLs are rejected so the call site has to decide explicitly whether a remote check
+// makes sense.
+func CheckFileRepositoryExists(localPath string) (bool, error) {
+	if clinghttp.IsHTTPStorageUIR(localPath) {
+		return false, lib.Errorf("CheckFileRepositoryExists called with HTTP URL: %s", localPath)
+	}
+	stat, statErr := os.Stat(localPath)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, lib.WrapErrorf(statErr, "failed to stat %s", localPath)
+	}
+	if !stat.IsDir() {
+		return false, lib.Errorf("%s is not a directory", localPath)
+	}
+	storage, err := lib.NewFileStorage(lib.NewRealFS(localPath), lib.StoragePurposeRepository)
+	if err != nil {
+		return false, lib.WrapErrorf(err, "failed to open file storage at %s", localPath)
+	}
+	if _, err := storage.Open(); err != nil {
+		if errors.Is(err, lib.ErrStorageNotFound) {
+			return false, nil
+		}
+		return false, lib.WrapErrorf(err, "failed to read repository config at %s", localPath)
+	}
+	return true, nil
+}
+
+// InitNewFileRepository creates a fresh cling repository on the local filesystem at the
+// given path, protected by the given passphrase. The path must not already host a
+// repository (or the underlying lib.InitNewRepository call will fail).
+func InitNewFileRepository(localPath, passphrase string) error {
+	if clinghttp.IsHTTPStorageUIR(localPath) {
+		return lib.Errorf("cannot initialize a new file repository at HTTP URL: %s", localPath)
+	}
+	if passphrase == "" {
+		return lib.Errorf("passphrase must not be empty")
+	}
+	if err := os.MkdirAll(localPath, 0o750); err != nil {
+		return lib.WrapErrorf(err, "failed to create repository directory %s", localPath)
+	}
+	storage, err := lib.NewFileStorage(lib.NewRealFS(localPath), lib.StoragePurposeRepository)
+	if err != nil {
+		return lib.WrapErrorf(err, "failed to open file storage at %s", localPath)
+	}
+	if _, err := lib.InitNewRepository(storage, []byte(passphrase)); err != nil {
+		return lib.WrapErrorf(err, "failed to initialize new repository at %s", localPath)
+	}
+	return nil
+}
+
 // GetRepositoryHeadRevisionID returns the current HEAD revision ID or an empty string.
 func GetRepositoryHeadRevisionID() string {
 	if repository == nil || head == (lib.RevisionId{}) {

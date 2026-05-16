@@ -8,6 +8,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let localDir: String
         let secondLocalDir: String
         let author: String
+        let newRepoPath: String?
     }
 
     private static let configPath = "/tmp/cling-sync-macos-ui-test-config.json"
@@ -107,6 +108,67 @@ final class ClingSyncMacUITests: XCTestCase {
         openSubmenu(named: displayName(for: config.secondLocalDir), in: app)
         clickWorkspaceMergeMenuItem(for: config.secondLocalDir, in: app)
         assertNoPassphrasePrompt(in: app)
+        waitForMergeToFinish(in: app)
+        closeMergeProgressWindow(in: app)
+    }
+
+    func testCreateNewRepositoryFromMissingPath() throws {
+        let config = loadConfig()
+        guard let newRepoPath = config.newRepoPath else {
+            XCTFail("newRepoPath missing from UI test config")
+            return
+        }
+        let app = launchApp(defaultsSuiteSuffix: "createnewrepo")
+
+        let localFolderField = app.textFields["localFolderField"]
+        XCTAssertTrue(localFolderField.waitForExistence(timeout: 5))
+        replaceText(in: localFolderField, with: config.localDir)
+        replaceText(in: app.textFields["serverURLField"], with: newRepoPath)
+        replaceText(in: app.textFields["authorField"], with: config.author)
+
+        // First attempt: decline the create-new-repository prompt and verify the
+        // dialog stays open so the user can adjust the path.
+        let testButton = app.buttons["testWorkspaceButton"]
+        XCTAssertTrue(testButton.isEnabled)
+        testButton.tap()
+        let cancelButton = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancelButton.waitForExistence(timeout: 5))
+        cancelButton.tap()
+        XCTAssertTrue(localFolderField.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.secureTextFields["newRepositoryPassphraseField"].exists)
+
+        // Second attempt: accept the prompt, supply a passphrase, and confirm
+        // that no "save in keychain" option is offered for the new repository.
+        testButton.tap()
+        let createButton = app.buttons["Create"].firstMatch
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5))
+        createButton.tap()
+
+        let newPassphraseField = app.secureTextFields["newRepositoryPassphraseField"]
+        XCTAssertTrue(newPassphraseField.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.checkBoxes["passphrasePromptRemember"].exists,
+            "save-to-keychain checkbox should not appear when initializing a new repository",
+        )
+        newPassphraseField.tap()
+        newPassphraseField.typeText(config.passphrase)
+        let confirmCreate = app.buttons["Create"].firstMatch
+        XCTAssertTrue(confirmCreate.waitForExistence(timeout: 5))
+        confirmCreate.tap()
+
+        assertNoPreferencesError(in: app, context: "after creating new repository")
+
+        let saveButton = app.buttons["saveWorkspaceButton"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        waitForButtonToEnable(saveButton)
+        saveButton.tap()
+        waitForElementToDisappear(saveButton)
+
+        // Run an initial merge to push a seeded local file into the newly
+        // created repository. The passphrase was not stored in the keychain so
+        // the merge prompt should appear.
+        clickWorkspaceMerge(app, localDir: config.localDir)
+        enterPassphraseIfNeeded(in: app, saveToKeychain: false)
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
     }

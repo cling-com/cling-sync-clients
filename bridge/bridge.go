@@ -169,6 +169,44 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
+	case "checkFileRepositoryExists":
+		var params struct {
+			LocalPath string `json:"localPath"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		exists, err := CheckFileRepositoryExists(params.LocalPath)
+		if err != nil {
+			return errorResponse(err.Error())
+		}
+		response := struct {
+			Exists bool `json:"exists"`
+		}{Exists: exists}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "initNewFileRepository":
+		var params struct {
+			LocalPath string `json:"localPath"`
+			Password  string `json:"password"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := InitNewFileRepository(params.LocalPath, params.Password); err != nil {
+			return errorResponse(err.Error())
+		}
+		response := struct {
+			Success bool `json:"success"`
+		}{Success: true}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
 	case "configureWorkspace":
 		var params struct {
 			HostURL        string `json:"hostUrl"`

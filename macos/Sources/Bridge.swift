@@ -47,6 +47,20 @@ enum Bridge {
         )
     }
 
+    static func checkFileRepositoryExists(localPath: String) throws -> Bool {
+        let result = try execute(command: "checkFileRepositoryExists", params: ["localPath": localPath])
+        return result["exists"] as? Bool ?? false
+    }
+
+    static func initNewFileRepository(localPath: String, password: String) throws {
+        _ = try execute(
+            command: "initNewFileRepository",
+            params: [
+                "localPath": localPath,
+                "password": password,
+            ])
+    }
+
     static func configureWorkspace(url: String, localPath: String, repoPathPrefix: String) throws {
         _ = try execute(
             command: "configureWorkspace",

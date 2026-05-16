@@ -167,6 +167,97 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 	assert.Equal(hostURL, string(workspace.RemoteRepository))
 }
 
+func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
+	assert := lib.NewAssert(t)
+	// XCUIElement identifiers cap at 128 chars, and the workspace.merge.<path>
+	// identifier embeds the local dir verbatim. The default t.TempDir() prefix
+	// is too long for that, so we mint a short one under /tmp instead.
+	parentDir, err := os.MkdirTemp("/tmp", "cnr-") //nolint:usetesting
+	assert.NoError(err)
+	t.Cleanup(func() { _ = os.RemoveAll(parentDir) })
+	newRepoPath := filepath.Join(parentDir, "repo")
+	localDir := filepath.Join(parentDir, "ws")
+	assert.NoError(os.MkdirAll(localDir, 0o750))
+	// Seed a file the initial merge will commit into the freshly created repository.
+	const testFileContent = "hello from new repo"
+	const testFile = "new-repo-file.txt"
+	assert.NoError(os.WriteFile(filepath.Join(localDir, testFile), []byte(testFileContent), 0o600))
+	defaultsSuite := "com.cling.ClingSyncMac.ui.newrepo." + time.Now().Format("20060102150405.000000000")
+	defer cleanupDefaultsSuite(t, defaultsSuite)
+
+	// Use "testpassphrase" so we can re-open the repository with TestData helpers below.
+	writeXCUITestConfigWithNewRepo(
+		t,
+		defaultsSuite,
+		"http://unused.invalid",
+		"testpassphrase",
+		localDir,
+		filepath.Join(parentDir, "workspace-second-unused"),
+		"Mac UI Test User",
+		newRepoPath,
+	)
+	logDir := filepath.Join("..", "build", "testlogs")
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
+		t.Fatalf("create xcodebuild log dir: %v", err)
+	}
+	logPath := filepath.Join(logDir, "testCreateNewRepositoryFromMissingPath.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create xcodebuild log file: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logFile.Close()
+		if !t.Failed() {
+			_ = os.Remove(logPath)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(
+		ctx,
+		"xcodebuild",
+		"-project", xcodeProjectPath,
+		"-scheme", "ClingSyncMac",
+		"-destination", "platform=macOS",
+		"-test-timeouts-enabled", "YES",
+		"-default-test-execution-time-allowance", "30",
+		"-maximum-test-execution-time-allowance", "90",
+		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/testCreateNewRepositoryFromMissingPath",
+		"test",
+	)
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"CLING_SYNC_GO_BUILD_TAGS=mock",
+		"CLING_SYNC_MOCK_KEYCHAIN_FILE="+uiTestMockKeychainPath,
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	err = cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("xcode ui test timed out; log: %s\n%s", logPath, readLogTail(t, logPath))
+	}
+	if err != nil {
+		t.Fatalf("xcode ui test failed: %v\nlog: %s\n%s", err, logPath, readLogTail(t, logPath))
+	}
+
+	assert.Equal(true, mustDirExists(t, filepath.Join(newRepoPath, ".cling", "repository")))
+	assert.Equal(true, mustDirExists(t, filepath.Join(newRepoPath, ".cling", "repository", "objects")))
+	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
+
+	wsTmp := td.NewRealFS(t)
+	workspaceObj, err := ws.OpenWorkspace(lib.NewRealFS(localDir), wsTmp)
+	assert.NoError(err)
+	defer workspaceObj.Close() //nolint:errcheck
+	assert.Equal(newRepoPath, string(workspaceObj.RemoteRepository))
+
+	repo := td.OpenRepository(t, lib.NewRealFS(newRepoPath))
+	head := repo.Head()
+	assert.Equal(false, head.IsRoot())
+	assert.Equal([]lib.TestFileInfo{
+		{Path: testFile, Mode: 0o600, Size: len(testFileContent), Content: testFileContent},
+	}, repo.RevisionSnapshotFileInfos(head, nil))
+}
+
 func serveRepository(t *testing.T, storage *lib.FileStorage) (string, func()) {
 	t.Helper()
 	httpStorage := clingsynchttp.NewHTTPStorageServer(storage, "")
@@ -224,16 +315,17 @@ func runXCUITest(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, sec
 	cmd.Stderr = logFile
 	err = cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("xcode ui test timed out; log: %s\n%s", logPath, readLogTail(t, logPath, 120))
+		t.Fatalf("xcode ui test timed out; log: %s\n%s", logPath, readLogTail(t, logPath))
 	}
 	if err != nil {
-		t.Fatalf("xcode ui test failed: %v\nlog: %s\n%s", err, logPath, readLogTail(t, logPath, 120))
+		t.Fatalf("xcode ui test failed: %v\nlog: %s\n%s", err, logPath, readLogTail(t, logPath))
 	}
 	t.Logf("xcode ui test passed: %s", onlyTest)
 }
 
-func readLogTail(t *testing.T, path string, maxLines int) string {
+func readLogTail(t *testing.T, path string) string {
 	t.Helper()
+	const maxLines = 120
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Sprintf("failed to read log %s: %v", path, err)
@@ -251,6 +343,14 @@ func readLogTail(t *testing.T, path string, maxLines int) string {
 
 func writeXCUITestConfig(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author string) {
 	t.Helper()
+	writeXCUITestConfigWithNewRepo(t, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author, "")
+}
+
+func writeXCUITestConfigWithNewRepo(
+	t *testing.T,
+	defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author, newRepoPath string,
+) {
+	t.Helper()
 	config := struct {
 		DefaultsSuite  string `json:"defaultsSuite"`
 		ServerURL      string `json:"serverUrl"`
@@ -258,6 +358,7 @@ func writeXCUITestConfig(t *testing.T, defaultsSuite, hostURL, passphrase, local
 		LocalDir       string `json:"localDir"`
 		SecondLocalDir string `json:"secondLocalDir"`
 		Author         string `json:"author"`
+		NewRepoPath    string `json:"newRepoPath,omitempty"`
 	}{
 		DefaultsSuite:  defaultsSuite,
 		ServerURL:      hostURL,
@@ -265,6 +366,7 @@ func writeXCUITestConfig(t *testing.T, defaultsSuite, hostURL, passphrase, local
 		LocalDir:       localDir,
 		SecondLocalDir: secondLocalDir,
 		Author:         author,
+		NewRepoPath:    newRepoPath,
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
