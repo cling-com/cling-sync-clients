@@ -47,11 +47,12 @@ usage() {
     echo
     echo "Commands:"
     echo "  build [target]"
-    echo "      Build the target. If no target is specified, build all targets."
+    echo "      Build the target. Defaults to 'app'."
     echo "      Available targets:"
-    echo "        go   - build the Go bridge"
-    echo "        app  - build the macOS app with xcodebuild"
-    echo "        all  - build everything (default)"
+    echo "        go        - build the Go bridge (arm64 debug)"
+    echo "        app       - build the macOS app with xcodebuild (arm64 debug, default)"
+    echo "        release   - build the universal App Store release .pkg"
+    echo "        universal - build an unsigned universal .app.zip"
     echo
     echo "  fmt"
     echo "      Format code"
@@ -184,11 +185,11 @@ build_app() {
         -destination 'platform=macOS' \
         -derivedDataPath "$derived_data_path" \
         build
-}
-
-build_all() {
-    build_go
-    build_app
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    echo ">>> Copying app to $repo_build/ClingSyncMac.app"
+    rm -rf "$repo_build/ClingSyncMac.app"
+    cp -R "$app_path" "$repo_build/ClingSyncMac.app"
 }
 
 fmt() {
@@ -278,9 +279,56 @@ build_release() {
         -exportOptionsPlist ExportOptions.plist \
         -allowProvisioningUpdates
 
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    local pkg
+    pkg=$(find "$root/build/export" -name "*.pkg" | head -1)
+    if [ -n "$pkg" ]; then
+        echo ">>> Copying PKG to $repo_build/ClingSyncMac.pkg"
+        cp "$pkg" "$repo_build/ClingSyncMac.pkg"
+    fi
+
     echo ">>> Build complete"
     echo "    Archive: build/ClingSyncMac.xcarchive"
     echo "    PKG:     build/export/"
+}
+
+build_universal() {
+    echo ">>> Building universal unsigned macOS app"
+    sync_icon
+    build_go_universal
+
+    local app_release_path="$derived_data_path/Build/Products/Release/ClingSyncMac.app"
+    rm -rf "$derived_data_path/Build/Products/Release"
+
+    run_xcodebuild xcodebuild-universal.log \
+        -project "$xcode_project" \
+        -scheme "$xcode_scheme" \
+        -configuration Release \
+        -destination 'generic/platform=macOS' \
+        -derivedDataPath "$derived_data_path" \
+        CODE_SIGNING_ALLOWED=NO \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGN_ENTITLEMENTS="" \
+        ENABLE_HARDENED_RUNTIME=NO \
+        build
+
+    if [ ! -d "$app_release_path" ]; then
+        echo "Error: built .app not found at $app_release_path"
+        exit 1
+    fi
+
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    local zip_path="$repo_build/ClingSyncMac.app.zip"
+    echo ">>> Zipping app to $zip_path"
+    rm -f "$zip_path"
+    (cd "$(dirname "$app_release_path")" && zip -qry "$zip_path" "$(basename "$app_release_path")")
+
+    echo ">>> Build complete"
+    echo "    Zip: $zip_path"
+    echo "    On each Mac: unzip, then right-click the .app -> Open (one-time Gatekeeper allow)."
 }
 
 load_env() {
@@ -344,7 +392,7 @@ cmd="$1"
 shift
 case "$cmd" in
     build)
-        target="all"
+        target="app"
         if [ $# -gt 0 ]; then
             target="$1"
             shift
@@ -356,12 +404,15 @@ case "$cmd" in
             app)
                 build_app "$@"
                 ;;
-            all)
-                build_all "$@"
+            release)
+                build_release "$@"
+                ;;
+            universal)
+                build_universal "$@"
                 ;;
             *)
                 echo "Unknown build target: $target"
-                echo "Available targets: go, app, all"
+                echo "Available targets: go, app, release, universal"
                 exit 1
                 ;;
         esac

@@ -2,3 +2,4 @@
 .claude/
 .spell/
 .env
+/build/

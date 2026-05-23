@@ -201,6 +201,11 @@ build_app() {
         -exportPath build/export \
         -exportOptionsPlist ExportOptions.plist
 
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    echo ">>> Copying IPA to $repo_build/ClingSync.ipa"
+    cp "$root/build/export/ClingSync.ipa" "$repo_build/ClingSync.ipa"
+
     echo ">>> Build complete"
     echo "    Archive: build/ClingSync.xcarchive"
     echo "    IPA:     build/export/ClingSync.ipa"

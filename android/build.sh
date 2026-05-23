@@ -210,8 +210,10 @@ build_apk() {
     echo ">>> Building Android APK"
     set_local_path
     ./gradlew assembleDebug -q
-    mkdir -p "$root/build"
-    cp app/build/outputs/apk/debug/app-debug.apk "$root/build/clingsync-debug.apk"
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    echo ">>> Copying APK to $repo_build/clingsync-debug.apk"
+    cp app/build/outputs/apk/debug/app-debug.apk "$repo_build/clingsync-debug.apk"
 }
 
 build_all() {
