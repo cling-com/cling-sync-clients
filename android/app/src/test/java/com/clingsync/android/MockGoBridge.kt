@@ -22,9 +22,18 @@ class MockGoBridge : IGoBridge {
     var lastCommitMessage: String? = null
     var lastCommitAuthor: String? = null
 
+    override fun initBridge(dataDir: String) {
+        // No-op for the mock.
+    }
+
     override fun checkRepositoryOpen(hostUrl: String): Boolean {
         return isOpen
     }
+
+    // S3 host URLs the UI has stored credentials for. openRepository throws
+    // [S3CredentialsRequiredException] for S3 URLs missing from this set,
+    // mirroring the real bridge.
+    private val s3CredentialedHosts = mutableSetOf<String>()
 
     override fun openRepository(
         hostUrl: String,
@@ -35,8 +44,24 @@ class MockGoBridge : IGoBridge {
             errors.add(error)
             throw Exception(error)
         }
+        if (hostUrl.startsWith("s3+") && hostUrl !in s3CredentialedHosts) {
+            throw S3CredentialsRequiredException("S3 credentials required for $hostUrl")
+        }
         openRepositoryCounter.incrementAndGet()
         isOpen = true
+    }
+
+    override fun encryptAndStoreS3Credentials(
+        hostUrl: String,
+        passphrase: String,
+        accessKeyId: String,
+        accessKey: String,
+    ) {
+        s3CredentialedHosts.add(hostUrl)
+    }
+
+    override fun clearStoredS3Credentials(hostUrl: String) {
+        s3CredentialedHosts.remove(hostUrl)
     }
 
     var checkFilesResults: List<String>? = null
@@ -122,6 +147,7 @@ class MockGoBridge : IGoBridge {
         commitCounter.set(0)
         uploadCalls.clear()
         commitCalls.clear()
+        s3CredentialedHosts.clear()
         errors.clear()
         checkFilesResults = null
         isOpen = false

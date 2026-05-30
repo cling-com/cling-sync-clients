@@ -7,6 +7,10 @@ struct BridgeError: Error {
     var isPassphraseRequired: Bool {
         code == "passphrase_required"
     }
+
+    var isS3CredentialsRequired: Bool {
+        code == "s3_credentials_required"
+    }
 }
 
 struct MergeWorkspaceStatus {
@@ -37,6 +41,32 @@ struct WorkspaceInspection {
 }
 
 enum Bridge {
+    // Gives the Go bridge a writable directory for its S3 credentials map.
+    // Must be called once per app launch before any S3-backed workspace access.
+    static func initBridge(dataDir: String) throws {
+        _ = try execute(command: "initBridge", params: ["dataDir": dataDir])
+    }
+
+    static func encryptAndStoreS3Credentials(
+        hostUrl: String,
+        passphrase: String,
+        accessKeyId: String,
+        accessKey: String
+    ) throws {
+        _ = try execute(
+            command: "encryptAndStoreS3Credentials",
+            params: [
+                "hostUrl": hostUrl,
+                "passphrase": passphrase,
+                "accessKeyId": accessKeyId,
+                "accessKey": accessKey,
+            ])
+    }
+
+    static func clearStoredS3Credentials(hostUrl: String) throws {
+        _ = try execute(command: "clearStoredS3Credentials", params: ["hostUrl": hostUrl])
+    }
+
     static func inspectWorkspace(localPath: String) throws -> WorkspaceInspection {
         let result = try execute(command: "inspectWorkspace", params: ["localPath": localPath])
         return WorkspaceInspection(

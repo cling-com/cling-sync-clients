@@ -14,18 +14,26 @@ import (
 
 var td = lib.TestData{} //nolint:gochecknoglobals
 
+const (
+	testS3Region          = "us-east-1"
+	testS3AccessKeyID     = "minioadmin"
+	testS3SecretAccessKey = "minioadmin"
+)
+
 func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
-	t.Log("Serving test repository via HTTP")
+	t.Log("Serving test repository via S3")
 	fs := td.NewRealFS(t)
 	r := td.NewTestRepository(t, fs)
 	assert := lib.NewAssert(t)
 	head := r.Head()
 	assert.Equal("testpassphrase", r.Passphrase)
 
-	// Start HTTP server.
-	httpStorage := clingsynchttp.NewHTTPStorageServer(r.Storage, "http://localhost:9124")
+	// Start an in-process S3 server in front of the repository storage.
+	s3Server := clingsynchttp.NewS3StorageServer(
+		r.Storage, testS3Region, testS3AccessKeyID, testS3SecretAccessKey,
+	)
 	mux := http.NewServeMux()
-	httpStorage.RegisterRoutes(mux)
+	s3Server.RegisterRoutes(mux)
 	server := &http.Server{ //nolint:gosec,exhaustruct
 		Addr:    "0.0.0.0:9124",
 		Handler: mux,
@@ -36,9 +44,23 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	})
 
 	t.Log("Running iOS tests")
+	embeddedURL, err := clingsynchttp.EncodeS3URI(
+		"s3+http://127.0.0.1:9124",
+		clingsynchttp.S3Credentials{
+			AccessKeyID:     testS3AccessKeyID,
+			SecretAccessKey: []byte(testS3SecretAccessKey),
+		},
+		[]byte(r.Passphrase),
+	)
+	assert.NoError(err)
+
 	cmd := exec.CommandContext(t.Context(), "./build.sh", "test", "--swiftui")
 	cmd.Dir = ".."
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(),
+		"TEST_S3_ACCESS_KEY_ID="+testS3AccessKeyID,
+		"TEST_S3_ACCESS_KEY="+testS3SecretAccessKey,
+		"TEST_HOST_URL_EMBEDDED="+embeddedURL,
+	)
 	output, err := cmd.CombinedOutput()
 	assert.NoError(err, string(output))
 

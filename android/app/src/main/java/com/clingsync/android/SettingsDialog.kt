@@ -74,7 +74,7 @@ fun SettingsDialog(
                     value = hostUrl,
                     onValueChange = { hostUrl = it },
                     label = { Text("Host URL") },
-                    placeholder = { Text("https://example.com") },
+                    placeholder = { Text("s3+https://bucket.s3.region.example.com") },
                     modifier = Modifier.fillMaxWidth(),
                 )
 

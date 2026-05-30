@@ -4,11 +4,13 @@ import android.Manifest
 import android.content.Context
 import android.os.Environment
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -23,8 +25,11 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class IntegrationTest {
-    private val serverUrl = System.getenv("TEST_SERVER_URL") ?: "http://10.0.2.2:9124"
+    private val serverUrl = System.getenv("TEST_SERVER_URL") ?: "s3+http://10.0.2.2:9124"
+    private val embeddedServerUrl = System.getenv("TEST_SERVER_URL_EMBEDDED") ?: ""
     private val testPassphrase = System.getenv("TEST_PASSPHRASE") ?: "testpassphrase"
+    private val testS3AccessKeyId = System.getenv("TEST_S3_ACCESS_KEY_ID") ?: "minioadmin"
+    private val testS3AccessKey = System.getenv("TEST_S3_ACCESS_KEY") ?: "minioadmin"
     private val repoPathPrefix = System.getenv("TEST_DESTINATION_PATH") ?: "/phone/"
 
     @get:Rule(order = 1)
@@ -55,18 +60,30 @@ class IntegrationTest {
         // Configure settings with default DCIM source.
         composeTestRule.waitUntilExactlyOneExists(hasText("Host URL"), 5000)
         composeTestRule.onNodeWithText("Host URL").performClick()
-        composeTestRule.onNodeWithText("Host URL").performTextInput(serverUrl)
+        // First try an invalid URL (missing the `s3+` prefix) to verify the
+        // validation dialog appears.
+        composeTestRule.onNodeWithText("Host URL").performTextInput("https://wrong.example.com")
+        composeTestRule.onNodeWithText("Author").performClick()
+        composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
+        composeTestRule.onNodeWithText("Test").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Invalid Host URL"), 5000)
+        composeTestRule.onNodeWithText("OK").performClick()
+        // Replace with the valid URL and continue.
+        composeTestRule.onNodeWithText("Host URL").performTextReplacement(serverUrl)
 
         composeTestRule.onNodeWithText("Destination Path (optional)").performClick()
         composeTestRule.onNodeWithText("Destination Path (optional)").performTextInput(repoPathPrefix)
-
-        composeTestRule.onNodeWithText("Author").performClick()
-        composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
 
         composeTestRule.onNodeWithText("Test").performClick()
         composeTestRule.waitUntilExactlyOneExists(hasText("Enter Passphrase"), 5000)
         composeTestRule.onNodeWithText("Passphrase").performClick()
         composeTestRule.onNodeWithText("Passphrase").performTextInput(testPassphrase)
+        composeTestRule.onNodeWithText("Continue").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("S3 Credentials"), 5000)
+        composeTestRule.onNodeWithText("S3 Key ID").performClick()
+        composeTestRule.onNodeWithText("S3 Key ID").performTextInput(testS3AccessKeyId)
+        composeTestRule.onNodeWithText("S3 Access Key").performClick()
+        composeTestRule.onNodeWithText("S3 Access Key").performTextInput(testS3AccessKey)
         composeTestRule.onNodeWithText("Continue").performClick()
         composeTestRule.waitForIdle()
 
@@ -122,5 +139,37 @@ class IntegrationTest {
         composeTestRule.onNodeWithText("Media files only").performClick()
         composeTestRule.onNodeWithText("Save").performClick()
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 10000)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun testEmbeddedCredentialsUrlSkipsS3Prompt() {
+        if (embeddedServerUrl.isEmpty()) {
+            // The Go-side harness produces this URL. Skip when running gradle alone.
+            return
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.waitUntilExactlyOneExists(hasText("Host URL"), 5000)
+        composeTestRule.onNodeWithText("Host URL").performClick()
+        composeTestRule.onNodeWithText("Host URL").performTextInput(embeddedServerUrl)
+
+        composeTestRule.onNodeWithText("Destination Path (optional)").performClick()
+        composeTestRule.onNodeWithText("Destination Path (optional)").performTextInput(repoPathPrefix)
+
+        composeTestRule.onNodeWithText("Author").performClick()
+        composeTestRule.onNodeWithText("Author").performTextReplacement("Testinger")
+
+        composeTestRule.onNodeWithText("Test").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Enter Passphrase"), 5000)
+        composeTestRule.onNodeWithText("Passphrase").performClick()
+        composeTestRule.onNodeWithText("Passphrase").performTextInput(testPassphrase)
+        composeTestRule.onNodeWithText("Continue").performClick()
+
+        // Connection should succeed without any S3 prompt. We assert this by
+        // waiting for the Save button to enable while the S3 dialog never
+        // shows.
+        composeTestRule.waitUntilExactlyOneExists(hasText("Save"), 10000)
+        composeTestRule.onAllNodesWithText("S3 Credentials").assertCountEquals(0)
     }
 }

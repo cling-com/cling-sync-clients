@@ -32,3 +32,14 @@ struct RepositoryConfiguration: Equatable {
         hostURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 }
+
+// Returns nil when `url` is a syntactically acceptable host URL, or a
+// human-readable error message describing the required format otherwise.
+func validateHostURL(_ url: String) -> String? {
+    let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasPrefix("s3+http://") || trimmed.hasPrefix("s3+https://") {
+        return nil
+    }
+    return "The Host URL must start with \"s3+http://\" or \"s3+https://\".\n\n"
+        + "Example: s3+https://bucket.s3.region.example.com"
+}

@@ -34,7 +34,11 @@ open class GoBridge : IGoBridge {
                 if (response.has("error")) {
                     val error = response.getJSONObject("error")
                     val errorMessage = error.getString("message")
-                    Log.e("GoBridge", "Command $command failed with error: $errorMessage")
+                    val errorCode = error.optString("code", "")
+                    Log.e("GoBridge", "Command $command failed: $errorMessage (code=$errorCode)")
+                    if (errorCode == "s3_credentials_required") {
+                        throw S3CredentialsRequiredException(errorMessage)
+                    }
                     throw Exception(errorMessage)
                 }
 
@@ -47,12 +51,12 @@ open class GoBridge : IGoBridge {
         }
     }
 
-    override fun checkRepositoryOpen(hostUrl: String): Boolean {
-        val params =
-            JSONObject().apply {
-                put("hostUrl", hostUrl)
-            }
+    override fun initBridge(dataDir: String) {
+        executeInternal("initBridge", JSONObject().apply { put("dataDir", dataDir) })
+    }
 
+    override fun checkRepositoryOpen(hostUrl: String): Boolean {
+        val params = JSONObject().apply { put("hostUrl", hostUrl) }
         val response = executeInternal("checkRepositoryOpen", params)
         return response.optBoolean("open", false)
     }
@@ -66,8 +70,28 @@ open class GoBridge : IGoBridge {
                 put("hostUrl", hostUrl)
                 put("password", password)
             }
-
         executeInternal("openRepository", params)
+    }
+
+    override fun encryptAndStoreS3Credentials(
+        hostUrl: String,
+        passphrase: String,
+        accessKeyId: String,
+        accessKey: String,
+    ) {
+        val params =
+            JSONObject().apply {
+                put("hostUrl", hostUrl)
+                put("passphrase", passphrase)
+                put("accessKeyId", accessKeyId)
+                put("accessKey", accessKey)
+            }
+        executeInternal("encryptAndStoreS3Credentials", params)
+    }
+
+    override fun clearStoredS3Credentials(hostUrl: String) {
+        val params = JSONObject().apply { put("hostUrl", hostUrl) }
+        executeInternal("clearStoredS3Credentials", params)
     }
 
     override fun checkFiles(sha256s: List<String>): List<String> {

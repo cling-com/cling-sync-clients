@@ -16,6 +16,7 @@ struct ContentView: View {
     @State var repositoryConnected = false
     @State var showSettings = false
     @StateObject var passphrasePromptController = PassphrasePromptController()
+    @StateObject var s3CredentialsPromptController = S3CredentialsPromptController()
     @State var uploader: Uploader?
     @State var appState: AppState = .initializing
 
@@ -87,6 +88,9 @@ struct ContentView: View {
         }
         .sheet(item: $passphrasePromptController.request) { request in
             PassphrasePromptView(controller: passphrasePromptController, request: request)
+        }
+        .sheet(item: $s3CredentialsPromptController.request) { request in
+            S3CredentialsPromptView(controller: s3CredentialsPromptController, request: request)
         }
     }
 

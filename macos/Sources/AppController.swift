@@ -87,6 +87,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         if let image = NSImage(named: "AppIcon") {
             NSApp.applicationIconImage = image
         }
+        initBridge()
         setupStatusItem()
         if isTestMode {
             showTestMenuHost()
@@ -341,6 +342,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func removeWorkspace(id: UUID) {
         if let workspace = workspace(for: id) {
             try? Bridge.clearWorkspacePassphrase(hostURL: workspace.normalizedHostURL)
+            try? Bridge.clearStoredS3Credentials(hostUrl: workspace.normalizedHostURL)
             mergeStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             mergeShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
         }
@@ -357,12 +359,18 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     func testDraft() {
         guard canTestDraft else { return }
         errorMessage = ""
+        let config = normalizedDraftConfig()
+        if let urlError = validateHostURL(config.normalizedHostURL) {
+            errorMessage = urlError
+            refreshMenu()
+            return
+        }
         isTesting = true
         refreshMenu()
-        let config = normalizedDraftConfig()
         Task {
             do {
                 if isFileRepositoryPath(config.normalizedHostURL),
@@ -387,14 +395,25 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 try await configureWorkspace(config)
                 try await testWorkspaceAccess(config, password: nil)
                 markDraftVerified(config)
-            } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+            } catch let bridgeError as BridgeError
+                where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
+            {
                 do {
                     guard let prompt = promptForPassphrase(for: config) else {
                         isTesting = false
                         refreshMenu()
                         return
                     }
-                    try await testWorkspaceAccess(config, password: prompt.passphrase)
+                    let verified = try await withS3CredentialsRetry(
+                        hostURL: config.normalizedHostURL, passphrase: prompt.passphrase
+                    ) {
+                        try await testWorkspaceAccess(config, password: prompt.passphrase)
+                    }
+                    guard verified != nil else {
+                        isTesting = false
+                        refreshMenu()
+                        return
+                    }
                     if prompt.rememberInKeychain {
                         try await storeWorkspacePassphrase(config, passphrase: prompt.passphrase)
                     }
@@ -414,7 +433,45 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func isFileRepositoryPath(_ hostURL: String) -> Bool {
         let lower = hostURL.lowercased()
-        return !lower.hasPrefix("http://") && !lower.hasPrefix("https://")
+        return !lower.hasPrefix("http://")
+            && !lower.hasPrefix("https://")
+            && !lower.hasPrefix("s3+")
+    }
+
+    // Runs `block`. If the bridge reports that S3 credentials are missing for
+    // `hostURL`, prompts the user, stores them via the bridge, and retries once.
+    @discardableResult
+    func withS3CredentialsRetry<T>(
+        hostURL: String,
+        passphrase: String,
+        _ block: () async throws -> T
+    ) async throws -> T? {
+        do {
+            return try await block()
+        } catch let error as BridgeError where error.isS3CredentialsRequired {
+            guard let creds = S3CredentialsPrompt.run(for: hostURL) else {
+                return nil
+            }
+            try await Task.detached(priority: .userInitiated) {
+                try Bridge.encryptAndStoreS3Credentials(
+                    hostUrl: hostURL,
+                    passphrase: passphrase,
+                    accessKeyId: creds.accessKeyId,
+                    accessKey: creds.accessKey)
+            }.value
+            return try await block()
+        }
+    }
+
+    private func initBridge() {
+        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        guard let dataDir = urls.first else { return }
+        let appDir = dataDir.appendingPathComponent("ClingSync", isDirectory: true)
+        do {
+            try Bridge.initBridge(dataDir: appDir.path)
+        } catch {
+            // Non-fatal. S3 operations will surface a clearer error later.
+        }
     }
 
     func fileRepositoryExists(_ config: WorkspaceConfig) async throws -> Bool {
@@ -481,9 +538,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func saveDraft() {
         guard !isSaving else { return }
         errorMessage = ""
+        let config = normalizedDraftConfig()
+        if let urlError = validateHostURL(config.normalizedHostURL) {
+            errorMessage = urlError
+            refreshMenu()
+            return
+        }
         isSaving = true
         refreshMenu()
-        let config = normalizedDraftConfig()
         Task {
             upsertWorkspace(config)
             isSaving = false
@@ -629,6 +691,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 || previous.normalizedHostURL != config.normalizedHostURL
             {
                 try? Bridge.clearWorkspacePassphrase(hostURL: previous.normalizedHostURL)
+                try? Bridge.clearStoredS3Credentials(hostUrl: previous.normalizedHostURL)
                 mergeStatusesByPath.removeValue(forKey: previous.normalizedLocalDirectory)
                 mergeShowsDetailsByPath.removeValue(forKey: previous.normalizedLocalDirectory)
             }
@@ -668,14 +731,20 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         errorMessage = ""
         do {
             try await startMergeWorkspace(workspace, password: nil, storePassword: false)
-        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+        } catch let bridgeError as BridgeError
+            where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
+        {
             guard let prompt = promptForPassphrase(for: workspace) else { return }
             do {
-                try await startMergeWorkspace(
-                    workspace,
-                    password: prompt.passphrase,
-                    storePassword: prompt.rememberInKeychain,
-                )
+                try await withS3CredentialsRetry(
+                    hostURL: workspace.normalizedHostURL, passphrase: prompt.passphrase
+                ) {
+                    try await startMergeWorkspace(
+                        workspace,
+                        password: prompt.passphrase,
+                        storePassword: prompt.rememberInKeychain,
+                    )
+                }
             } catch {
                 showAlert(
                     title: "Merge Failed",
@@ -806,14 +875,20 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         errorMessage = ""
         do {
             try await startStatusWorkspace(workspace, password: nil, storePassword: false)
-        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+        } catch let bridgeError as BridgeError
+            where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
+        {
             guard let prompt = promptForPassphrase(for: workspace) else { return }
             do {
-                try await startStatusWorkspace(
-                    workspace,
-                    password: prompt.passphrase,
-                    storePassword: prompt.rememberInKeychain,
-                )
+                try await withS3CredentialsRetry(
+                    hostURL: workspace.normalizedHostURL, passphrase: prompt.passphrase
+                ) {
+                    try await startStatusWorkspace(
+                        workspace,
+                        password: prompt.passphrase,
+                        storePassword: prompt.rememberInKeychain,
+                    )
+                }
             } catch {
                 showAlert(
                     title: "Status Failed",

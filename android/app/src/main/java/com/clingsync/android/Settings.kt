@@ -14,9 +14,18 @@ data class AppSettings(
 ) {
     fun isValid(): Boolean = hostUrl.isNotBlank() && author.isNotBlank()
 
-    fun repositoryID(): String {
-        return hostUrl.trim().trimEnd('/')
+    fun repositoryID(): String = hostUrl.trim().trimEnd('/')
+}
+
+// Returns null when `url` is a syntactically acceptable host URL, or a
+// human-readable error message describing the required format otherwise.
+fun validateHostUrl(url: String): String? {
+    val trimmed = url.trim()
+    if (trimmed.startsWith("s3+http://") || trimmed.startsWith("s3+https://")) {
+        return null
     }
+    return "The Host URL must start with \"s3+http://\" or \"s3+https://\".\n\n" +
+        "Example: s3+https://bucket.s3.region.example.com"
 }
 
 class SettingsManager(private val context: Context) {

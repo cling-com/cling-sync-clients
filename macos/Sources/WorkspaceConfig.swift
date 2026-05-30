@@ -5,6 +5,23 @@ let loginAuthorName: String = {
     return user.isEmpty ? NSFullUserName() : user
 }()
 
+// Returns nil when `url` is a syntactically acceptable Repository URL, or a
+// human-readable error message describing the required format otherwise.
+// Local filesystem paths are accepted. Anything that looks like a URL must
+// start with "s3+http://" or "s3+https://".
+func validateHostURL(_ url: String) -> String? {
+    let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasPrefix("s3+http://") || trimmed.hasPrefix("s3+https://") {
+        return nil
+    }
+    if trimmed.contains("://") {
+        return "Remote repository URLs must start with \"s3+http://\" or \"s3+https://\".\n\n"
+            + "Example: s3+https://bucket.s3.region.example.com\n\n"
+            + "Local folder paths are also accepted."
+    }
+    return nil
+}
+
 struct WorkspaceConfig: Codable, Identifiable, Equatable {
     var id: UUID
     var hostURL: String

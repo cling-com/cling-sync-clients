@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     let onSave: (RepositoryConfiguration, Bool) -> Void
     @StateObject private var passphrasePromptController = PassphrasePromptController()
+    @StateObject private var s3CredentialsPromptController = S3CredentialsPromptController()
     @State private var author = ""
     @State private var errorMessage = ""
     @State private var hostURL = ""
@@ -98,7 +99,7 @@ struct SettingsView: View {
                     .disabled(!canSave)
                 }
             }
-            .alert("Connection Error", isPresented: $showError) {
+            .alert("Settings Error", isPresented: $showError) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
@@ -130,6 +131,9 @@ struct SettingsView: View {
             .sheet(item: $passphrasePromptController.request) { request in
                 PassphrasePromptView(controller: passphrasePromptController, request: request)
             }
+            .sheet(item: $s3CredentialsPromptController.request) { request in
+                S3CredentialsPromptView(controller: s3CredentialsPromptController, request: request)
+            }
             .onAppear(perform: loadStoredValues)
         }
     }
@@ -142,6 +146,10 @@ struct SettingsView: View {
     }
 
     private func saveSettings() {
+        if let urlError = validateHostURL(hostURL) {
+            show(urlError)
+            return
+        }
         storedHostURL = hostURL
         storedRepoPathPrefix = repoPathPrefix
         storedAuthor = author
@@ -154,6 +162,10 @@ struct SettingsView: View {
     }
 
     private func testConnection() {
+        if let urlError = validateHostURL(hostURL) {
+            show(urlError)
+            return
+        }
         isTesting = true
         errorMessage = ""
 
@@ -190,12 +202,9 @@ struct SettingsView: View {
         }
         let currentConfiguration = configuration
         try await Bridge.triggerNetworkPermissionIfNeeded(url: currentConfiguration.hostURL)
-        try await Task.detached(priority: .userInitiated) {
-            _ = try Bridge.openRepository(
-                url: currentConfiguration.hostURL,
-                password: resolved.passphrase
-            )
-        }.value
+        _ = try await s3CredentialsPromptController.openRepositoryWithS3Retry(
+            hostURL: currentConfiguration.hostURL,
+            passphrase: resolved.passphrase)
 
         if resolved.mode.savesInKeychain {
             try PassphraseStore.shared.save(

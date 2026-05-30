@@ -8,6 +8,7 @@ struct ResolvedPassphrase {
 @MainActor
 extension ContentView {
     func initialize() async {
+        initBridge()
         applyUITestConfigurationIfNeeded()
         guard configuration.isConfigured else {
             appState = .needsSettings
@@ -19,6 +20,16 @@ extension ContentView {
         } else {
             repositoryConnected = false
             await enterReadyState()
+        }
+    }
+
+    private func initBridge() {
+        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        guard let dataDir = urls.first else { return }
+        do {
+            try Bridge.initBridge(dataDir: dataDir.path)
+        } catch {
+            // Non-fatal. S3 operations will surface a clearer error later.
         }
     }
 
@@ -52,6 +63,7 @@ extension ContentView {
         let repositoryChanged = previousConfiguration.repositoryID != configuration.repositoryID
         if repositoryChanged && !previousConfiguration.repositoryID.isEmpty {
             try? PassphraseStore.shared.clear(for: previousConfiguration.repositoryID)
+            try? Bridge.clearStoredS3Credentials(hostUrl: previousConfiguration.repositoryID)
         }
         repositoryConnected = repositoryVerified || (!repositoryChanged && repositoryConnected)
         appState = .ready
@@ -143,12 +155,8 @@ extension ContentView {
         }
 
         try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
-        let connection = try await Task.detached(priority: .userInitiated) {
-            try Bridge.openRepository(
-                url: configuration.hostURL,
-                password: access.passphrase
-            )
-        }.value
+        let connection = try await s3CredentialsPromptController.openRepositoryWithS3Retry(
+            hostURL: configuration.hostURL, passphrase: access.passphrase)
 
         if access.mode.savesInKeychain {
             try PassphraseStore.shared.save(

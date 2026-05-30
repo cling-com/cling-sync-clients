@@ -137,7 +137,7 @@ func SaveWorkspacePassphrase(localPath, password string) error {
 		return err
 	}
 	defer ws.Close() //nolint:errcheck
-	storage, err := openStorage(string(ws.RemoteRepository))
+	storage, err := openStorage(string(ws.RemoteRepository), []byte(password))
 	if err != nil {
 		return err
 	}
@@ -695,11 +695,11 @@ func shortenRevisionID(revisionID string) string {
 }
 
 func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Repository, error) {
-	storage, err := openStorage(string(ws.RemoteRepository))
-	if err != nil {
-		return nil, err
-	}
 	if password != "" {
+		storage, err := openStorage(string(ws.RemoteRepository), []byte(password))
+		if err != nil {
+			return nil, err
+		}
 		repository, err := lib.OpenRepository(storage, []byte(password))
 		if err != nil {
 			return nil, lib.WrapErrorf(err, "failed to open repository")
@@ -728,6 +728,10 @@ func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Rep
 	passphrase, readErr := ws.ReadSavedPassphrase(encKeyCipher)
 	if readErr != nil {
 		return nil, ErrPassphraseRequired
+	}
+	storage, err := openStorage(string(ws.RemoteRepository), passphrase)
+	if err != nil {
+		return nil, err
 	}
 	repository, openErr := lib.OpenRepository(storage, passphrase)
 	if openErr != nil {
@@ -765,12 +769,31 @@ func createWorkspace(localPath, hostURL string, pathPrefix lib.Path) (*workspace
 	return ws, nil
 }
 
-func openStorage(repository string) (lib.Storage, error) {
-	if clinghttp.IsHTTPStorageUIR(repository) {
+// openStorage builds a [lib.Storage] for `repository`. For S3 URLs it uses the
+// userinfo-embedded credentials when present, otherwise it looks up the
+// encrypted URI stored by [EncryptAndStoreS3Credentials] and decrypts it with
+// the passphrase. For local file paths the passphrase is ignored.
+func openStorage(repository string, passphrase []byte) (lib.Storage, error) {
+	if clinghttp.IsS3StorageURI(repository) {
+		if len(passphrase) == 0 {
+			return nil, ErrPassphraseRequired
+		}
+		encrypted := repository
+		if !clinghttp.S3URIHasEmbeddedCredentials(encrypted) {
+			var ok bool
+			encrypted, ok = lookupS3URI(repository)
+			if !ok {
+				return nil, ErrS3CredentialsRequired
+			}
+		}
+		cfg, _, err := clinghttp.DecodeS3URI(encrypted, passphrase)
+		if err != nil {
+			return nil, lib.WrapErrorf(err, "failed to decode S3 URI")
+		}
 		httpClient := &http.Client{ //nolint:exhaustruct
 			Timeout: 30 * time.Second,
 		}
-		return clinghttp.NewHTTPStorageClient(repository, clinghttp.NewDefaultHTTPClient(httpClient)), nil
+		return clinghttp.NewS3StorageClient(cfg, clinghttp.NewDefaultHTTPClient(httpClient)), nil
 	}
 	storage, err := lib.NewFileStorage(lib.NewRealFS(repository), lib.StoragePurposeRepository)
 	if err != nil {

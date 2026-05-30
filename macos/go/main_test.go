@@ -40,6 +40,9 @@ const (
 	uiTestConfigPath       = "/tmp/cling-sync-macos-ui-test-config.json"
 	uiTestMockKeychainPath = "/tmp/cling-sync-macos-ui-mock-keychain.json"
 	xcodeProjectPath       = "../ClingSyncMac.xcodeproj"
+	testS3Region           = "us-east-1"
+	testS3AccessKeyID      = "minioadmin"
+	testS3SecretAccessKey  = "minioadmin"
 )
 
 func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
@@ -54,6 +57,11 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 	defer shutdown()
 	localDir := filepath.Join(t.TempDir(), "workspace")
 	assert.NoError(os.MkdirAll(localDir, 0o750))
+
+	assert.NoError(bridgepkg.InitBridge(t.TempDir()))
+	assert.NoError(bridgepkg.EncryptAndStoreS3Credentials(
+		hostURL, repo.Passphrase, testS3AccessKeyID, testS3SecretAccessKey,
+	))
 
 	t.Log("Running initial sync into empty folder")
 	assert.NoError(bridgepkg.EnsureWorkspaceConfigured(hostURL, localDir, ""))
@@ -121,37 +129,49 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 	defaultsSuite := "com.cling.ClingSyncMac.ui." + time.Now().Format("20060102150405.000000000")
 	defer cleanupDefaultsSuite(t, defaultsSuite)
 
+	// The combined UI test drives two workspaces:
+	//   - workspace 1 uses the plain S3 URL so we exercise the S3 prompt flow,
+	//   - workspace 2 uses an embedded-credentials URL so we exercise the
+	//     bridge's passthrough that skips the prompt.
+	embeddedURL, err := clingsynchttp.EncodeS3URI(
+		hostURL,
+		clingsynchttp.S3Credentials{
+			AccessKeyID:     testS3AccessKeyID,
+			SecretAccessKey: []byte(testS3SecretAccessKey),
+		},
+		[]byte(repo.Passphrase),
+	)
+	assert.NoError(err)
+
 	localDir := filepath.Join(t.TempDir(), "workspace-ui")
 	assert.NoError(os.MkdirAll(localDir, 0o750))
 	secondLocalDir := filepath.Join(t.TempDir(), "workspace-ui-second")
 	assert.NoError(os.MkdirAll(secondLocalDir, 0o750))
 
+	// Pre-stage the file that workspace 2 will merge so we don't have to
+	// mutate the filesystem between two xcodebuild invocations.
+	uiContents := []byte("hello from ui")
+	assert.NoError(os.WriteFile(filepath.Join(secondLocalDir, "local-ui.txt"), uiContents, 0o600))
+
 	runXCUITest(
 		t,
-		defaultsSuite,
-		hostURL,
-		repo.Passphrase,
-		localDir,
-		secondLocalDir,
-		"Mac UI Test User",
-		"testConfigureSingleWorkspaceMenuAndMerge",
+		uiTestConfig{
+			defaultsSuite:  defaultsSuite,
+			hostURL:        hostURL,
+			secondHostURL:  embeddedURL,
+			passphrase:     repo.Passphrase,
+			localDir:       localDir,
+			secondLocalDir: secondLocalDir,
+			author:         "Mac UI Test User",
+			s3AccessKeyID:  testS3AccessKeyID,
+			s3SecretAccess: testS3SecretAccessKey,
+			newRepoPath:    "",
+		},
+		"testConfigureAndMergeTwoWorkspaces",
 	)
+
 	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
 	assert.Equal("hello from remote", mustReadFile(t, filepath.Join(localDir, "remote.txt")))
-
-	uiContents := []byte("hello from ui")
-	writeErr := os.WriteFile(filepath.Join(secondLocalDir, "local-ui.txt"), uiContents, 0o600)
-	assert.NoError(writeErr)
-	runXCUITest(
-		t,
-		defaultsSuite,
-		hostURL,
-		repo.Passphrase,
-		localDir,
-		secondLocalDir,
-		"Mac UI Test User",
-		"testAddSecondWorkspaceAndMergeIt",
-	)
 
 	newHead := repo.Head()
 	assert.NotEqual(initialHead, newHead)
@@ -186,16 +206,18 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 	defer cleanupDefaultsSuite(t, defaultsSuite)
 
 	// Use "testpassphrase" so we can re-open the repository with TestData helpers below.
-	writeXCUITestConfigWithNewRepo(
-		t,
-		defaultsSuite,
-		"http://unused.invalid",
-		"testpassphrase",
-		localDir,
-		filepath.Join(parentDir, "workspace-second-unused"),
-		"Mac UI Test User",
-		newRepoPath,
-	)
+	writeXCUITestConfig(t, uiTestConfig{
+		defaultsSuite:  defaultsSuite,
+		hostURL:        "http://unused.invalid",
+		secondHostURL:  "",
+		passphrase:     "testpassphrase",
+		localDir:       localDir,
+		secondLocalDir: filepath.Join(parentDir, "workspace-second-unused"),
+		author:         "Mac UI Test User",
+		s3AccessKeyID:  "",
+		s3SecretAccess: "",
+		newRepoPath:    newRepoPath,
+	})
 	logDir := filepath.Join("..", "build", "testlogs")
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("create xcodebuild log dir: %v", err)
@@ -260,23 +282,36 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 
 func serveRepository(t *testing.T, storage *lib.FileStorage) (string, func()) {
 	t.Helper()
-	httpStorage := clingsynchttp.NewHTTPStorageServer(storage, "")
+	s3Server := clingsynchttp.NewS3StorageServer(storage, testS3Region, testS3AccessKeyID, testS3SecretAccessKey)
 	mux := http.NewServeMux()
-	httpStorage.RegisterRoutes(mux)
+	s3Server.RegisterRoutes(mux)
 	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	server := &http.Server{Handler: mux} //nolint:gosec,exhaustruct
 	go server.Serve(listener)            //nolint:errcheck
-	return "http://" + listener.Addr().String(), func() {
+	return "s3+http://" + listener.Addr().String(), func() {
 		_ = server.Close()
 	}
 }
 
-func runXCUITest(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author, onlyTest string) {
+type uiTestConfig struct {
+	defaultsSuite  string
+	hostURL        string
+	secondHostURL  string
+	passphrase     string
+	localDir       string
+	secondLocalDir string
+	author         string
+	s3AccessKeyID  string
+	s3SecretAccess string
+	newRepoPath    string
+}
+
+func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 	t.Helper()
-	writeXCUITestConfig(t, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author)
+	writeXCUITestConfig(t, cfg)
 	logDir := filepath.Join("..", "build", "testlogs")
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("create xcodebuild log dir: %v", err)
@@ -292,7 +327,7 @@ func runXCUITest(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, sec
 			_ = os.Remove(logPath)
 		}
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext( //nolint:gosec
 		ctx,
@@ -301,8 +336,8 @@ func runXCUITest(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, sec
 		"-scheme", "ClingSyncMac",
 		"-destination", "platform=macOS",
 		"-test-timeouts-enabled", "YES",
-		"-default-test-execution-time-allowance", "30",
-		"-maximum-test-execution-time-allowance", "90",
+		"-default-test-execution-time-allowance", "60",
+		"-maximum-test-execution-time-allowance", "180",
 		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/"+onlyTest,
 		"test",
 	)
@@ -341,32 +376,30 @@ func readLogTail(t *testing.T, path string) string {
 	return strings.Join(lines, "\n")
 }
 
-func writeXCUITestConfig(t *testing.T, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author string) {
-	t.Helper()
-	writeXCUITestConfigWithNewRepo(t, defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author, "")
-}
-
-func writeXCUITestConfigWithNewRepo(
-	t *testing.T,
-	defaultsSuite, hostURL, passphrase, localDir, secondLocalDir, author, newRepoPath string,
-) {
+func writeXCUITestConfig(t *testing.T, cfg uiTestConfig) {
 	t.Helper()
 	config := struct {
-		DefaultsSuite  string `json:"defaultsSuite"`
-		ServerURL      string `json:"serverUrl"`
-		Passphrase     string `json:"passphrase"`
-		LocalDir       string `json:"localDir"`
-		SecondLocalDir string `json:"secondLocalDir"`
-		Author         string `json:"author"`
-		NewRepoPath    string `json:"newRepoPath,omitempty"`
+		DefaultsSuite   string `json:"defaultsSuite"`
+		ServerURL       string `json:"serverUrl"`
+		SecondServerURL string `json:"secondServerUrl,omitempty"`
+		S3AccessKeyID   string `json:"s3AccessKeyId,omitempty"`
+		S3AccessKey     string `json:"s3AccessKey,omitempty"`
+		Passphrase      string `json:"passphrase"`
+		LocalDir        string `json:"localDir"`
+		SecondLocalDir  string `json:"secondLocalDir"`
+		Author          string `json:"author"`
+		NewRepoPath     string `json:"newRepoPath,omitempty"`
 	}{
-		DefaultsSuite:  defaultsSuite,
-		ServerURL:      hostURL,
-		Passphrase:     passphrase,
-		LocalDir:       localDir,
-		SecondLocalDir: secondLocalDir,
-		Author:         author,
-		NewRepoPath:    newRepoPath,
+		DefaultsSuite:   cfg.defaultsSuite,
+		ServerURL:       cfg.hostURL,
+		SecondServerURL: cfg.secondHostURL,
+		S3AccessKeyID:   cfg.s3AccessKeyID,
+		S3AccessKey:     cfg.s3SecretAccess,
+		Passphrase:      cfg.passphrase,
+		LocalDir:        cfg.localDir,
+		SecondLocalDir:  cfg.secondLocalDir,
+		Author:          cfg.author,
+		NewRepoPath:     cfg.newRepoPath,
 	}
 	data, err := json.Marshal(config)
 	if err != nil {

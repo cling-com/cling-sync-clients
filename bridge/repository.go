@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	clinghttp "github.com/flunderpero/cling-sync/http"
 	"github.com/flunderpero/cling-sync/lib"
@@ -37,13 +35,13 @@ func CheckRepositoryOpen(hostURL string) bool {
 	return true
 }
 
-// CheckFileRepositoryExists reports whether a cling repository exists on the local
-// filesystem at the given path. Callers must only invoke this for local paths; HTTP(S)
-// URLs are rejected so the call site has to decide explicitly whether a remote check
-// makes sense.
+// CheckFileRepositoryExists reports whether a cling repository exists on the
+// local filesystem at the given path. Callers must only invoke this for local
+// paths. S3 URIs are rejected so the call site has to decide explicitly
+// whether a remote check makes sense.
 func CheckFileRepositoryExists(localPath string) (bool, error) {
-	if clinghttp.IsHTTPStorageUIR(localPath) {
-		return false, lib.Errorf("CheckFileRepositoryExists called with HTTP URL: %s", localPath)
+	if clinghttp.IsS3StorageURI(localPath) {
+		return false, lib.Errorf("CheckFileRepositoryExists called with S3 URI: %s", localPath)
 	}
 	stat, statErr := os.Stat(localPath)
 	if statErr != nil {
@@ -72,8 +70,8 @@ func CheckFileRepositoryExists(localPath string) (bool, error) {
 // given path, protected by the given passphrase. The path must not already host a
 // repository (or the underlying lib.InitNewRepository call will fail).
 func InitNewFileRepository(localPath, passphrase string) error {
-	if clinghttp.IsHTTPStorageUIR(localPath) {
-		return lib.Errorf("cannot initialize a new file repository at HTTP URL: %s", localPath)
+	if clinghttp.IsS3StorageURI(localPath) {
+		return lib.Errorf("cannot initialize a new file repository at S3 URI: %s", localPath)
 	}
 	if passphrase == "" {
 		return lib.Errorf("passphrase must not be empty")
@@ -99,15 +97,16 @@ func GetRepositoryHeadRevisionID() string {
 	return head.String()
 }
 
-// OpenRepository closes any existing repository and opens a new one.
+// OpenRepository closes any existing repository and opens a new one. For S3
+// URLs the bridge looks up the encrypted credentials stored by
+// [EncryptAndStoreS3Credentials]. Returns [ErrS3CredentialsRequired] if none
+// are stored.
 func OpenRepository(hostURL, password string) error {
 	closeRepository()
-	httpClient := &http.Client{ //nolint:exhaustruct
-		Timeout: 30 * time.Second,
+	storage, err := openStorage(hostURL, []byte(password))
+	if err != nil {
+		return err
 	}
-	client := clinghttp.NewDefaultHTTPClient(httpClient)
-	storage := clinghttp.NewHTTPStorageClient(hostURL, client)
-	var err error
 	repository, err = lib.OpenRepository(storage, []byte(password))
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open repository")

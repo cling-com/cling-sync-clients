@@ -52,7 +52,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		}
 		err := OpenRepository(params.HostURL, params.Password)
 		if err != nil {
-			return errorResponse(err.Error())
+			return errorResponseFor(err)
 		}
 		response := struct {
 			HeadRevisionID string `json:"headRevisionId"`
@@ -290,10 +290,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
 		if err := TestWorkspaceAccess(params.LocalPath, params.Password); err != nil {
-			if errors.Is(err, ErrPassphraseRequired) {
-				return errorResponseWithCode(err.Error(), "passphrase_required")
-			}
-			return errorResponse(err.Error())
+			return errorResponseFor(err)
 		}
 		response := struct {
 			Success bool `json:"success"`
@@ -315,10 +312,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		}
 		revisionID, upToDate, err := MergeWorkspace(params.LocalPath, params.Password, params.Author, params.Message)
 		if err != nil {
-			if errors.Is(err, ErrPassphraseRequired) {
-				return errorResponseWithCode(err.Error(), "passphrase_required")
-			}
-			return errorResponse(err.Error())
+			return errorResponseFor(err)
 		}
 		response := struct {
 			RevisionID string `json:"revisionId"`
@@ -348,13 +342,10 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			params.StorePassword,
 		)
 		if err != nil {
-			if errors.Is(err, ErrPassphraseRequired) {
-				return errorResponseWithCode(err.Error(), "passphrase_required")
-			}
 			if errors.Is(err, ErrMergeAlreadyRunning) {
 				return errorResponseWithCode(err.Error(), "merge_already_running")
 			}
-			return errorResponse(err.Error())
+			return errorResponseFor(err)
 		}
 		response := struct {
 			Success bool `json:"success"`
@@ -408,13 +399,10 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		}
 		err := StartStatusWorkspace(params.LocalPath, params.Password, params.StorePassword)
 		if err != nil {
-			if errors.Is(err, ErrPassphraseRequired) {
-				return errorResponseWithCode(err.Error(), "passphrase_required")
-			}
 			if errors.Is(err, ErrStatusAlreadyRunning) {
 				return errorResponseWithCode(err.Error(), "status_already_running")
 			}
-			return errorResponse(err.Error())
+			return errorResponseFor(err)
 		}
 		response := struct {
 			Success bool `json:"success"`
@@ -436,8 +424,66 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
+	case "initBridge":
+		var params struct {
+			DataDir string `json:"dataDir"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := InitBridge(params.DataDir); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse()
+	case "encryptAndStoreS3Credentials":
+		var params struct {
+			RawURL      string `json:"hostUrl"`
+			Passphrase  string `json:"passphrase"`
+			AccessKeyID string `json:"accessKeyId"`
+			AccessKey   string `json:"accessKey"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := EncryptAndStoreS3Credentials(
+			params.RawURL,
+			params.Passphrase,
+			params.AccessKeyID,
+			params.AccessKey,
+		); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse()
+	case "clearStoredS3Credentials":
+		var params struct {
+			HostURL string `json:"hostUrl"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := ClearStoredS3Credentials(params.HostURL); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse()
 	default:
 		return errorResponse(fmt.Sprintf("Unknown command: %s", command))
+	}
+}
+
+func successResponse() string {
+	return `{"success":true}`
+}
+
+// errorResponseFor maps known sentinel errors to error response codes that
+// clients dispatch on. Falls back to a plain-message response.
+func errorResponseFor(err error) string {
+	switch {
+	case errors.Is(err, ErrPassphraseRequired):
+		return errorResponseWithCode(err.Error(), "passphrase_required")
+	case errors.Is(err, ErrS3CredentialsRequired):
+		return errorResponseWithCode(err.Error(), "s3_credentials_required")
+	default:
+		return errorResponse(err.Error())
 	}
 }
 

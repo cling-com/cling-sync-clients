@@ -407,10 +407,14 @@ fun MainScreen(
     var actualUploadedBytes by remember { mutableStateOf(0L) }
     // When non-null, the passphrase prompt dialog is shown. The callback receives the passphrase.
     var passphraseCallback by remember { mutableStateOf<((PassphraseResult) -> Unit)?>(null) }
+    // When non-null, the S3 credentials prompt is shown.
+    var s3CredentialsRequest by remember { mutableStateOf<S3CredentialsRequest?>(null) }
     // Callbacks to invoke when connection succeeds.
     val pendingOnConnected = remember { mutableListOf<() -> Unit>() }
 
-    // Opens the repository with the given passphrase.
+    // Opens the repository with the given passphrase. On the first attempt the
+    // bridge may report that S3 credentials are missing for this URL. We then
+    // prompt for them, store them, and retry.
     fun openRepository(
         passphrase: String,
         saveToKeychain: Boolean,
@@ -418,8 +422,23 @@ fun MainScreen(
         isConnecting = true
         coroutineScope.launch {
             try {
-                withContext(ioDispatcher) {
-                    goBridge.openRepository(settings.hostUrl, passphrase)
+                try {
+                    withContext(ioDispatcher) {
+                        goBridge.openRepository(settings.hostUrl, passphrase)
+                    }
+                } catch (_: S3CredentialsRequiredException) {
+                    // Ask the user for S3 key / access key, store, and retry once.
+                    val creds =
+                        awaitS3Credentials { request -> s3CredentialsRequest = request }
+                    withContext(ioDispatcher) {
+                        goBridge.encryptAndStoreS3Credentials(
+                            hostUrl = settings.hostUrl,
+                            passphrase = passphrase,
+                            accessKeyId = creds.accessKeyId,
+                            accessKey = creds.accessKey,
+                        )
+                        goBridge.openRepository(settings.hostUrl, passphrase)
+                    }
                 }
                 isConnecting = false
                 isConnected = true
@@ -457,7 +476,10 @@ fun MainScreen(
             return
         }
         pendingOnConnected.add(onConnected)
-        if (isConnecting) return // Connection already in progress, callback queued.
+        if (isConnecting) {
+            // Connection already in progress, callback queued.
+            return
+        }
         if (passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
             passphraseStore.load(
                 activity = activity,
@@ -824,6 +846,14 @@ fun MainScreen(
     }
 
     LaunchedEffect(Unit) {
+        // Give the bridge a writable directory for its credentials map.
+        withContext(ioDispatcher) {
+            try {
+                goBridge.initBridge(context.filesDir.absolutePath)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to init bridge: ${e.message}", e)
+            }
+        }
         if (settings.isValid()) {
             // Check if repo is already open (e.g. coming back to the app).
             val alreadyOpen =
@@ -1117,11 +1147,21 @@ fun MainScreen(
             }
         }
 
+        fun showInvalidHostUrlDialog(message: String) {
+            currentErrorDialog =
+                ErrorDialogState(title = "Invalid Host URL", message = message)
+        }
+
         // Dialogs.
         if (showSettingsDialog) {
             SettingsDialog(
                 settings = settings,
                 onSave = { newSettings ->
+                    val urlError = validateHostUrl(newSettings.hostUrl)
+                    if (urlError != null) {
+                        showInvalidHostUrlDialog(urlError)
+                        return@SettingsDialog
+                    }
                     val oldRepositoryID = settings.repositoryID()
                     val repositoryChanged = oldRepositoryID != newSettings.repositoryID()
                     val sourceChanged =
@@ -1134,6 +1174,15 @@ fun MainScreen(
 
                     if (repositoryChanged) {
                         passphraseStore.delete(oldRepositoryID)
+                        coroutineScope.launch {
+                            try {
+                                withContext(ioDispatcher) {
+                                    goBridge.clearStoredS3Credentials(oldRepositoryID)
+                                }
+                            } catch (_: Exception) {
+                                // Best-effort cleanup. Ignore.
+                            }
+                        }
                         fileStatus = emptyMap()
                         isConnected = false
                         selectedFiles = emptySet()
@@ -1145,8 +1194,12 @@ fun MainScreen(
                     }
                 },
                 onTestConnection = { testSettings ->
-                    // Just update the settings in memory for the test, don't save to Disk yet.
-                    // This allows the openRepository logic to use the new hostUrl.
+                    val urlError = validateHostUrl(testSettings.hostUrl)
+                    if (urlError != null) {
+                        showInvalidHostUrlDialog(urlError)
+                        return@SettingsDialog
+                    }
+                    // Update settings in memory only. The user must click Save to persist.
                     settings = testSettings
                     openRepositoryIfNeeded()
                 },
@@ -1218,7 +1271,25 @@ fun MainScreen(
                     passphraseCallback = null
                     callback(result)
                 },
-                onDismiss = { passphraseCallback = null },
+                onDismiss = {
+                    passphraseCallback = null
+                    pendingOnConnected.clear()
+                },
+            )
+        }
+
+        // S3 credentials prompt, shown when the bridge reports that no S3 key
+        // is stored yet for the current host URL.
+        s3CredentialsRequest?.let { request ->
+            S3CredentialsPromptDialog(
+                onConfirm = { result ->
+                    s3CredentialsRequest = null
+                    request.onConfirm(result)
+                },
+                onDismiss = {
+                    s3CredentialsRequest = null
+                    request.onCancel()
+                },
             )
         }
 

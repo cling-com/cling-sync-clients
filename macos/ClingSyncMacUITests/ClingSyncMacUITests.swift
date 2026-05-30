@@ -4,6 +4,9 @@ final class ClingSyncMacUITests: XCTestCase {
     struct UITestConfig: Decodable {
         let defaultsSuite: String
         let serverUrl: String
+        let secondServerUrl: String?
+        let s3AccessKeyId: String?
+        let s3AccessKey: String?
         let passphrase: String
         let localDir: String
         let secondLocalDir: String
@@ -15,25 +18,40 @@ final class ClingSyncMacUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        executionTimeAllowance = 90
+        executionTimeAllowance = 150
     }
 
-    func testConfigureSingleWorkspaceMenuAndMerge() throws {
+    // Covers both URL flows in a single xcodebuild run to save startup time.
+    //
+    // Workspace 1 is configured with a plain S3 URL, so we exercise the full
+    // prompt flow: passphrase prompt followed by the S3 credentials prompt.
+    // Workspace 2 is added later with a URL that already carries the encrypted
+    // credentials in its userinfo, so the bridge connects without ever
+    // surfacing the S3 prompt.
+    func testConfigureAndMergeTwoWorkspaces() throws {
         let config = loadConfig()
         let app = launchApp(defaultsSuiteSuffix: "configure")
 
-        // Settings auto-creates a workspace when empty.
+        // --- Workspace 1: plain S3 URL → passphrase prompt → S3 prompt. ---
         let localFolderField = app.textFields["localFolderField"]
         XCTAssertTrue(localFolderField.waitForExistence(timeout: 5))
 
         replaceText(in: localFolderField, with: config.localDir)
-        replaceText(in: app.textFields["serverURLField"], with: config.serverUrl)
         replaceText(in: app.textFields["authorField"], with: config.author)
 
+        // First try a non-S3 remote URL and verify the validation message.
+        let serverURLField = app.textFields["serverURLField"]
+        replaceText(in: serverURLField, with: "https://wrong.example.com")
         let testButton = app.buttons["testWorkspaceButton"]
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
+        assertPreferencesError(in: app, contains: "s3+http")
+        replaceText(in: serverURLField, with: config.serverUrl)
+
+        XCTAssertTrue(testButton.isEnabled)
+        testButton.tap()
         enterPassphraseIfNeeded(in: app, saveToKeychain: false)
+        enterS3CredentialsIfNeeded(in: app)
         assertNoPreferencesError(in: app, context: "after testWorkspace")
 
         let saveButton = app.buttons["saveWorkspaceButton"]
@@ -64,12 +82,12 @@ final class ClingSyncMacUITests: XCTestCase {
         assertNoPassphrasePrompt(in: app)
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
-    }
 
-    func testAddSecondWorkspaceAndMergeIt() throws {
-        let config = loadConfig()
-        let app = launchApp(defaultsSuiteSuffix: "merge")
-
+        // --- Workspace 2: URL with embedded credentials → no S3 prompt. ---
+        guard let secondServerUrl = config.secondServerUrl, !secondServerUrl.isEmpty else {
+            XCTFail("secondServerUrl missing from UI test config")
+            return
+        }
         openTrayMenu(app, expecting: "Settings")
         let settingsItem = app.menuItems["Settings"].firstMatch
         XCTAssertTrue(settingsItem.waitForExistence(timeout: 5))
@@ -77,16 +95,15 @@ final class ClingSyncMacUITests: XCTestCase {
 
         app.buttons["addFolderButton"].tap()
         replaceText(in: app.textFields["localFolderField"], with: config.secondLocalDir)
-        replaceText(in: app.textFields["serverURLField"], with: config.serverUrl)
+        replaceText(in: app.textFields["serverURLField"], with: secondServerUrl)
         replaceText(in: app.textFields["authorField"], with: config.author)
 
-        let testButton = app.buttons["testWorkspaceButton"]
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
         enterPassphraseIfNeeded(in: app, saveToKeychain: false)
+        assertNoS3Prompt(in: app)
         assertNoPreferencesError(in: app, context: "after testWorkspace (second workspace)")
 
-        let saveButton = app.buttons["saveWorkspaceButton"]
         waitForButtonToEnable(saveButton)
         saveButton.tap()
         waitForElementToDisappear(saveButton)
@@ -100,14 +117,7 @@ final class ClingSyncMacUITests: XCTestCase {
         openTrayMenu(app, expecting: displayName(for: config.secondLocalDir))
         openSubmenu(named: displayName(for: config.secondLocalDir), in: app)
         clickWorkspaceMergeMenuItem(for: config.secondLocalDir, in: app)
-        enterPassphraseIfNeeded(in: app, saveToKeychain: true)
-        waitForMergeToFinish(in: app)
-        closeMergeProgressWindow(in: app)
-
-        openTrayMenu(app, expecting: displayName(for: config.secondLocalDir))
-        openSubmenu(named: displayName(for: config.secondLocalDir), in: app)
-        clickWorkspaceMergeMenuItem(for: config.secondLocalDir, in: app)
-        assertNoPassphrasePrompt(in: app)
+        enterPassphraseIfNeeded(in: app, saveToKeychain: false)
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
     }
@@ -337,6 +347,31 @@ final class ClingSyncMacUITests: XCTestCase {
         XCTAssertFalse(field.waitForExistence(timeout: 2), "passphrase prompt unexpectedly appeared")
     }
 
+    private func enterS3CredentialsIfNeeded(in app: XCUIApplication) {
+        let config = loadConfig()
+        let keyIdField = app.textFields["s3KeyIdField"]
+        guard keyIdField.waitForExistence(timeout: 5) else {
+            return
+        }
+        keyIdField.tap()
+        keyIdField.typeText(config.s3AccessKeyId ?? "minioadmin")
+
+        let accessKeyField = app.secureTextFields["s3AccessKeyField"]
+        accessKeyField.tap()
+        accessKeyField.typeText(config.s3AccessKey ?? "minioadmin")
+
+        let continueButton = app.buttons["Continue"].firstMatch
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 2))
+        continueButton.tap()
+    }
+
+    private func assertNoS3Prompt(in app: XCUIApplication) {
+        let keyIdField = app.textFields["s3KeyIdField"]
+        XCTAssertFalse(
+            keyIdField.waitForExistence(timeout: 2),
+            "S3 credentials prompt unexpectedly appeared for an embedded-credentials URL")
+    }
+
     private func assertNoPreferencesError(in app: XCUIApplication, context: String) {
         let errorLabel = app.staticTexts["preferencesErrorMessage"]
         // Give SwiftUI a brief moment to bind the error message before asserting.
@@ -344,6 +379,15 @@ final class ClingSyncMacUITests: XCTestCase {
             let message = (errorLabel.value as? String) ?? errorLabel.label
             XCTFail("preferences error \(context): \(message)")
         }
+    }
+
+    private func assertPreferencesError(in app: XCUIApplication, contains needle: String) {
+        let errorLabel = app.staticTexts["preferencesErrorMessage"]
+        XCTAssertTrue(errorLabel.waitForExistence(timeout: 5), "expected preferencesErrorMessage to appear")
+        let message = (errorLabel.value as? String) ?? errorLabel.label
+        XCTAssertTrue(
+            message.localizedCaseInsensitiveContains(needle),
+            "expected error to contain \"\(needle)\", got: \(message)")
     }
 
     private enum WaitOutcome {
@@ -383,8 +427,14 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func replaceText(in element: XCUIElement, with value: String) {
         XCTAssertTrue(element.waitForExistence(timeout: 5))
-        element.tap()
-        element.typeKey("a", modifierFlags: .command)
+        element.click()
+        let current = (element.value as? String) ?? ""
+        if !current.isEmpty {
+            element.typeKey(XCUIKeyboardKey.end, modifierFlags: [])
+            for _ in 0..<current.count {
+                element.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+            }
+        }
         element.typeText(value)
     }
 
