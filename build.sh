@@ -6,7 +6,7 @@ root=$(cd $(dirname $0) && pwd)
 cd "$root"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 bridge|ios|android|macos|tools|fmt|lint|test|precommit [options]"
+    echo "Usage: $0 bridge|ios|android|macos|tools|build|fmt|lint|test|precommit [options]"
     echo
     echo "Commands:"
     echo "  bridge [options]"
@@ -23,6 +23,9 @@ if [ $# -eq 0 ]; then
     echo
     echo "  tools"
     echo "      Install development tools (golangci-lint)"
+    echo
+    echo "  build [project]"
+    echo "      Build apps. If no project is specified, build all apps (ios, android, macos)."
     echo
     echo "  fmt [project]"
     echo "      Format code. If no project is specified, format all projects."
@@ -91,6 +94,13 @@ case "$cmd" in
         ;;
     tools)
         build_tools
+        ;;
+    build)
+        apps="ios android macos"
+        if [ $# -gt 0 ]; then
+            apps="$1"
+        fi
+        run_project_cmd build "$apps"
         ;;
     fmt)
         build_tools

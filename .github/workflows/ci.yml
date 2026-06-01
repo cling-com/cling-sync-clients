@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Keep the downloaded SDKs/toolchains under tools/ between runs instead
+          # of letting `git clean` wipe them and force a multi-GB re-download.
+          clean: false
+      - name: Sync cling-sync dependency
+        run: |
+          set -eu
+          sibling="$(dirname "$GITHUB_WORKSPACE")/cling-sync"
+          if [ -d "$sibling/.git" ]; then
+            git -C "$sibling" fetch origin main
+            git -C "$sibling" checkout -f -B main FETCH_HEAD
+          else
+            git clone git@github.com:cling-com/cling-sync.git "$sibling"
+          fi
+      - name: Build
+        run: ./build.sh build
+      - name: Lint
+        run: ./build.sh lint
+      - name: Test (android)
+        run: ./build.sh android test
+      - name: Test (ios)
+        run: ./build.sh ios test
+      - name: Test (macos)
+        run: ./build.sh macos test
