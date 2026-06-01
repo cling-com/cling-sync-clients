@@ -202,7 +202,7 @@ struct SettingsView: View {
         }
         let currentConfiguration = configuration
         try await Bridge.triggerNetworkPermissionIfNeeded(url: currentConfiguration.hostURL)
-        _ = try await s3CredentialsPromptController.openRepositoryWithS3Retry(
+        _ = try await s3CredentialsPromptController.openRepository(
             hostURL: currentConfiguration.hostURL,
             passphrase: resolved.passphrase)
 

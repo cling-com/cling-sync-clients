@@ -57,6 +57,22 @@ struct PreferencesView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+
+            Divider()
+
+            HStack {
+                Text("Sync workers")
+                Spacer()
+                Stepper(value: $controller.syncWorkers, in: 1...64) {
+                    Text("\(controller.syncWorkers)")
+                        .monospacedDigit()
+                }
+                .fixedSize()
+                .accessibilityIdentifier("syncWorkersStepper")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .help("Number of blocks copied in parallel when syncing a repository to a target.")
         }
         .padding(18)
     }
@@ -106,6 +122,11 @@ struct PreferencesView: View {
                     .accessibilityIdentifier("preferencesErrorMessage")
             }
 
+            if let workspace = controller.selectedSavedWorkspace, controller.isWorkspaceConfigured(workspace) {
+                Divider()
+                syncTargetsSection(for: workspace)
+            }
+
             Spacer()
 
             HStack {
@@ -135,6 +156,69 @@ struct PreferencesView: View {
     private var selectedWorkspaceBinding: Binding<UUID?> {
         Binding(get: { controller.selectedWorkspaceID }, set: { controller.selectWorkspace($0) })
     }
+
+    private func syncTargetsSection(for workspace: WorkspaceConfig) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sync Targets")
+                .font(.headline)
+
+            Text(
+                "Mirror this workspace's repository to one or more backup repositories. "
+                    + "Use \"Sync Repository\" from the menu bar to copy it to every target. "
+                    + "A target can be a local folder or an s3+https URL that includes its encrypted credentials."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            let targets = controller.syncTargets(for: workspace)
+            List(selection: selectedSyncTargetBinding) {
+                ForEach(targets) { target in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(target.name)
+                        Text(target.displayURI)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .tag(target.name)
+                }
+            }
+            .accessibilityIdentifier("syncTargetsList")
+            .frame(minHeight: 90, maxHeight: 150)
+
+            HStack(spacing: 0) {
+                Button {
+                    controller.beginAddSyncTarget()
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 24, height: 24)
+                }
+                .accessibilityIdentifier("addSyncTargetButton")
+                .buttonStyle(.borderless)
+
+                Button {
+                    controller.removeSelectedSyncTarget()
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 24, height: 24)
+                }
+                .accessibilityIdentifier("removeSyncTargetButton")
+                .buttonStyle(.borderless)
+                .disabled(controller.selectedSyncTargetName == nil)
+
+                Spacer()
+            }
+        }
+    }
+
+    private var selectedSyncTargetBinding: Binding<String?> {
+        Binding(
+            get: { controller.selectedSyncTargetName },
+            set: { controller.selectedSyncTargetName = $0 }
+        )
+    }
+
 }
 
 private struct WorkspaceRow: View {

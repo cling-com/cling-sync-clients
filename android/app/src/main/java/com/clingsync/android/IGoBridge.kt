@@ -1,18 +1,12 @@
 package com.clingsync.android
 
-class S3CredentialsRequiredException(message: String) : Exception(message)
-
 interface IGoBridge {
-    // Initializes the bridge's writable directory (used for the S3 credentials map).
-    fun initBridge(dataDir: String)
+    fun checkRepositoryOpen(repositoryUri: String): Boolean
 
-    fun checkRepositoryOpen(hostUrl: String): Boolean
-
-    // Opens the repository for `hostUrl`. For S3 URLs the bridge looks up the
-    // encrypted credentials internally. Throws [S3CredentialsRequiredException]
-    // if none are stored.
+    // Opens the repository. `repositoryUri` is a file path or an `s3+...` URI
+    // carrying its encrypted credentials.
     fun openRepository(
-        hostUrl: String,
+        repositoryUri: String,
         password: String,
     )
 
@@ -29,13 +23,12 @@ interface IGoBridge {
         message: String,
     ): String
 
-    // Encrypts the S3 credentials with the passphrase and stores them keyed by `hostUrl`.
-    fun encryptAndStoreS3Credentials(
+    // Encrypts the S3 credentials with the passphrase and returns the `s3+...`
+    // URI with them embedded. The bridge keeps no credential state of its own.
+    fun encodeS3URI(
         hostUrl: String,
         passphrase: String,
         accessKeyId: String,
         accessKey: String,
-    )
-
-    fun clearStoredS3Credentials(hostUrl: String)
+    ): String
 }

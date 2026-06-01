@@ -22,9 +22,17 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     @Published var mergeShowsDetailsByPath: [String: Bool] = [:]
     @Published var statusStatusesByPath: [String: StatusWorkspaceStatus] = [:]
     @Published var statusShowsDetailsByPath: [String: Bool] = [:]
+    @Published var syncStatusesByPath: [String: MergeWorkspaceStatus] = [:]
+    @Published var syncShowsDetailsByPath: [String: Bool] = [:]
+    @Published var syncTargetsByPath: [String: [SyncTargetInfo]] = [:]
+    @Published var selectedSyncTargetName: String?
+    @Published var syncWorkers: Int = 2 {
+        didSet { defaults.set(syncWorkers, forKey: syncWorkersKey) }
+    }
 
     private let defaults: UserDefaults
     private let workspaceConfigsKey = "workspaceConfigs"
+    private let syncWorkersKey = "syncWorkers"
     private var statusItem: NSStatusItem?
     private var preferencesWindow: NSWindow?
     private var testMenuHostWindow: NSWindow?
@@ -34,9 +42,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     private var mergeProgressWorkspaceID: UUID?
     private var statusProgressWindow: NSWindow?
     private var statusProgressWorkspaceID: UUID?
+    private var syncProgressWindow: NSWindow?
+    private var syncProgressWorkspaceID: UUID?
     private var statusMenuItem: NSMenuItem?
     private var mergePollTask: Task<Void, Never>?
     private var statusPollTask: Task<Void, Never>?
+    private var syncPollTask: Task<Void, Never>?
 
     private var menuBuilder: AppMenuBuilder {
         AppMenuBuilder(controller: self)
@@ -51,6 +62,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             defaults = UserDefaults.standard
         }
         super.init()
+        syncWorkers = max(1, (defaults.object(forKey: syncWorkersKey) as? Int) ?? 2)
         loadWorkspaceConfigs()
         selectInitialWorkspace()
         updateDraftFromSelection()
@@ -78,6 +90,30 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         mergeStatusesByPath.values.contains(where: { $0.running })
     }
 
+    var selectedSavedWorkspace: WorkspaceConfig? {
+        guard let selectedWorkspaceID else { return nil }
+        return workspaceConfigs.first(where: { $0.id == selectedWorkspaceID })
+    }
+
+    func isBusy(_ workspace: WorkspaceConfig) -> Bool {
+        mergeStatus(for: workspace).running
+            || statusStatus(for: workspace).running
+            || syncStatus(for: workspace).running
+    }
+
+    func activeOperationLabel(for workspace: WorkspaceConfig) -> String? {
+        if mergeStatus(for: workspace).running {
+            return "Merge (in progress)"
+        }
+        if syncStatus(for: workspace).running {
+            return "Sync (in progress)"
+        }
+        if statusStatus(for: workspace).running {
+            return "Status (in progress)"
+        }
+        return nil
+    }
+
     var isTestMode: Bool {
         ProcessInfo.processInfo.environment["CLING_SYNC_TEST_MENU_HOST"] == "1"
     }
@@ -87,8 +123,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         if let image = NSImage(named: "AppIcon") {
             NSApp.applicationIconImage = image
         }
-        initBridge()
         setupStatusItem()
+        loadAllSyncTargets()
         if isTestMode {
             showTestMenuHost()
         }
@@ -132,6 +168,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             mergeProgressWindow = nil
             mergeProgressWorkspaceID = nil
         }
+        if notification.object as? NSWindow === statusProgressWindow {
+            statusProgressWindow = nil
+            statusProgressWorkspaceID = nil
+        }
+        if notification.object as? NSWindow === syncProgressWindow {
+            syncProgressWindow = nil
+            syncProgressWorkspaceID = nil
+        }
     }
 
     func updateStatusMessage() {
@@ -170,6 +214,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             hostingController.rootView = MergeProgressView(controller: self, workspace: workspace)
             mergeProgressWindow?.title = workspace.displayName + " Merge"
         }
+        if let workspace = syncProgressWorkspaceID.flatMap(workspace(for:)),
+            let hostingController = syncProgressWindow?.contentViewController
+                as? NSHostingController<SyncProgressView>
+        {
+            hostingController.rootView = SyncProgressView(controller: self, workspace: workspace)
+            syncProgressWindow?.title = workspace.displayName + " Sync"
+        }
     }
 
     func rebuildMenu() {
@@ -186,6 +237,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             persistWorkspaceConfigs()
             selectedWorkspaceID = config.id
             draftConfig = config
+        }
+        if let workspace = selectedSavedWorkspace {
+            loadSyncTargets(for: workspace)
         }
         if let window = preferencesWindow {
             updateDraftFromSelection()
@@ -301,11 +355,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             do {
                 let inspection = try Bridge.inspectWorkspace(localPath: url.path)
                 if inspection.exists {
-                    draftConfig.hostURL = inspection.hostURL
+                    // The workspace stores the openable URI; show its cleartext form.
+                    draftConfig.repositoryURI = inspection.hostURL
+                    draftConfig.hostURL = WorkspaceConfig.displayURL(forRepositoryURI: inspection.hostURL)
                     draftConfig.repoPathPrefix = inspection.repoPathPrefix
                     if inspection.hasStoredAccess {
                         draftConfig.verifiedAccessSignature = draftConfig.accessSignature
                     }
+                    loadSyncTargets(for: draftConfig)
                 }
                 errorMessage = ""
             } catch {
@@ -330,8 +387,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func selectWorkspace(_ workspaceID: UUID?) {
         selectedWorkspaceID = workspaceID
+        selectedSyncTargetName = nil
         updateDraftFromSelection()
         errorMessage = ""
+        if let workspace = selectedSavedWorkspace {
+            loadSyncTargets(for: workspace)
+        }
     }
 
     func removeSelectedWorkspace() {
@@ -341,10 +402,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func removeWorkspace(id: UUID) {
         if let workspace = workspace(for: id) {
-            try? Bridge.clearWorkspacePassphrase(hostURL: workspace.normalizedHostURL)
-            try? Bridge.clearStoredS3Credentials(hostUrl: workspace.normalizedHostURL)
+            try? Bridge.clearWorkspacePassphrase(hostURL: workspace.bridgeRepositoryURI)
             mergeStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             mergeShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
+            syncStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
+            syncShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
+            syncTargetsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
         }
         workspaceConfigs.removeAll(where: { $0.id == id })
         persistWorkspaceConfigs()
@@ -359,7 +422,6 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
     func testDraft() {
         guard canTestDraft else { return }
         errorMessage = ""
@@ -373,54 +435,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         refreshMenu()
         Task {
             do {
-                if isFileRepositoryPath(config.normalizedHostURL),
-                    try await !fileRepositoryExists(config)
-                {
-                    guard confirmCreateNewRepository(at: config.normalizedHostURL) else {
-                        isTesting = false
-                        refreshMenu()
-                        return
-                    }
-                    guard let passphrase = promptForNewRepositoryPassphrase(at: config.normalizedHostURL) else {
-                        isTesting = false
-                        refreshMenu()
-                        return
-                    }
-                    try await initNewFileRepository(config, passphrase: passphrase)
-                    try await configureWorkspace(config)
-                    try await testWorkspaceAccess(config, password: passphrase)
-                    markDraftVerified(config)
-                    return
-                }
-                try await configureWorkspace(config)
-                try await testWorkspaceAccess(config, password: nil)
-                markDraftVerified(config)
-            } catch let bridgeError as BridgeError
-                where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
-            {
-                do {
-                    guard let prompt = promptForPassphrase(for: config) else {
-                        isTesting = false
-                        refreshMenu()
-                        return
-                    }
-                    let verified = try await withS3CredentialsRetry(
-                        hostURL: config.normalizedHostURL, passphrase: prompt.passphrase
-                    ) {
-                        try await testWorkspaceAccess(config, password: prompt.passphrase)
-                    }
-                    guard verified != nil else {
-                        isTesting = false
-                        refreshMenu()
-                        return
-                    }
-                    if prompt.rememberInKeychain {
-                        try await storeWorkspacePassphrase(config, passphrase: prompt.passphrase)
-                    }
-                    markDraftVerified(config)
-                } catch {
+                let verified =
+                    isFileRepositoryPath(config.normalizedHostURL)
+                    ? try await testFileRepository(config)
+                    : try await testS3Repository(config)
+                if let verified {
+                    markDraftVerified(verified)
+                } else {
                     isTesting = false
-                    errorMessage = (error as? BridgeError)?.message ?? error.localizedDescription
                     refreshMenu()
                 }
             } catch {
@@ -431,6 +453,68 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
+    // Returns the verified config, or nil if the user cancelled a prompt.
+    private func testFileRepository(_ config: WorkspaceConfig) async throws -> WorkspaceConfig? {
+        if try await !fileRepositoryExists(config) {
+            guard confirmCreateNewRepository(at: config.normalizedHostURL),
+                let passphrase = promptForNewRepositoryPassphrase(at: config.normalizedHostURL)
+            else {
+                return nil
+            }
+            try await initNewFileRepository(config, passphrase: passphrase)
+            try await configureWorkspace(config)
+            try await testWorkspaceAccess(config, password: passphrase)
+            return config
+        }
+        try await configureWorkspace(config)
+        return try await testAccessPromptingIfNeeded(config)
+    }
+
+    // For S3, the credentials are encrypted into `repositoryURI` once, here, and
+    // sent with every later request; the passphrase decrypts them at open time.
+    private func testS3Repository(_ config: WorkspaceConfig) async throws -> WorkspaceConfig? {
+        var config = config
+        // A URL pasted with its credentials already embedded is openable as-is;
+        // adopt it and show the cleartext form.
+        if WorkspaceConfig.s3URIHasEmbeddedCredentials(config.normalizedHostURL) {
+            config.repositoryURI = config.normalizedHostURL
+            config.hostURL = WorkspaceConfig.displayURL(forRepositoryURI: config.normalizedHostURL)
+        }
+        if config.needsS3Credentials {
+            guard let prompt = promptForPassphrase(for: config),
+                let creds = S3CredentialsPrompt.run(for: config.normalizedHostURL)
+            else {
+                return nil
+            }
+            config.repositoryURI = try await encodeS3URI(config, creds: creds, passphrase: prompt.passphrase)
+            try await configureWorkspace(config)
+            try await testWorkspaceAccess(config, password: prompt.passphrase)
+            if prompt.rememberInKeychain {
+                try await storeWorkspacePassphrase(config, passphrase: prompt.passphrase)
+            }
+            return config
+        }
+        try await configureWorkspace(config)
+        return try await testAccessPromptingIfNeeded(config)
+    }
+
+    // Tries the stored passphrase, prompting once if the repository needs one.
+    private func testAccessPromptingIfNeeded(_ config: WorkspaceConfig) async throws -> WorkspaceConfig? {
+        do {
+            try await testWorkspaceAccess(config, password: nil)
+            return config
+        } catch let error as BridgeError where error.isPassphraseRequired {
+            guard let prompt = promptForPassphrase(for: config) else {
+                return nil
+            }
+            try await testWorkspaceAccess(config, password: prompt.passphrase)
+            if prompt.rememberInKeychain {
+                try await storeWorkspacePassphrase(config, passphrase: prompt.passphrase)
+            }
+            return config
+        }
+    }
+
     func isFileRepositoryPath(_ hostURL: String) -> Bool {
         let lower = hostURL.lowercased()
         return !lower.hasPrefix("http://")
@@ -438,51 +522,27 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             && !lower.hasPrefix("s3+")
     }
 
-    // Runs `block`. If the bridge reports that S3 credentials are missing for
-    // `hostURL`, prompts the user, stores them via the bridge, and retries once.
-    @discardableResult
-    func withS3CredentialsRetry<T>(
-        hostURL: String,
-        passphrase: String,
-        _ block: () async throws -> T
-    ) async throws -> T? {
-        do {
-            return try await block()
-        } catch let error as BridgeError where error.isS3CredentialsRequired {
-            guard let creds = S3CredentialsPrompt.run(for: hostURL) else {
-                return nil
-            }
-            try await Task.detached(priority: .userInitiated) {
-                try Bridge.encryptAndStoreS3Credentials(
-                    hostUrl: hostURL,
-                    passphrase: passphrase,
-                    accessKeyId: creds.accessKeyId,
-                    accessKey: creds.accessKey)
-            }.value
-            return try await block()
-        }
-    }
-
-    private func initBridge() {
-        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        guard let dataDir = urls.first else { return }
-        let appDir = dataDir.appendingPathComponent("ClingSync", isDirectory: true)
-        do {
-            try Bridge.initBridge(dataDir: appDir.path)
-        } catch {
-            // Non-fatal. S3 operations will surface a clearer error later.
-        }
+    func encodeS3URI(_ config: WorkspaceConfig, creds: S3CredentialsPromptResult, passphrase: String) async throws
+        -> String
+    {
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.encodeS3URI(
+                hostUrl: config.normalizedHostURL,
+                passphrase: passphrase,
+                accessKeyId: creds.accessKeyId,
+                accessKey: creds.accessKey)
+        }.value
     }
 
     func fileRepositoryExists(_ config: WorkspaceConfig) async throws -> Bool {
         try await Task.detached(priority: .userInitiated) {
-            try Bridge.checkFileRepositoryExists(localPath: config.normalizedHostURL)
+            try Bridge.checkFileRepositoryExists(localPath: config.bridgeRepositoryURI)
         }.value
     }
 
     func initNewFileRepository(_ config: WorkspaceConfig, passphrase: String) async throws {
         try await Task.detached(priority: .userInitiated) {
-            try Bridge.initNewFileRepository(localPath: config.normalizedHostURL, password: passphrase)
+            try Bridge.initNewFileRepository(localPath: config.bridgeRepositoryURI, password: passphrase)
         }.value
     }
 
@@ -532,6 +592,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         draftConfig = verified
         isTesting = false
         lastResultMessage = "Tested \(verified.displayName)"
+        loadSyncTargets(for: verified)
         refreshMenu()
     }
 
@@ -680,7 +741,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             localDirectory: draftConfig.normalizedLocalDirectory,
             repoPathPrefix: draftConfig.normalizedRepoPathPrefix,
             author: draftConfig.normalizedAuthor,
-            verifiedAccessSignature: draftConfig.verifiedAccessSignature
+            verifiedAccessSignature: draftConfig.verifiedAccessSignature,
+            repositoryURI: draftConfig.repositoryURI
         )
     }
 
@@ -688,10 +750,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         if let index = workspaceConfigs.firstIndex(where: { $0.id == config.id }) {
             let previous = workspaceConfigs[index]
             if previous.normalizedLocalDirectory != config.normalizedLocalDirectory
-                || previous.normalizedHostURL != config.normalizedHostURL
+                || previous.bridgeRepositoryURI != config.bridgeRepositoryURI
             {
-                try? Bridge.clearWorkspacePassphrase(hostURL: previous.normalizedHostURL)
-                try? Bridge.clearStoredS3Credentials(hostUrl: previous.normalizedHostURL)
+                try? Bridge.clearWorkspacePassphrase(hostURL: previous.bridgeRepositoryURI)
                 mergeStatusesByPath.removeValue(forKey: previous.normalizedLocalDirectory)
                 mergeShowsDetailsByPath.removeValue(forKey: previous.normalizedLocalDirectory)
             }
@@ -707,7 +768,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func configureWorkspace(_ config: WorkspaceConfig) async throws {
         try await Task.detached(priority: .userInitiated) {
             try Bridge.configureWorkspace(
-                url: config.normalizedHostURL,
+                url: config.bridgeRepositoryURI,
                 localPath: config.normalizedLocalDirectory,
                 repoPathPrefix: config.normalizedRepoPathPrefix
             )
@@ -730,21 +791,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         guard !mergeStatus(for: workspace).running else { return }
         errorMessage = ""
         do {
-            try await startMergeWorkspace(workspace, password: nil, storePassword: false)
-        } catch let bridgeError as BridgeError
-            where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
-        {
+            try await startMergeWorkspace(workspace, password: nil)
+        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
             guard let prompt = promptForPassphrase(for: workspace) else { return }
+            if prompt.rememberInKeychain {
+                try? await storeWorkspacePassphrase(workspace, passphrase: prompt.passphrase)
+            }
             do {
-                try await withS3CredentialsRetry(
-                    hostURL: workspace.normalizedHostURL, passphrase: prompt.passphrase
-                ) {
-                    try await startMergeWorkspace(
-                        workspace,
-                        password: prompt.passphrase,
-                        storePassword: prompt.rememberInKeychain,
-                    )
-                }
+                try await startMergeWorkspace(workspace, password: prompt.passphrase)
             } catch {
                 showAlert(
                     title: "Merge Failed",
@@ -759,7 +813,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
-    func startMergeWorkspace(_ workspace: WorkspaceConfig, password: String?, storePassword: Bool) async throws {
+    func startMergeWorkspace(_ workspace: WorkspaceConfig, password: String?) async throws {
         lastResultMessage = ""
         let runningStatus = MergeWorkspaceStatus(
             running: true,
@@ -782,7 +836,6 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 password: password,
                 author: workspace.normalizedAuthor,
                 message: "Merge from macOS menu bar",
-                storePassword: storePassword,
             )
         }.value
         beginMergeStatusPolling()
@@ -874,21 +927,14 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         guard !statusStatus(for: workspace).running else { return }
         errorMessage = ""
         do {
-            try await startStatusWorkspace(workspace, password: nil, storePassword: false)
-        } catch let bridgeError as BridgeError
-            where bridgeError.isPassphraseRequired || bridgeError.isS3CredentialsRequired
-        {
+            try await startStatusWorkspace(workspace, password: nil)
+        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
             guard let prompt = promptForPassphrase(for: workspace) else { return }
+            if prompt.rememberInKeychain {
+                try? await storeWorkspacePassphrase(workspace, passphrase: prompt.passphrase)
+            }
             do {
-                try await withS3CredentialsRetry(
-                    hostURL: workspace.normalizedHostURL, passphrase: prompt.passphrase
-                ) {
-                    try await startStatusWorkspace(
-                        workspace,
-                        password: prompt.passphrase,
-                        storePassword: prompt.rememberInKeychain,
-                    )
-                }
+                try await startStatusWorkspace(workspace, password: prompt.passphrase)
             } catch {
                 showAlert(
                     title: "Status Failed",
@@ -903,7 +949,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
-    func startStatusWorkspace(_ workspace: WorkspaceConfig, password: String?, storePassword: Bool) async throws {
+    func startStatusWorkspace(_ workspace: WorkspaceConfig, password: String?) async throws {
         let runningStatus = StatusWorkspaceStatus(
             running: true,
             completed: false,
@@ -918,7 +964,6 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             try Bridge.startStatusWorkspace(
                 localPath: workspace.normalizedLocalDirectory,
                 password: password,
-                storePassword: storePassword,
             )
         }.value
         beginStatusPolling()
@@ -984,6 +1029,362 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 }
             }
             refreshMenu()
+        }
+    }
+
+    // MARK: - Sync Targets
+
+    func syncTargets(for workspace: WorkspaceConfig) -> [SyncTargetInfo] {
+        syncTargetsByPath[workspace.normalizedLocalDirectory] ?? []
+    }
+
+    func loadSyncTargets(for workspace: WorkspaceConfig) {
+        let localPath = workspace.normalizedLocalDirectory
+        guard !localPath.isEmpty else { return }
+        Task {
+            do {
+                let targets = try await Task.detached(priority: .userInitiated) {
+                    try Bridge.listSyncTargets(localPath: localPath)
+                }.value
+                syncTargetsByPath[localPath] = targets
+            } catch {
+                // The directory does not host a configured workspace yet.
+                syncTargetsByPath.removeValue(forKey: localPath)
+            }
+            refreshMenu()
+        }
+    }
+
+    func loadAllSyncTargets() {
+        for workspace in workspaceConfigs {
+            loadSyncTargets(for: workspace)
+        }
+    }
+
+    // True once the workspace's local directory hosts a configured cling
+    // workspace whose sync targets have been read.
+    func isWorkspaceConfigured(_ workspace: WorkspaceConfig) -> Bool {
+        syncTargetsByPath[workspace.normalizedLocalDirectory] != nil
+    }
+
+    func beginAddSyncTarget() {
+        guard let workspace = selectedSavedWorkspace else { return }
+        guard let input = promptForSyncTarget() else { return }
+        Task { _ = await addSyncTarget(name: input.name, uri: input.uri, to: workspace) }
+    }
+
+    @discardableResult
+    func addSyncTarget(name: String, uri: String, to workspace: WorkspaceConfig) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURI = uri.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedURI.isEmpty else { return false }
+        do {
+            try await performAddSyncTarget(workspace, name: trimmedName, uri: trimmedURI, password: nil)
+            loadSyncTargets(for: workspace)
+            return true
+        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+            guard let prompt = promptForPassphrase(for: workspace) else { return false }
+            if prompt.rememberInKeychain {
+                try? await storeWorkspacePassphrase(workspace, passphrase: prompt.passphrase)
+            }
+            do {
+                try await performAddSyncTarget(
+                    workspace, name: trimmedName, uri: trimmedURI, password: prompt.passphrase)
+                loadSyncTargets(for: workspace)
+                return true
+            } catch {
+                showAlert(
+                    title: "Add Sync Target Failed",
+                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                return false
+            }
+        } catch {
+            showAlert(
+                title: "Add Sync Target Failed",
+                message: (error as? BridgeError)?.message ?? error.localizedDescription)
+            return false
+        }
+    }
+
+    func performAddSyncTarget(_ workspace: WorkspaceConfig, name: String, uri: String, password: String?) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.addSyncTarget(
+                localPath: workspace.normalizedLocalDirectory, name: name, uri: uri, password: password)
+        }.value
+    }
+
+    func removeSelectedSyncTarget() {
+        guard let workspace = selectedSavedWorkspace, let name = selectedSyncTargetName else { return }
+        guard let target = syncTargets(for: workspace).first(where: { $0.name == name }) else { return }
+        removeSyncTarget(target, from: workspace)
+    }
+
+    func removeSyncTarget(_ target: SyncTargetInfo, from workspace: WorkspaceConfig) {
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try Bridge.deleteSyncTarget(localPath: workspace.normalizedLocalDirectory, name: target.name)
+                }.value
+                selectedSyncTargetName = nil
+                loadSyncTargets(for: workspace)
+            } catch {
+                showAlert(
+                    title: "Remove Sync Target Failed",
+                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+            }
+        }
+    }
+
+    func promptForSyncTarget() -> (name: String, uri: String)? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Add Sync Target"
+            alert.informativeText =
+                "Enter a name and the repository to mirror to. The repository can be a local folder "
+                + "path or an s3+http(s) URL that includes its encrypted credentials."
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 56))
+            let stack = NSStackView(frame: container.bounds)
+            stack.orientation = .vertical
+            stack.spacing = 8
+            stack.alignment = .leading
+            stack.autoresizingMask = [.width, .height]
+            let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+            nameField.placeholderString = "Name (letters, digits, '-')"
+            nameField.setAccessibilityIdentifier("syncTargetNameField")
+            let repoField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+            repoField.placeholderString = "Folder path or s3+https://... URL"
+            repoField.setAccessibilityIdentifier("syncTargetRepositoryField")
+            stack.addArrangedSubview(nameField)
+            stack.addArrangedSubview(repoField)
+            container.addSubview(stack)
+            alert.accessoryView = container
+            alert.addButton(withTitle: "Add")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = nameField
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(nameField)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let uri = repoField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty && !uri.isEmpty {
+                return (name: name, uri: uri)
+            }
+        }
+    }
+
+    // MARK: - Sync
+
+    func syncStatus(for workspace: WorkspaceConfig) -> MergeWorkspaceStatus {
+        syncStatusesByPath[workspace.normalizedLocalDirectory]
+            ?? MergeWorkspaceStatus(
+                running: false,
+                canCancel: false,
+                completed: false,
+                cancelled: false,
+                upToDate: false,
+                statusMessage: "",
+                detailedOutput: "",
+                revisionId: "",
+                errorMessage: ""
+            )
+    }
+
+    func syncShowsDetails(for workspace: WorkspaceConfig) -> Bool {
+        syncShowsDetailsByPath[workspace.normalizedLocalDirectory] ?? false
+    }
+
+    func setSyncShowsDetails(_ showsDetails: Bool, for workspace: WorkspaceConfig) {
+        syncShowsDetailsByPath[workspace.normalizedLocalDirectory] = showsDetails
+    }
+
+    var hasActiveSyncs: Bool {
+        syncStatusesByPath.values.contains(where: { $0.running })
+    }
+
+    func startSyncFromMenu(_ workspace: WorkspaceConfig) async {
+        guard !syncStatus(for: workspace).running else { return }
+        errorMessage = ""
+        do {
+            try await startSyncWorkspace(workspace, password: nil)
+        } catch let bridgeError as BridgeError where bridgeError.isNoSyncTargets {
+            showAlert(
+                title: "No Sync Targets",
+                message: "Add a sync target for \(workspace.displayName) in Settings before syncing.")
+        } catch let bridgeError as BridgeError where bridgeError.isPassphraseRequired {
+            guard let prompt = promptForPassphrase(for: workspace) else { return }
+            if prompt.rememberInKeychain {
+                try? await storeWorkspacePassphrase(workspace, passphrase: prompt.passphrase)
+            }
+            do {
+                try await startSyncWorkspace(workspace, password: prompt.passphrase)
+            } catch {
+                showAlert(
+                    title: "Sync Failed",
+                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+            }
+        } catch {
+            showAlert(
+                title: "Sync Failed",
+                message: (error as? BridgeError)?.message ?? error.localizedDescription)
+        }
+    }
+
+    func startSyncWorkspace(_ workspace: WorkspaceConfig, password: String?) async throws {
+        let workers = syncWorkers
+        // Reflect "in progress" and open the window up front, before the bridge's
+        // pre-flight repository open (an S3 round trip that can take seconds), so
+        // the menu and dialog respond immediately rather than after it returns.
+        lastResultMessage = ""
+        let runningStatus = MergeWorkspaceStatus(
+            running: true,
+            canCancel: true,
+            completed: false,
+            cancelled: false,
+            upToDate: false,
+            statusMessage: "Preparing sync...",
+            detailedOutput: "",
+            revisionId: "",
+            errorMessage: ""
+        )
+        syncStatusesByPath[workspace.normalizedLocalDirectory] = runningStatus
+        refreshMenu()
+        showSyncProgressWindow(for: workspace)
+        try await Task.detached(priority: .userInitiated) {
+            try Bridge.startSyncWorkspace(
+                localPath: workspace.normalizedLocalDirectory,
+                password: password,
+                workers: workers,
+            )
+        }.value
+        beginSyncPolling()
+    }
+
+    func cancelSync(workspace: WorkspaceConfig) {
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try Bridge.cancelSyncWorkspace(localPath: workspace.normalizedLocalDirectory)
+                }.value
+                beginSyncPolling()
+            } catch {
+                showAlert(
+                    title: "Abort Sync Failed",
+                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                )
+            }
+        }
+    }
+
+    func beginSyncPolling() {
+        guard syncPollTask == nil else { return }
+        syncPollTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await self.pollSyncStatuses()
+                if !self.hasActiveSyncs {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            await MainActor.run {
+                self.syncPollTask = nil
+                self.refreshMenu()
+            }
+        }
+    }
+
+    func pollSyncStatuses() async {
+        let workspaces = workspaceConfigs
+        var statuses: [String: MergeWorkspaceStatus] = [:]
+        for workspace in workspaces {
+            let localPath = workspace.normalizedLocalDirectory
+            guard !localPath.isEmpty else { continue }
+            do {
+                let status = try await Task.detached(priority: .userInitiated) {
+                    try Bridge.getSyncWorkspaceStatus(localPath: localPath)
+                }.value
+                if status.running || status.completed || !status.statusMessage.isEmpty || !status.errorMessage.isEmpty {
+                    statuses[localPath] = status
+                }
+            } catch {
+                statuses[localPath] = MergeWorkspaceStatus(
+                    running: false,
+                    canCancel: false,
+                    completed: true,
+                    cancelled: false,
+                    upToDate: false,
+                    statusMessage: "Sync failed",
+                    detailedOutput: "",
+                    revisionId: "",
+                    errorMessage: (error as? BridgeError)?.message ?? error.localizedDescription
+                )
+            }
+        }
+        await MainActor.run {
+            let previousStatuses = syncStatusesByPath
+            syncStatusesByPath = statuses
+            for workspace in workspaceConfigs {
+                let localPath = workspace.normalizedLocalDirectory
+                guard let status = statuses[localPath], status.completed else { continue }
+                let previous = previousStatuses[localPath]
+                if previous?.running == true || previous?.statusMessage != status.statusMessage {
+                    if !status.errorMessage.isEmpty {
+                        showAlert(title: "Sync Failed", message: status.errorMessage)
+                    }
+                    lastResultMessage = "\(workspace.displayName): \(status.statusMessage)"
+                }
+            }
+            refreshMenu()
+        }
+    }
+
+    func showSyncProgressWindow(for workspace: WorkspaceConfig) {
+        syncProgressWorkspaceID = workspace.id
+        if let window = syncProgressWindow,
+            let hostingController = window.contentViewController as? NSHostingController<SyncProgressView>
+        {
+            hostingController.rootView = SyncProgressView(controller: self, workspace: workspace)
+            window.title = workspace.displayName + " Sync"
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let hostingController = NSHostingController(rootView: SyncProgressView(controller: self, workspace: workspace))
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = workspace.displayName + " Sync"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 760, height: 420))
+        window.minSize = NSSize(width: 640, height: 320)
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        syncProgressWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeSyncProgressWindow() {
+        if let id = syncProgressWorkspaceID, let workspace = workspace(for: id) {
+            syncStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
+        }
+        syncProgressWindow?.close()
+        syncProgressWindow = nil
+        syncProgressWorkspaceID = nil
+    }
+
+    func showActiveProgressWindow(for workspace: WorkspaceConfig) {
+        if mergeStatus(for: workspace).running {
+            showMergeProgressWindow(for: workspace)
+        } else if syncStatus(for: workspace).running {
+            showSyncProgressWindow(for: workspace)
+        } else if statusStatus(for: workspace).running {
+            showStatusProgressWindow(for: workspace)
         }
     }
 
@@ -1067,6 +1468,18 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     @objc func handleOpenMergeProgress(_ sender: NSMenuItem) {
         guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
         showMergeProgressWindow(for: workspace)
+    }
+    @objc func handleOpenActiveProgress(_ sender: NSMenuItem) {
+        guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
+        showActiveProgressWindow(for: workspace)
+    }
+    @objc func handleSyncWorkspace(_ sender: NSMenuItem) {
+        guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
+        if syncStatus(for: workspace).running {
+            showSyncProgressWindow(for: workspace)
+        } else {
+            Task { await startSyncFromMenu(workspace) }
+        }
     }
     @objc func handleOpenWorkspaceFolder(_ sender: NSMenuItem) {
         guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }

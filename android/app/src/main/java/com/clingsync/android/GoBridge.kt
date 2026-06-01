@@ -34,11 +34,7 @@ open class GoBridge : IGoBridge {
                 if (response.has("error")) {
                     val error = response.getJSONObject("error")
                     val errorMessage = error.getString("message")
-                    val errorCode = error.optString("code", "")
-                    Log.e("GoBridge", "Command $command failed: $errorMessage (code=$errorCode)")
-                    if (errorCode == "s3_credentials_required") {
-                        throw S3CredentialsRequiredException(errorMessage)
-                    }
+                    Log.e("GoBridge", "Command $command failed: $errorMessage")
                     throw Exception(errorMessage)
                 }
 
@@ -51,34 +47,30 @@ open class GoBridge : IGoBridge {
         }
     }
 
-    override fun initBridge(dataDir: String) {
-        executeInternal("initBridge", JSONObject().apply { put("dataDir", dataDir) })
-    }
-
-    override fun checkRepositoryOpen(hostUrl: String): Boolean {
-        val params = JSONObject().apply { put("hostUrl", hostUrl) }
+    override fun checkRepositoryOpen(repositoryUri: String): Boolean {
+        val params = JSONObject().apply { put("hostUrl", repositoryUri) }
         val response = executeInternal("checkRepositoryOpen", params)
         return response.optBoolean("open", false)
     }
 
     override fun openRepository(
-        hostUrl: String,
+        repositoryUri: String,
         password: String,
     ) {
         val params =
             JSONObject().apply {
-                put("hostUrl", hostUrl)
+                put("hostUrl", repositoryUri)
                 put("password", password)
             }
         executeInternal("openRepository", params)
     }
 
-    override fun encryptAndStoreS3Credentials(
+    override fun encodeS3URI(
         hostUrl: String,
         passphrase: String,
         accessKeyId: String,
         accessKey: String,
-    ) {
+    ): String {
         val params =
             JSONObject().apply {
                 put("hostUrl", hostUrl)
@@ -86,12 +78,7 @@ open class GoBridge : IGoBridge {
                 put("accessKeyId", accessKeyId)
                 put("accessKey", accessKey)
             }
-        executeInternal("encryptAndStoreS3Credentials", params)
-    }
-
-    override fun clearStoredS3Credentials(hostUrl: String) {
-        val params = JSONObject().apply { put("hostUrl", hostUrl) }
-        executeInternal("clearStoredS3Credentials", params)
+        return executeInternal("encodeS3URI", params).getString("uri")
     }
 
     override fun checkFiles(sha256s: List<String>): List<String> {

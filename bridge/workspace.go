@@ -6,15 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/flunderpero/cling-sync/cli/keychain"
-	clinghttp "github.com/flunderpero/cling-sync/http"
 	"github.com/flunderpero/cling-sync/lib"
 	"github.com/flunderpero/cling-sync/workspace"
 )
@@ -55,6 +52,9 @@ type mergeWorkspaceState struct {
 	status          MergeWorkspaceStatus
 	cancelRequested bool
 	detailedOutput  string
+	// cancelCtx, when set (sync only), is invoked on cancel to interrupt the
+	// final head-lock acquisition that has no monitor checkpoint.
+	cancelCtx context.CancelFunc
 }
 
 //nolint:gochecknoglobals,exhaustruct
@@ -84,7 +84,7 @@ func InspectWorkspace(localPath string) (*WorkspaceInfo, error) {
 	defer ws.Close() //nolint:errcheck
 	remote := string(ws.RemoteRepository)
 	_, err = keychain.GetKeychainEntry(context.Background(), keychainService, remote)
-	hasStoredAccess := ws.HasSavedPassphrase() && err == nil
+	hasStoredAccess := ws.HasSavedPassphrase(context.Background()) && err == nil
 	return &WorkspaceInfo{
 		Exists:          true,
 		HostURL:         remote,
@@ -132,27 +132,24 @@ func EnsureWorkspaceConfigured(hostURL, localPath, repoPathPrefix string) error 
 }
 
 func SaveWorkspacePassphrase(localPath, password string) error {
-	ws, err := openWorkspace(localPath)
-	if err != nil {
-		return err
-	}
-	defer ws.Close() //nolint:errcheck
-	storage, err := openStorage(string(ws.RemoteRepository), []byte(password))
-	if err != nil {
-		return err
-	}
-	// Verify the passphrase actually opens the repository before persisting it.
-	if _, err := lib.OpenRepository(storage, []byte(password)); err != nil {
-		return lib.WrapErrorf(err, "failed to open repository")
-	}
-	encKeyCipher, err := loadOrCreateWorkspaceEncKey(string(ws.RemoteRepository))
-	if err != nil {
-		return err
-	}
-	if err := ws.WriteSavedPassphrase([]byte(password), encKeyCipher); err != nil {
-		return lib.WrapErrorf(err, "failed to write saved passphrase")
-	}
-	return nil
+	return withWorkspace(localPath, func(ws *workspace.Workspace) error {
+		storage, err := openWorkspaceStorage(ws, []byte(password))
+		if err != nil {
+			return err
+		}
+		// Verify the passphrase actually opens the repository before persisting it.
+		if _, err := lib.OpenRepository(context.Background(), storage, []byte(password)); err != nil {
+			return lib.WrapErrorf(err, "failed to open repository")
+		}
+		encKeyCipher, err := loadOrCreateWorkspaceEncKey(string(ws.RemoteRepository))
+		if err != nil {
+			return err
+		}
+		if err := ws.WriteSavedPassphrase(context.Background(), []byte(password), encKeyCipher); err != nil {
+			return lib.WrapErrorf(err, "failed to write saved passphrase")
+		}
+		return nil
+	})
 }
 
 // loadOrCreateWorkspaceEncKey returns an AEAD cipher built from the keychain
@@ -201,10 +198,9 @@ func ClearWorkspacePassphrase(hostURL string) error {
 	return nil
 }
 
-func StartStatusWorkspace(localPath, password string, storePassword bool) error {
+func StartStatusWorkspace(localPath, password string) error {
 	localPath = normalizeWorkspacePath(localPath)
-	password, err := prepareMergeWorkspaceAccess(localPath, password, storePassword)
-	if err != nil {
+	if err := prepareWorkspaceAccess(localPath, password); err != nil {
 		return err
 	}
 
@@ -280,7 +276,7 @@ func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState)
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	}
-	statusFiles, err := workspace.Status(ws, repository, opts, tmpFS)
+	statusFiles, err := workspace.Status(context.Background(), ws, repository, opts, tmpFS)
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to get workspace status")
 	}
@@ -340,9 +336,9 @@ func MergeWorkspace(localPath, password, author, message string) (string, bool, 
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	}
-	revisionID, err := workspace.Merge(ws, repository, opts)
+	revisionID, err := workspace.Merge(context.Background(), ws, repository, opts)
 	if errors.Is(err, workspace.ErrUpToDate) {
-		head, headErr := repository.Head()
+		head, headErr := repository.Head(context.Background())
 		if headErr != nil {
 			return "", false, lib.WrapErrorf(headErr, "failed to get repository head")
 		}
@@ -354,10 +350,9 @@ func MergeWorkspace(localPath, password, author, message string) (string, bool, 
 	return revisionID.String(), false, nil
 }
 
-func StartMergeWorkspace(localPath, password, author, message string, storePassword bool) error {
+func StartMergeWorkspace(localPath, password, author, message string) error {
 	localPath = normalizeWorkspacePath(localPath)
-	password, err := prepareMergeWorkspaceAccess(localPath, password, storePassword)
-	if err != nil {
+	if err := prepareWorkspaceAccess(localPath, password); err != nil {
 		return err
 	}
 
@@ -406,22 +401,14 @@ func CancelMergeWorkspace(localPath string) error {
 	return nil
 }
 
-func prepareMergeWorkspaceAccess(localPath, password string, storePassword bool) (string, error) {
-	if storePassword && password != "" {
-		if err := SaveWorkspacePassphrase(localPath, password); err != nil {
-			return "", err
-		}
-		return "", nil
-	}
-	ws, err := openWorkspace(localPath)
-	if err != nil {
-		return "", err
-	}
-	defer ws.Close() //nolint:errcheck
-	if _, err := openWorkspaceRepository(ws, password); err != nil {
-		return "", err
-	}
-	return password, nil
+// prepareWorkspaceAccess verifies that `password` (or the saved passphrase when
+// empty) opens the repository, so callers can surface a passphrase prompt before
+// starting a background operation.
+func prepareWorkspaceAccess(localPath, password string) error {
+	return withWorkspace(localPath, func(ws *workspace.Workspace) error {
+		_, err := openWorkspaceRepository(ws, password)
+		return err
+	})
 }
 
 func runMergeWorkspace(localPath, password, author, message string, state *mergeWorkspaceState) {
@@ -490,7 +477,7 @@ func mergeWorkspaceAsync( //nolint:funlen
 		verbose:  workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeVerbose, cancel, verboseEmit),
 	}
 
-	revisionID, err := workspace.Merge(ws, repository, &workspace.MergeOptions{
+	revisionID, err := workspace.Merge(context.Background(), ws, repository, &workspace.MergeOptions{
 		StagingMonitor:         staging,
 		CpMonitor:              cp,
 		CommitMonitor:          commit,
@@ -500,7 +487,7 @@ func mergeWorkspaceAsync( //nolint:funlen
 		UseStagingCache:        true,
 	})
 	if errors.Is(err, workspace.ErrUpToDate) {
-		head, headErr := repository.Head()
+		head, headErr := repository.Head(context.Background())
 		if headErr != nil {
 			return "", false, lib.WrapErrorf(headErr, "failed to get repository head")
 		}
@@ -617,6 +604,16 @@ func (m *asyncCommitMonitor) OnEnd(entry *lib.RevisionEntry) error {
 func (s *mergeWorkspaceState) requestCancel() {
 	s.mu.Lock()
 	s.cancelRequested = true
+	cancel := s.cancelCtx
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *mergeWorkspaceState) setCancelCtx(cancel context.CancelFunc) {
+	s.mu.Lock()
+	s.cancelCtx = cancel
 	s.mu.Unlock()
 }
 
@@ -695,18 +692,34 @@ func shortenRevisionID(revisionID string) string {
 }
 
 func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Repository, error) {
-	if password != "" {
-		storage, err := openStorage(string(ws.RemoteRepository), []byte(password))
-		if err != nil {
-			return nil, err
-		}
-		repository, err := lib.OpenRepository(storage, []byte(password))
-		if err != nil {
-			return nil, lib.WrapErrorf(err, "failed to open repository")
-		}
-		return repository, nil
+	passphrase, err := workspacePassphrase(ws, password)
+	if err != nil {
+		return nil, err
 	}
-	if !ws.HasSavedPassphrase() {
+	storage, err := openWorkspaceStorage(ws, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := lib.OpenRepository(context.Background(), storage, passphrase)
+	if err != nil {
+		// A failure with a stored passphrase means the saved access no longer
+		// works, so the UI must re-prompt.
+		if password == "" {
+			return nil, ErrPassphraseRequired
+		}
+		return nil, lib.WrapErrorf(err, "failed to open repository")
+	}
+	return repository, nil
+}
+
+// workspacePassphrase returns the repository passphrase: `password` when
+// non-empty, otherwise the passphrase saved by the workspace and unlocked via
+// the keychain. Returns [ErrPassphraseRequired] when neither is available.
+func workspacePassphrase(ws *workspace.Workspace, password string) ([]byte, error) {
+	if password != "" {
+		return []byte(password), nil
+	}
+	if !ws.HasSavedPassphrase(context.Background()) {
 		return nil, ErrPassphraseRequired
 	}
 	encKeyStr, keyErr := keychain.GetKeychainEntry(
@@ -725,19 +738,11 @@ func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Rep
 	if cipherErr != nil {
 		return nil, ErrPassphraseRequired
 	}
-	passphrase, readErr := ws.ReadSavedPassphrase(encKeyCipher)
+	passphrase, readErr := ws.ReadSavedPassphrase(context.Background(), encKeyCipher)
 	if readErr != nil {
 		return nil, ErrPassphraseRequired
 	}
-	storage, err := openStorage(string(ws.RemoteRepository), passphrase)
-	if err != nil {
-		return nil, err
-	}
-	repository, openErr := lib.OpenRepository(storage, passphrase)
-	if openErr != nil {
-		return nil, ErrPassphraseRequired
-	}
-	return repository, nil
+	return passphrase, nil
 }
 
 func openWorkspace(localPath string) (*workspace.Workspace, error) {
@@ -745,7 +750,7 @@ func openWorkspace(localPath string) (*workspace.Workspace, error) {
 	if err != nil {
 		return nil, lib.WrapErrorf(err, "failed to create temporary directory")
 	}
-	ws, err := workspace.OpenWorkspace(lib.NewRealFS(localPath), lib.NewRealFS(tmpDir))
+	ws, err := workspace.OpenWorkspace(context.Background(), lib.NewRealFS(localPath), lib.NewRealFS(tmpDir))
 	if err != nil {
 		return nil, lib.WrapErrorf(err, "failed to open workspace")
 	}
@@ -758,6 +763,7 @@ func createWorkspace(localPath, hostURL string, pathPrefix lib.Path) (*workspace
 		return nil, lib.WrapErrorf(err, "failed to create temporary directory")
 	}
 	ws, err := workspace.NewWorkspace(
+		context.Background(),
 		lib.NewRealFS(localPath),
 		lib.NewRealFS(tmpDir),
 		workspace.RemoteRepository(hostURL),
@@ -769,35 +775,23 @@ func createWorkspace(localPath, hostURL string, pathPrefix lib.Path) (*workspace
 	return ws, nil
 }
 
-// openStorage builds a [lib.Storage] for `repository`. For S3 URLs it uses the
-// userinfo-embedded credentials when present, otherwise it looks up the
-// encrypted URI stored by [EncryptAndStoreS3Credentials] and decrypts it with
-// the passphrase. For local file paths the passphrase is ignored.
-func openStorage(repository string, passphrase []byte) (lib.Storage, error) {
-	if clinghttp.IsS3StorageURI(repository) {
-		if len(passphrase) == 0 {
-			return nil, ErrPassphraseRequired
-		}
-		encrypted := repository
-		if !clinghttp.S3URIHasEmbeddedCredentials(encrypted) {
-			var ok bool
-			encrypted, ok = lookupS3URI(repository)
-			if !ok {
-				return nil, ErrS3CredentialsRequired
-			}
-		}
-		cfg, _, err := clinghttp.DecodeS3URI(encrypted, passphrase)
-		if err != nil {
-			return nil, lib.WrapErrorf(err, "failed to decode S3 URI")
-		}
-		httpClient := &http.Client{ //nolint:exhaustruct
-			Timeout: 30 * time.Second,
-		}
-		return clinghttp.NewS3StorageClient(cfg, clinghttp.NewDefaultHTTPClient(httpClient)), nil
-	}
-	storage, err := lib.NewFileStorage(lib.NewRealFS(repository), lib.StoragePurposeRepository)
+// withWorkspace opens the workspace at `localPath`, runs `fn`, and closes it.
+func withWorkspace(localPath string, fn func(*workspace.Workspace) error) error {
+	ws, err := openWorkspace(localPath)
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "failed to open storage")
+		return err
+	}
+	defer ws.Close() //nolint:errcheck
+	return fn(ws)
+}
+
+// openWorkspaceStorage opens the repository storage backing `ws`. The
+// `RemoteRepository` is always directly openable: a local path, or an
+// `s3+...` URI carrying its encrypted credentials (decrypted with `passphrase`).
+func openWorkspaceStorage(ws *workspace.Workspace, passphrase []byte) (lib.Storage, error) {
+	storage, err := workspace.OpenStorage(string(ws.RemoteRepository), passphrase)
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "failed to open repository storage")
 	}
 	return storage, nil
 }

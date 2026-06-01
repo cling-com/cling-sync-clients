@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestEnsureWorkspaceConfiguredAllowsFileRepository(t *testing.T) {
 	assert.Equal(workspace.RemoteRepository(repoFS.BasePath), ws.RemoteRepository)
 	repository, err := openWorkspaceRepository(ws, repo.Passphrase)
 	assert.NoError(err)
-	head, err := repository.Head()
+	head, err := repository.Head(context.Background())
 	assert.NoError(err)
 	assert.Equal(repo.Head(), head)
 }

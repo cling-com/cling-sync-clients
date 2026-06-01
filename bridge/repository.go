@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -57,7 +58,7 @@ func CheckFileRepositoryExists(localPath string) (bool, error) {
 	if err != nil {
 		return false, lib.WrapErrorf(err, "failed to open file storage at %s", localPath)
 	}
-	if _, err := storage.Open(); err != nil {
+	if _, err := storage.Open(context.Background()); err != nil {
 		if errors.Is(err, lib.ErrStorageNotFound) {
 			return false, nil
 		}
@@ -83,7 +84,7 @@ func InitNewFileRepository(localPath, passphrase string) error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open file storage at %s", localPath)
 	}
-	if _, err := lib.InitNewRepository(storage, []byte(passphrase)); err != nil {
+	if _, err := lib.InitNewRepository(context.Background(), storage, []byte(passphrase)); err != nil {
 		return lib.WrapErrorf(err, "failed to initialize new repository at %s", localPath)
 	}
 	return nil
@@ -97,17 +98,15 @@ func GetRepositoryHeadRevisionID() string {
 	return head.String()
 }
 
-// OpenRepository closes any existing repository and opens a new one. For S3
-// URLs the bridge looks up the encrypted credentials stored by
-// [EncryptAndStoreS3Credentials]. Returns [ErrS3CredentialsRequired] if none
-// are stored.
+// OpenRepository closes any existing repository and opens a new one. `hostURL`
+// is a local path or an `s3+...` URI carrying its encrypted credentials.
 func OpenRepository(hostURL, password string) error {
 	closeRepository()
-	storage, err := openStorage(hostURL, []byte(password))
+	storage, err := workspace.OpenStorage(hostURL, []byte(password))
 	if err != nil {
-		return err
+		return lib.WrapErrorf(err, "failed to open repository storage")
 	}
-	repository, err = lib.OpenRepository(storage, []byte(password))
+	repository, err = lib.OpenRepository(context.Background(), storage, []byte(password))
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open repository")
 	}
@@ -120,7 +119,8 @@ func OpenRepository(hostURL, password string) error {
 }
 
 func refreshSnapshot() error {
-	currentHead, err := repository.Head()
+	ctx := context.Background()
+	currentHead, err := repository.Head(ctx)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to get HEAD revision")
 	}
@@ -129,7 +129,7 @@ func refreshSnapshot() error {
 	}
 	head = currentHead
 	tmpFs := lib.NewMemoryFS(500_000_000)
-	snapshot, err = lib.NewRevisionSnapshot(repository, head, tmpFs)
+	snapshot, err = lib.NewRevisionSnapshot(ctx, repository, head, tmpFs)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision snapshot")
 	}
@@ -233,6 +233,7 @@ func UploadFile(localFilePath string, repoFilePath string) (*lib.RevisionEntry, 
 	}
 	// File does not exist or has changed, proceed with upload.
 	md, err := workspace.AddFileToRepository(
+		context.Background(),
 		fs,
 		localFileName,
 		fileInfo,
@@ -257,8 +258,9 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if repository == nil {
 		return "", lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
+	ctx := context.Background()
 	tempFS := lib.NewMemoryFS(500_000_000)
-	commit, err := lib.NewCommit(repository, tempFS)
+	commit, err := lib.NewCommit(ctx, repository, tempFS)
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to create commit")
 	}
@@ -278,7 +280,7 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 		Author:  author,
 		Message: message,
 	}
-	revisionId, err := commit.Commit(commitInfo)
+	revisionId, err := commit.Commit(ctx, commitInfo)
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to commit")
 	}

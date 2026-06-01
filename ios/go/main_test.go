@@ -75,7 +75,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 		{"uitest/sub/IMG_0004.JPG", lib.RevisionEntryKindAdd, 0o600, lib.Sha256(shaImg0004[:])},
 	}, r.RevisionInfos(newHead))
 
-	revision, err := r.ReadRevision(newHead, lib.NewBlockBuf())
+	revision, err := r.ReadRevision(t.Context(), newHead, lib.NewBlockBuf())
 	assert.NoError(err)
 	assert.Equal("Testinger", *revision.Author)
 	assert.Contains(*revision.Message, "Backup 1 file")

@@ -119,7 +119,9 @@ class UploadWorker(
 
                 // Verify repository is open. The UI must open it before starting the worker.
                 val settings = SettingsManager(applicationContext).getSettings()
-                if (!goBridge.checkRepositoryOpen(settings.hostUrl)) {
+                val repositoryUri =
+                    RepositoryUriStore(applicationContext).get(settings.repositoryID()) ?: settings.hostUrl
+                if (!goBridge.checkRepositoryOpen(repositoryUri)) {
                     return@withContext Result.failure(
                         workDataOf("error" to "Repository not authenticated. Please open the app and try again."),
                     )

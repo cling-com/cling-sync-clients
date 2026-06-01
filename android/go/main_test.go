@@ -108,7 +108,7 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		{"backup/photo.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Test photo")},
 	}, r.RevisionInfos(newHead))
 
-	revision, err := r.ReadRevision(newHead, lib.NewBlockBuf())
+	revision, err := r.ReadRevision(t.Context(), newHead, lib.NewBlockBuf())
 	assert.NoError(err)
 	assert.Contains(*revision.Message, "Backup 1 file")
 	assert.Equal("Testinger", *revision.Author)

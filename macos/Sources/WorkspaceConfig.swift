@@ -29,6 +29,9 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
     var repoPathPrefix: String
     var author: String
     var verifiedAccessSignature: String
+    // The directly-openable repository URI sent to the bridge. For S3 it carries
+    // the encrypted credentials; hostURL stays the cleartext value for display.
+    var repositoryURI: String
 
     init(
         id: UUID = UUID(),
@@ -36,7 +39,8 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         localDirectory: String = "",
         repoPathPrefix: String = "",
         author: String = loginAuthorName,
-        verifiedAccessSignature: String = ""
+        verifiedAccessSignature: String = "",
+        repositoryURI: String = ""
     ) {
         self.id = id
         self.hostURL = hostURL
@@ -44,6 +48,18 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         self.repoPathPrefix = repoPathPrefix
         self.author = author
         self.verifiedAccessSignature = verifiedAccessSignature
+        self.repositoryURI = repositoryURI
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        hostURL = try container.decodeIfPresent(String.self, forKey: .hostURL) ?? ""
+        localDirectory = try container.decodeIfPresent(String.self, forKey: .localDirectory) ?? ""
+        repoPathPrefix = try container.decodeIfPresent(String.self, forKey: .repoPathPrefix) ?? ""
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? loginAuthorName
+        verifiedAccessSignature = try container.decodeIfPresent(String.self, forKey: .verifiedAccessSignature) ?? ""
+        repositoryURI = try container.decodeIfPresent(String.self, forKey: .repositoryURI) ?? ""
     }
 
     var isComplete: Bool {
@@ -63,6 +79,45 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
 
     var normalizedHostURL: String {
         hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var isS3Host: Bool {
+        let lower = normalizedHostURL.lowercased()
+        return lower.hasPrefix("s3+http://") || lower.hasPrefix("s3+https://")
+    }
+
+    // The URI handed to the bridge: the encrypted S3 URI for S3 repositories,
+    // the host/path itself otherwise.
+    var bridgeRepositoryURI: String {
+        isS3Host ? repositoryURI.trimmingCharacters(in: .whitespacesAndNewlines) : normalizedHostURL
+    }
+
+    // True for an S3 repository whose credentials have not been encrypted into
+    // `repositoryURI` yet (or were encrypted for a different URL), so the user
+    // must supply an S3 key/secret.
+    var needsS3Credentials: Bool {
+        guard isS3Host else { return false }
+        let uri = repositoryURI.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard WorkspaceConfig.s3URIHasEmbeddedCredentials(uri) else { return true }
+        return WorkspaceConfig.displayURL(forRepositoryURI: uri) != normalizedHostURL
+    }
+
+    static func s3URIHasEmbeddedCredentials(_ uri: String) -> Bool {
+        guard let schemeEnd = uri.range(of: "://") else { return false }
+        let authority = uri[schemeEnd.upperBound...].prefix(while: { $0 != "/" })
+        return authority.contains("@")
+    }
+
+    // Strips the encrypted credential userinfo from an S3 repository URI, giving
+    // the cleartext URL to show and edit. Non-S3 URIs are returned unchanged.
+    static func displayURL(forRepositoryURI uri: String) -> String {
+        guard uri.hasPrefix("s3+"), let schemeEnd = uri.range(of: "://") else { return uri }
+        let rest = uri[schemeEnd.upperBound...]
+        let slash = rest.firstIndex(of: "/") ?? rest.endIndex
+        let authority = rest[..<slash]
+        guard let atIndex = authority.firstIndex(of: "@") else { return uri }
+        let strippedAuthority = authority[authority.index(after: atIndex)...]
+        return String(uri[..<schemeEnd.upperBound]) + strippedAuthority + rest[slash...]
     }
 
     var normalizedLocalDirectory: String {

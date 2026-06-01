@@ -5,6 +5,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let defaultsSuite: String
         let serverUrl: String
         let secondServerUrl: String?
+        let syncTargetUrl: String?
         let s3AccessKeyId: String?
         let s3AccessKey: String?
         let passphrase: String
@@ -82,6 +83,33 @@ final class ClingSyncMacUITests: XCTestCase {
         assertNoPassphrasePrompt(in: app)
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
+
+        // --- Workspace 1: register a sync target and run "Sync Repository". ---
+        // The target is a second server (S3 backup) whose URL embeds the
+        // encrypted credentials, so no prompts appear here.
+        if let syncTargetUrl = config.syncTargetUrl, !syncTargetUrl.isEmpty {
+            openTrayMenu(app, expecting: "Settings")
+            app.menuItems["Settings"].firstMatch.click()
+
+            let addTargetButton = app.buttons["addSyncTargetButton"]
+            XCTAssertTrue(addTargetButton.waitForExistence(timeout: 5), "addSyncTargetButton not found")
+            addTargetButton.tap()
+
+            replaceText(in: app.textFields["syncTargetNameField"], with: "backup")
+            replaceText(in: app.textFields["syncTargetRepositoryField"], with: syncTargetUrl)
+            app.buttons["Add"].firstMatch.tap()
+
+            XCTAssertTrue(
+                app.staticTexts["backup"].waitForExistence(timeout: 5), "sync target not listed after adding")
+
+            closePreferences(in: app)
+
+            openTrayMenu(app, expecting: "Sync Repository")
+            clickWorkspaceSyncMenuItem(for: config.localDir, in: app)
+            enterPassphraseIfNeeded(in: app, saveToKeychain: false)
+            waitForSyncToFinish(in: app)
+            closeSyncProgressWindow(in: app)
+        }
 
         // --- Workspace 2: URL with embedded credentials → no S3 prompt. ---
         guard let secondServerUrl = config.secondServerUrl, !secondServerUrl.isEmpty else {
@@ -237,6 +265,52 @@ final class ClingSyncMacUITests: XCTestCase {
         let item = app.menuItems[workspaceMergeIdentifier(for: localDir)].firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "merge menu item not found for \(localDir)")
         item.click()
+    }
+
+    private func clickWorkspaceSyncMenuItem(for localDir: String, in app: XCUIApplication) {
+        let item = app.menuItems[workspaceSyncIdentifier(for: localDir)].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "sync menu item not found for \(localDir)")
+        item.click()
+    }
+
+    private func closePreferences(in app: XCUIApplication) {
+        let cancelButton = app.buttons["Cancel"].firstMatch
+        if cancelButton.waitForExistence(timeout: 3) {
+            cancelButton.tap()
+        }
+    }
+
+    private func waitForSyncToFinish(in app: XCUIApplication) {
+        let status = app.staticTexts["testStatusLabel"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
+
+        let successPredicate = NSPredicate(
+            format: "value CONTAINS[c] %@ OR label CONTAINS[c] %@",
+            "synced",
+            "synced",
+        )
+        let errorLabel = app.staticTexts["syncErrorMessage"]
+        let result = waitForFirstMatch(
+            success: successPredicate,
+            successObject: status,
+            failure: existsPredicate(),
+            failureObject: errorLabel,
+            timeout: 30,
+        )
+        switch result {
+        case .success:
+            return
+        case .failure:
+            XCTFail("sync failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+        case .timeout:
+            XCTFail("sync did not finish in time; last status: \(status.value as? String ?? status.label)")
+        }
+    }
+
+    private func closeSyncProgressWindow(in app: XCUIApplication) {
+        let closeButton = app.buttons["Close"]
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "Close button not found in sync progress window")
+        closeButton.tap()
     }
 
     private func waitForStatusToFinish(in app: XCUIApplication) {
@@ -448,6 +522,10 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func workspaceMergeIdentifier(for path: String) -> String {
         "workspace.merge.\(path)"
+    }
+
+    private func workspaceSyncIdentifier(for path: String) -> String {
+        "workspace.sync.\(path)"
     }
 
     private func loadConfig() -> UITestConfig {

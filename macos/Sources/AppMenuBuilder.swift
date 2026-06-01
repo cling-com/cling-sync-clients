@@ -17,6 +17,14 @@ struct AppMenuBuilder {
             NSUserInterfaceItemIdentifier("workspace.merge.\(workspace.normalizedLocalDirectory)")
         }
 
+        static func sync(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
+            NSUserInterfaceItemIdentifier("workspace.sync.\(workspace.normalizedLocalDirectory)")
+        }
+
+        static func progress(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
+            NSUserInterfaceItemIdentifier("workspace.progress.\(workspace.normalizedLocalDirectory)")
+        }
+
         static func openFolder(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
             NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.normalizedLocalDirectory)")
         }
@@ -25,6 +33,7 @@ struct AppMenuBuilder {
 
     func buildRootMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
 
         if controller.workspaceConfigs.isEmpty {
             let emptyItem = NSMenuItem(title: "No folders configured", action: nil, keyEquivalent: "")
@@ -32,20 +41,22 @@ struct AppMenuBuilder {
             menu.addItem(emptyItem)
         } else {
             let runningWorkspaces = controller.workspaceConfigs
-                .filter { controller.mergeStatus(for: $0).running }
+                .filter { controller.isBusy($0) }
                 .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
             for workspace in runningWorkspaces {
+                let label = controller.activeOperationLabel(for: workspace) ?? "In progress"
                 let progressItem = NSMenuItem(
-                    title: "\(workspace.displayName) - \(controller.mergeStatusText(for: workspace))",
-                    action: #selector(AppController.handleOpenMergeProgress(_:)),
+                    title: "\(workspace.displayName) - \(label)",
+                    action: #selector(AppController.handleOpenActiveProgress(_:)),
                     keyEquivalent: "",
                 )
                 progressItem.target = controller
                 progressItem.representedObject = workspace.id.uuidString
+                progressItem.identifier = MenuItemID.progress(workspace)
                 progressItem.image = NSImage(
                     systemSymbolName: "arrow.trianglehead.2.clockwise.circle.fill",
-                    accessibilityDescription: "Merge in progress",
+                    accessibilityDescription: "Operation in progress",
                 )
                 menu.addItem(progressItem)
             }
@@ -98,6 +109,7 @@ struct AppMenuBuilder {
 
     func buildWorkspaceMenu(for workspace: WorkspaceConfig) -> NSMenu {
         let menu = NSMenu(title: workspace.displayName)
+        menu.autoenablesItems = false
 
         appendWorkspaceItems(for: workspace, to: menu)
         return menu
@@ -109,27 +121,47 @@ struct AppMenuBuilder {
         menu.addItem(pathItem)
         menu.addItem(.separator())
 
+        // Each operation's own item carries its "(in progress)" label and stays
+        // clickable (to reopen its window) while it runs; the other operations
+        // are disabled so they cannot start concurrently.
+        let mergeRunning = controller.mergeStatus(for: workspace).running
+        let statusRunning = controller.statusStatus(for: workspace).running
+        let syncRunning = controller.syncStatus(for: workspace).running
+        let idle = !controller.isBusy(workspace) && !controller.isSaving && !controller.isTesting
+
         let mergeItem = NSMenuItem(
-            title: "Merge",
+            title: mergeRunning ? "Merge (in progress)" : "Merge",
             action: #selector(AppController.handleMergeWorkspace(_:)),
             keyEquivalent: "",
         )
         mergeItem.target = controller
         mergeItem.representedObject = workspace.id.uuidString
-        mergeItem.isEnabled = !controller.isSaving && !controller.isTesting
+        mergeItem.isEnabled = mergeRunning || idle
         mergeItem.identifier = MenuItemID.merge(workspace)
         menu.addItem(mergeItem)
 
         let statusItem = NSMenuItem(
-            title: "Status",
+            title: statusRunning ? "Status (in progress)" : "Status",
             action: #selector(AppController.handleStatusWorkspace(_:)),
             keyEquivalent: "",
         )
         statusItem.target = controller
         statusItem.representedObject = workspace.id.uuidString
-        statusItem.isEnabled = !controller.isSaving && !controller.isTesting
+        statusItem.isEnabled = statusRunning || idle
         statusItem.identifier = MenuItemID.status(workspace)
         menu.addItem(statusItem)
+
+        let hasSyncTargets = !controller.syncTargets(for: workspace).isEmpty
+        let syncItem = NSMenuItem(
+            title: syncRunning ? "Sync Repository (in progress)" : "Sync Repository",
+            action: #selector(AppController.handleSyncWorkspace(_:)),
+            keyEquivalent: "",
+        )
+        syncItem.target = controller
+        syncItem.representedObject = workspace.id.uuidString
+        syncItem.isEnabled = syncRunning || (hasSyncTargets && idle)
+        syncItem.identifier = MenuItemID.sync(workspace)
+        menu.addItem(syncItem)
 
         let openFolderItem = NSMenuItem(
             title: "Open Local Folder",

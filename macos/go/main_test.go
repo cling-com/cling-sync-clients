@@ -45,6 +45,21 @@ const (
 	testS3SecretAccessKey  = "minioadmin"
 )
 
+// embedS3Credentials encrypts the test S3 credentials into `rawURL`, producing
+// the directly-openable repository URI the client stores and sends.
+func embedS3Credentials(t *testing.T, rawURL, passphrase string) string {
+	t.Helper()
+	uri, err := clingsynchttp.EncodeS3URI(
+		rawURL,
+		clingsynchttp.S3Credentials{AccessKeyID: testS3AccessKeyID, SecretAccessKey: []byte(testS3SecretAccessKey)},
+		[]byte(passphrase),
+	)
+	if err != nil {
+		t.Fatalf("encode S3 URI: %v", err)
+	}
+	return uri
+}
+
 func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 	assert := lib.NewAssert(t)
 
@@ -58,13 +73,11 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 	localDir := filepath.Join(t.TempDir(), "workspace")
 	assert.NoError(os.MkdirAll(localDir, 0o750))
 
-	assert.NoError(bridgepkg.InitBridge(t.TempDir()))
-	assert.NoError(bridgepkg.EncryptAndStoreS3Credentials(
-		hostURL, repo.Passphrase, testS3AccessKeyID, testS3SecretAccessKey,
-	))
+	// The client owns the encrypted credentials: the repository URI carries them.
+	repoURI := embedS3Credentials(t, hostURL, repo.Passphrase)
 
 	t.Log("Running initial sync into empty folder")
-	assert.NoError(bridgepkg.EnsureWorkspaceConfigured(hostURL, localDir, ""))
+	assert.NoError(bridgepkg.EnsureWorkspaceConfigured(repoURI, localDir, ""))
 	assert.NoError(bridgepkg.SaveWorkspacePassphrase(localDir, repo.Passphrase))
 	revisionID, upToDate, err := bridgepkg.MergeWorkspace(localDir, "", "Mac Test User", "initial macOS test sync")
 	assert.NoError(err)
@@ -79,7 +92,7 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 	assert.NoError(writeErr)
 
 	// Run status and verify the new file is detected.
-	assert.NoError(bridgepkg.StartStatusWorkspace(localDir, "", false))
+	assert.NoError(bridgepkg.StartStatusWorkspace(localDir, ""))
 	var statusResult bridgepkg.StatusWorkspaceStatus
 	for range 100 {
 		statusResult = bridgepkg.GetStatusWorkspaceStatus(localDir)
@@ -103,18 +116,149 @@ func TestMacOSIntegration(t *testing.T) { //nolint:paralleltest
 		{Path: "local.txt", Mode: 0o600, Size: len("hello from local"), Content: "hello from local"},
 		{Path: "remote.txt", Mode: 0o600, Size: len("hello from remote"), Content: "hello from remote"},
 	}, repo.RevisionSnapshotFileInfos(newHead, nil))
-	revision, err := repo.ReadRevision(newHead, lib.NewBlockBuf())
+	revision, err := repo.ReadRevision(t.Context(), newHead, lib.NewBlockBuf())
 	assert.NoError(err)
 	assert.Equal("Mac Test User", *revision.Author)
 	assert.Equal("second macOS test sync", *revision.Message)
 	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
 
 	wsTmp := td.NewRealFS(t)
-	workspace, err := ws.OpenWorkspace(lib.NewRealFS(localDir), wsTmp)
+	workspace, err := ws.OpenWorkspace(t.Context(), lib.NewRealFS(localDir), wsTmp)
 	assert.NoError(err)
 	defer workspace.Close() //nolint:errcheck
-	assert.Equal(hostURL, string(workspace.RemoteRepository))
+	assert.Equal(repoURI, string(workspace.RemoteRepository))
 	assert.Equal(newHead, mustWorkspaceHead(t, workspace))
+}
+
+func TestMacOSSyncRepoBackup(t *testing.T) { //nolint:paralleltest
+	assert := lib.NewAssert(t)
+
+	repoFS := td.NewRealFS(t)
+	repo := td.NewTestRepository(t, repoFS)
+	commitFileToRepository(t, repo.Repository, "remote.txt", "hello from remote", "remote author", "seed remote file")
+	sourceHead := repo.Head()
+
+	hostURL, shutdown := serveRepository(t, repo.Storage)
+	defer shutdown()
+	backupHostURL, backupStorage, backupShutdown := serveBackupRepository(t, repo.Storage)
+	defer backupShutdown()
+
+	localDir := filepath.Join(t.TempDir(), "workspace")
+	assert.NoError(os.MkdirAll(localDir, 0o750))
+
+	repoURI := embedS3Credentials(t, hostURL, repo.Passphrase)
+	assert.NoError(bridgepkg.EnsureWorkspaceConfigured(repoURI, localDir, ""))
+
+	syncTargetURL := embedS3Credentials(t, backupHostURL, repo.Passphrase)
+
+	t.Log("Adding the backup sync target")
+	assert.NoError(bridgepkg.AddWorkspaceSyncTarget(localDir, "backup", syncTargetURL, repo.Passphrase))
+
+	targets, err := bridgepkg.ListWorkspaceSyncTargets(localDir)
+	assert.NoError(err)
+	assert.Equal(1, len(targets))
+	assert.Equal("backup", targets[0].Name)
+	// The display URI must not leak the encrypted credential blob.
+	assert.Equal(false, strings.Contains(targets[0].DisplayURI, "@"))
+
+	t.Log("Running the sync to the backup target with 4 workers")
+	assert.NoError(bridgepkg.StartSyncWorkspace(localDir, repo.Passphrase, 4))
+	var syncResult bridgepkg.MergeWorkspaceStatus
+	for range 200 {
+		syncResult = bridgepkg.GetSyncWorkspaceStatus(localDir)
+		if syncResult.Completed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.Equal(true, syncResult.Completed)
+	assert.Equal("", syncResult.ErrorMessage)
+	assert.Contains(syncResult.StatusMessage, "Synced")
+	// The detailed output carries the full monitor progress and the global
+	// worker count we passed in.
+	assert.Contains(syncResult.DetailedOutput, "Source has")
+	assert.Contains(syncResult.DetailedOutput, "Updating target repository head")
+	assert.Contains(syncResult.DetailedOutput, "[4 workers]")
+
+	// Aborting when no sync is running is reported, not silently ignored.
+	if cancelErr := bridgepkg.CancelSyncWorkspace(localDir); cancelErr == nil {
+		t.Fatal("expected CancelSyncWorkspace to fail when no sync is running")
+	}
+
+	// The backup repository head must now match the source head.
+	backupHead, err := lib.ReadRef(t.Context(), backupStorage, "head")
+	assert.NoError(err)
+	assert.Equal(sourceHead, backupHead)
+
+	t.Log("Deleting the backup sync target")
+	assert.NoError(bridgepkg.DeleteWorkspaceSyncTarget(localDir, "backup"))
+	targets, err = bridgepkg.ListWorkspaceSyncTargets(localDir)
+	assert.NoError(err)
+	assert.Equal(0, len(targets))
+}
+
+func TestMacOSSyncRepoFileTargetAndValidation(t *testing.T) { //nolint:paralleltest
+	assert := lib.NewAssert(t)
+
+	repoFS := td.NewRealFS(t)
+	repo := td.NewTestRepository(t, repoFS)
+	commitFileToRepository(t, repo.Repository, "source-data.txt", "hello from source", "source author", "seed source")
+	sourceHead := repo.Head()
+	srcToml, err := repo.Storage.Open(t.Context())
+	assert.NoError(err)
+
+	localDir := filepath.Join(t.TempDir(), "workspace")
+	assert.NoError(os.MkdirAll(localDir, 0o750))
+
+	// The source repository is a local file path (no S3), exercising the
+	// file-path branches of the sync-target code.
+	assert.NoError(bridgepkg.EnsureWorkspaceConfigured(repoFS.BasePath, localDir, ""))
+
+	// A local file backup repository that shares the source configuration.
+	backupFS := td.NewRealFS(t)
+	backupStorage, err := lib.NewFileStorage(backupFS, lib.StoragePurposeRepository)
+	assert.NoError(err)
+	assert.NoError(backupStorage.Init(t.Context(), srcToml, lib.RepositoryConfigHeaderComment))
+	assert.NoError(lib.WriteRef(t.Context(), backupStorage, "head", lib.RevisionId{}))
+
+	assert.NoError(bridgepkg.AddWorkspaceSyncTarget(localDir, "local-backup", backupFS.BasePath, repo.Passphrase))
+
+	// A relative folder path must be rejected, not silently resolved.
+	relErr := bridgepkg.AddWorkspaceSyncTarget(localDir, "rel", "relative/backup", repo.Passphrase)
+	if relErr == nil || !strings.Contains(relErr.Error(), "absolute") {
+		t.Fatalf("expected absolute-path error, got %v", relErr)
+	}
+	// An S3 target URL without embedded credentials must be rejected.
+	s3Err := bridgepkg.AddWorkspaceSyncTarget(
+		localDir, "badS3", "s3+https://bucket.s3.example.com/prefix", repo.Passphrase,
+	)
+	if s3Err == nil || !strings.Contains(s3Err.Error(), "credentials") {
+		t.Fatalf("expected embedded-credentials error, got %v", s3Err)
+	}
+
+	targets, err := bridgepkg.ListWorkspaceSyncTargets(localDir)
+	assert.NoError(err)
+	assert.Equal(1, len(targets))
+	assert.Equal("local-backup", targets[0].Name)
+	// A file-path target's display URI is the path itself.
+	assert.Equal(backupFS.BasePath, targets[0].DisplayURI)
+
+	assert.NoError(bridgepkg.StartSyncWorkspace(localDir, repo.Passphrase, 2))
+	var syncResult bridgepkg.MergeWorkspaceStatus
+	for range 200 {
+		syncResult = bridgepkg.GetSyncWorkspaceStatus(localDir)
+		if syncResult.Completed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.Equal(true, syncResult.Completed)
+	assert.Equal("", syncResult.ErrorMessage)
+	assert.Contains(syncResult.StatusMessage, "Synced")
+
+	backupHead, err := lib.ReadRef(t.Context(), backupStorage, "head")
+	assert.NoError(err)
+	assert.Equal(sourceHead, backupHead)
 }
 
 func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
@@ -143,6 +287,21 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 	)
 	assert.NoError(err)
 
+	// Sync target ("backup"): a second server hosting an empty repository that
+	// shares the source's configuration. Its URL embeds the encrypted
+	// credentials, as required when adding an S3 sync target from the UI.
+	backupHostURL, backupStorage, backupShutdown := serveBackupRepository(t, repo.Storage)
+	defer backupShutdown()
+	syncTargetURL, err := clingsynchttp.EncodeS3URI(
+		backupHostURL,
+		clingsynchttp.S3Credentials{
+			AccessKeyID:     testS3AccessKeyID,
+			SecretAccessKey: []byte(testS3SecretAccessKey),
+		},
+		[]byte(repo.Passphrase),
+	)
+	assert.NoError(err)
+
 	localDir := filepath.Join(t.TempDir(), "workspace-ui")
 	assert.NoError(os.MkdirAll(localDir, 0o750))
 	secondLocalDir := filepath.Join(t.TempDir(), "workspace-ui-second")
@@ -159,6 +318,7 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 			defaultsSuite:  defaultsSuite,
 			hostURL:        hostURL,
 			secondHostURL:  embeddedURL,
+			syncTargetURL:  syncTargetURL,
 			passphrase:     repo.Passphrase,
 			localDir:       localDir,
 			secondLocalDir: secondLocalDir,
@@ -180,11 +340,19 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 		{Path: "remote.txt", Mode: 0o600, Size: len("hello from remote"), Content: "hello from remote"},
 	}, repo.RevisionSnapshotFileInfos(newHead, nil))
 
+	// The UI ran "Sync Repository" on workspace 1 after its first merge, which
+	// mirrors the source repository to the backup target. The backup head must
+	// have advanced to match whatever the source head was at sync time.
+	backupHead, err := lib.ReadRef(t.Context(), backupStorage, "head")
+	assert.NoError(err)
+	assert.Equal(false, backupHead.IsRoot())
+
 	workspaceTmp := td.NewRealFS(t)
-	workspace, err := ws.OpenWorkspace(lib.NewRealFS(localDir), workspaceTmp)
+	workspace, err := ws.OpenWorkspace(t.Context(), lib.NewRealFS(localDir), workspaceTmp)
 	assert.NoError(err)
 	defer workspace.Close() //nolint:errcheck
-	assert.Equal(hostURL, string(workspace.RemoteRepository))
+	// The client encoded the S3 credentials into the stored repository URI.
+	assert.Equal(true, clingsynchttp.S3URIHasEmbeddedCredentials(string(workspace.RemoteRepository)))
 }
 
 func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
@@ -210,6 +378,7 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 		defaultsSuite:  defaultsSuite,
 		hostURL:        "http://unused.invalid",
 		secondHostURL:  "",
+		syncTargetURL:  "",
 		passphrase:     "testpassphrase",
 		localDir:       localDir,
 		secondLocalDir: filepath.Join(parentDir, "workspace-second-unused"),
@@ -267,7 +436,7 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 	assert.Equal(true, mustDirExists(t, filepath.Join(localDir, ".cling")))
 
 	wsTmp := td.NewRealFS(t)
-	workspaceObj, err := ws.OpenWorkspace(lib.NewRealFS(localDir), wsTmp)
+	workspaceObj, err := ws.OpenWorkspace(t.Context(), lib.NewRealFS(localDir), wsTmp)
 	assert.NoError(err)
 	defer workspaceObj.Close() //nolint:errcheck
 	assert.Equal(newRepoPath, string(workspaceObj.RemoteRepository))
@@ -296,10 +465,28 @@ func serveRepository(t *testing.T, storage *lib.FileStorage) (string, func()) {
 	}
 }
 
+// serveBackupRepository creates a fresh, empty repository whose configuration
+// matches `srcStorage` and serves it as a second S3 server. This is the sync
+// target ("backup") in the sync-repo tests.
+func serveBackupRepository(t *testing.T, srcStorage *lib.FileStorage) (string, *lib.FileStorage, func()) {
+	t.Helper()
+	assert := lib.NewAssert(t)
+	srcToml, err := srcStorage.Open(t.Context())
+	assert.NoError(err)
+	backupFS := td.NewRealFS(t)
+	backupStorage, err := lib.NewFileStorage(backupFS, lib.StoragePurposeRepository)
+	assert.NoError(err)
+	assert.NoError(backupStorage.Init(t.Context(), srcToml, lib.RepositoryConfigHeaderComment))
+	assert.NoError(lib.WriteRef(t.Context(), backupStorage, "head", lib.RevisionId{}))
+	hostURL, shutdown := serveRepository(t, backupStorage)
+	return hostURL, backupStorage, shutdown
+}
+
 type uiTestConfig struct {
 	defaultsSuite  string
 	hostURL        string
 	secondHostURL  string
+	syncTargetURL  string
 	passphrase     string
 	localDir       string
 	secondLocalDir string
@@ -382,6 +569,7 @@ func writeXCUITestConfig(t *testing.T, cfg uiTestConfig) {
 		DefaultsSuite   string `json:"defaultsSuite"`
 		ServerURL       string `json:"serverUrl"`
 		SecondServerURL string `json:"secondServerUrl,omitempty"`
+		SyncTargetURL   string `json:"syncTargetUrl,omitempty"`
 		S3AccessKeyID   string `json:"s3AccessKeyId,omitempty"`
 		S3AccessKey     string `json:"s3AccessKey,omitempty"`
 		Passphrase      string `json:"passphrase"`
@@ -393,6 +581,7 @@ func writeXCUITestConfig(t *testing.T, cfg uiTestConfig) {
 		DefaultsSuite:   cfg.defaultsSuite,
 		ServerURL:       cfg.hostURL,
 		SecondServerURL: cfg.secondHostURL,
+		SyncTargetURL:   cfg.syncTargetURL,
 		S3AccessKeyID:   cfg.s3AccessKeyID,
 		S3AccessKey:     cfg.s3SecretAccess,
 		Passphrase:      cfg.passphrase,
@@ -430,6 +619,7 @@ func commitFileToRepository(t *testing.T, repo *lib.Repository, path, content, a
 	repoPath, err := lib.NewPath(path)
 	assert.NoError(err)
 	md, err := ws.AddFileToRepository(
+		t.Context(),
 		fs,
 		repoPath,
 		stat,
@@ -438,10 +628,10 @@ func commitFileToRepository(t *testing.T, repo *lib.Repository, path, content, a
 		nopCommitMonitor{},
 	)
 	assert.NoError(err)
-	commit, err := lib.NewCommit(repo, td.NewFS(t))
+	commit, err := lib.NewCommit(t.Context(), repo, td.NewFS(t))
 	assert.NoError(err)
 	assert.NoError(commit.Add(&lib.RevisionEntry{Path: repoPath, Kind: lib.RevisionEntryKindAdd, Metadata: md}))
-	revisionID, err := commit.Commit(&lib.CommitInfo{Author: author, Message: message})
+	revisionID, err := commit.Commit(t.Context(), &lib.CommitInfo{Author: author, Message: message})
 	assert.NoError(err)
 	return revisionID
 }
@@ -466,7 +656,7 @@ func mustDirExists(t *testing.T, path string) bool {
 
 func mustWorkspaceHead(t *testing.T, workspace *ws.Workspace) lib.RevisionId {
 	t.Helper()
-	head, err := workspace.Head()
+	head, err := workspace.Head(t.Context())
 	if err != nil {
 		t.Fatalf("workspace head: %v", err)
 	}

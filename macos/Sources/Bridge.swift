@@ -8,9 +8,20 @@ struct BridgeError: Error {
         code == "passphrase_required"
     }
 
-    var isS3CredentialsRequired: Bool {
-        code == "s3_credentials_required"
+    var isNoSyncTargets: Bool {
+        code == "no_sync_targets"
     }
+
+    var isSyncAlreadyRunning: Bool {
+        code == "sync_already_running"
+    }
+}
+
+struct SyncTargetInfo: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let uri: String
+    let displayURI: String
 }
 
 struct MergeWorkspaceStatus {
@@ -41,30 +52,23 @@ struct WorkspaceInspection {
 }
 
 enum Bridge {
-    // Gives the Go bridge a writable directory for its S3 credentials map.
-    // Must be called once per app launch before any S3-backed workspace access.
-    static func initBridge(dataDir: String) throws {
-        _ = try execute(command: "initBridge", params: ["dataDir": dataDir])
-    }
-
-    static func encryptAndStoreS3Credentials(
+    // Encrypts the S3 credentials into the repository URI and returns it. The
+    // bridge keeps no credential state; the caller stores the URI and re-sends it.
+    static func encodeS3URI(
         hostUrl: String,
         passphrase: String,
         accessKeyId: String,
         accessKey: String
-    ) throws {
-        _ = try execute(
-            command: "encryptAndStoreS3Credentials",
+    ) throws -> String {
+        let result = try execute(
+            command: "encodeS3URI",
             params: [
                 "hostUrl": hostUrl,
                 "passphrase": passphrase,
                 "accessKeyId": accessKeyId,
                 "accessKey": accessKey,
             ])
-    }
-
-    static func clearStoredS3Credentials(hostUrl: String) throws {
-        _ = try execute(command: "clearStoredS3Credentials", params: ["hostUrl": hostUrl])
+        return result["uri"] as? String ?? ""
     }
 
     static func inspectWorkspace(localPath: String) throws -> WorkspaceInspection {
@@ -130,13 +134,11 @@ enum Bridge {
         password: String?,
         author: String,
         message: String,
-        storePassword: Bool,
     ) throws {
         var params: [String: Any] = [
             "localPath": localPath,
             "author": author,
             "message": message,
-            "storePassword": storePassword,
         ]
         if let password {
             params["password"] = password
@@ -166,11 +168,9 @@ enum Bridge {
     static func startStatusWorkspace(
         localPath: String,
         password: String?,
-        storePassword: Bool,
     ) throws {
         var params: [String: Any] = [
-            "localPath": localPath,
-            "storePassword": storePassword,
+            "localPath": localPath
         ]
         if let password {
             params["password"] = password
@@ -185,6 +185,65 @@ enum Bridge {
             completed: result["completed"] as? Bool ?? false,
             statusMessage: result["statusMessage"] as? String ?? "",
             detailedOutput: result["detailedOutput"] as? String ?? "",
+            errorMessage: result["errorMessage"] as? String ?? ""
+        )
+    }
+
+    static func listSyncTargets(localPath: String) throws -> [SyncTargetInfo] {
+        let result = try execute(command: "listSyncTargets", params: ["localPath": localPath])
+        let raw = result["targets"] as? [[String: Any]] ?? []
+        return raw.map { entry in
+            let uri = entry["uri"] as? String ?? ""
+            return SyncTargetInfo(
+                name: entry["name"] as? String ?? "",
+                uri: uri,
+                displayURI: entry["displayUri"] as? String ?? uri
+            )
+        }
+    }
+
+    static func addSyncTarget(localPath: String, name: String, uri: String, password: String?) throws {
+        var params: [String: Any] = [
+            "localPath": localPath,
+            "name": name,
+            "uri": uri,
+        ]
+        if let password {
+            params["password"] = password
+        }
+        _ = try execute(command: "addSyncTarget", params: params)
+    }
+
+    static func deleteSyncTarget(localPath: String, name: String) throws {
+        _ = try execute(command: "deleteSyncTarget", params: ["localPath": localPath, "name": name])
+    }
+
+    static func startSyncWorkspace(localPath: String, password: String?, workers: Int) throws {
+        var params: [String: Any] = [
+            "localPath": localPath,
+            "workers": workers,
+        ]
+        if let password {
+            params["password"] = password
+        }
+        _ = try execute(command: "startSyncWorkspace", params: params)
+    }
+
+    static func cancelSyncWorkspace(localPath: String) throws {
+        _ = try execute(command: "cancelSyncWorkspace", params: ["localPath": localPath])
+    }
+
+    static func getSyncWorkspaceStatus(localPath: String) throws -> MergeWorkspaceStatus {
+        let result = try execute(command: "getSyncWorkspaceStatus", params: ["localPath": localPath])
+        return MergeWorkspaceStatus(
+            running: result["running"] as? Bool ?? false,
+            canCancel: result["canCancel"] as? Bool ?? false,
+            completed: result["completed"] as? Bool ?? false,
+            cancelled: result["cancelled"] as? Bool ?? false,
+            upToDate: result["upToDate"] as? Bool ?? false,
+            statusMessage: result["statusMessage"] as? String ?? "",
+            detailedOutput: result["detailedOutput"] as? String ?? "",
+            revisionId: result["revisionId"] as? String ?? "",
             errorMessage: result["errorMessage"] as? String ?? ""
         )
     }

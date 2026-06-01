@@ -325,22 +325,15 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		return string(jsonBytes)
 	case "startMergeWorkspace":
 		var params struct {
-			LocalPath     string `json:"localPath"`
-			Password      string `json:"password"`
-			Author        string `json:"author"`
-			Message       string `json:"message"`
-			StorePassword bool   `json:"storePassword"`
+			LocalPath string `json:"localPath"`
+			Password  string `json:"password"`
+			Author    string `json:"author"`
+			Message   string `json:"message"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		err := StartMergeWorkspace(
-			params.LocalPath,
-			params.Password,
-			params.Author,
-			params.Message,
-			params.StorePassword,
-		)
+		err := StartMergeWorkspace(params.LocalPath, params.Password, params.Author, params.Message)
 		if err != nil {
 			if errors.Is(err, ErrMergeAlreadyRunning) {
 				return errorResponseWithCode(err.Error(), "merge_already_running")
@@ -390,14 +383,13 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		return string(jsonBytes)
 	case "startStatusWorkspace":
 		var params struct {
-			LocalPath     string `json:"localPath"`
-			Password      string `json:"password"`
-			StorePassword bool   `json:"storePassword"`
+			LocalPath string `json:"localPath"`
+			Password  string `json:"password"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		err := StartStatusWorkspace(params.LocalPath, params.Password, params.StorePassword)
+		err := StartStatusWorkspace(params.LocalPath, params.Password)
 		if err != nil {
 			if errors.Is(err, ErrStatusAlreadyRunning) {
 				return errorResponseWithCode(err.Error(), "status_already_running")
@@ -424,18 +416,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
-	case "initBridge":
-		var params struct {
-			DataDir string `json:"dataDir"`
-		}
-		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
-			return errorResponse("Failed to parse parameters: " + err.Error())
-		}
-		if err := InitBridge(params.DataDir); err != nil {
-			return errorResponse(err.Error())
-		}
-		return successResponse()
-	case "encryptAndStoreS3Credentials":
+	case "encodeS3URI":
 		var params struct {
 			RawURL      string `json:"hostUrl"`
 			Passphrase  string `json:"passphrase"`
@@ -445,23 +426,106 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		if err := EncryptAndStoreS3Credentials(
-			params.RawURL,
-			params.Passphrase,
-			params.AccessKeyID,
-			params.AccessKey,
-		); err != nil {
+		uri, err := EncodeS3URI(params.RawURL, params.AccessKeyID, params.AccessKey, params.Passphrase)
+		if err != nil {
 			return errorResponse(err.Error())
 		}
-		return successResponse()
-	case "clearStoredS3Credentials":
+		response := struct {
+			URI string `json:"uri"`
+		}{URI: uri}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "listSyncTargets":
 		var params struct {
-			HostURL string `json:"hostUrl"`
+			LocalPath string `json:"localPath"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		if err := ClearStoredS3Credentials(params.HostURL); err != nil {
+		targets, err := ListWorkspaceSyncTargets(params.LocalPath)
+		if err != nil {
+			return errorResponseFor(err)
+		}
+		response := struct {
+			Targets []SyncTargetInfo `json:"targets"`
+		}{Targets: targets}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "addSyncTarget":
+		var params struct {
+			LocalPath string `json:"localPath"`
+			Name      string `json:"name"`
+			URI       string `json:"uri"`
+			Password  string `json:"password"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := AddWorkspaceSyncTarget(params.LocalPath, params.Name, params.URI, params.Password); err != nil {
+			return errorResponseFor(err)
+		}
+		return successResponse()
+	case "deleteSyncTarget":
+		var params struct {
+			LocalPath string `json:"localPath"`
+			Name      string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := DeleteWorkspaceSyncTarget(params.LocalPath, params.Name); err != nil {
+			return errorResponseFor(err)
+		}
+		return successResponse()
+	case "startSyncWorkspace":
+		var params struct {
+			LocalPath string `json:"localPath"`
+			Password  string `json:"password"`
+			Workers   int    `json:"workers"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := StartSyncWorkspace(params.LocalPath, params.Password, params.Workers); err != nil {
+			switch {
+			case errors.Is(err, ErrSyncAlreadyRunning):
+				return errorResponseWithCode(err.Error(), "sync_already_running")
+			case errors.Is(err, ErrNoSyncTargets):
+				return errorResponseWithCode(err.Error(), "no_sync_targets")
+			default:
+				return errorResponseFor(err)
+			}
+		}
+		return successResponse()
+	case "getSyncWorkspaceStatus":
+		var params struct {
+			LocalPath string `json:"localPath"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		jsonBytes, err := json.Marshal(GetSyncWorkspaceStatus(params.LocalPath))
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
+	case "cancelSyncWorkspace":
+		var params struct {
+			LocalPath string `json:"localPath"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := CancelSyncWorkspace(params.LocalPath); err != nil {
+			if errors.Is(err, ErrSyncNotRunning) {
+				return errorResponseWithCode(err.Error(), "sync_not_running")
+			}
 			return errorResponse(err.Error())
 		}
 		return successResponse()
@@ -477,14 +541,10 @@ func successResponse() string {
 // errorResponseFor maps known sentinel errors to error response codes that
 // clients dispatch on. Falls back to a plain-message response.
 func errorResponseFor(err error) string {
-	switch {
-	case errors.Is(err, ErrPassphraseRequired):
+	if errors.Is(err, ErrPassphraseRequired) {
 		return errorResponseWithCode(err.Error(), "passphrase_required")
-	case errors.Is(err, ErrS3CredentialsRequired):
-		return errorResponseWithCode(err.Error(), "s3_credentials_required")
-	default:
-		return errorResponse(err.Error())
 	}
+	return errorResponse(err.Error())
 }
 
 func errorResponse(message string) string {

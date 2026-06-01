@@ -36,27 +36,72 @@ final class S3CredentialsPromptController: ObservableObject {
         request = nil
     }
 
-    // Calls Bridge.openRepository. If the bridge reports that no S3 credentials
-    // are stored for this URL, prompts the user, stores them via the bridge,
-    // and retries once.
-    func openRepositoryWithS3Retry(hostURL: String, passphrase: String) async throws
-        -> RepositoryConnectionInfo
-    {
+    // Opens the repository. If a cleartext S3 URL fails to open, prompts for the
+    // S3 key/secret, encodes them into the URI, stores it, and retries.
+    func openRepository(hostURL: String, passphrase: String) async throws -> RepositoryConnectionInfo {
+        if let stored = RepositoryURIStore.get(for: hostURL) {
+            return try await Task.detached(priority: .userInitiated) {
+                try Bridge.openRepository(url: stored, password: passphrase)
+            }.value
+        }
         do {
             return try await Task.detached(priority: .userInitiated) {
                 try Bridge.openRepository(url: hostURL, password: passphrase)
             }.value
-        } catch let error as BridgeError where error.isS3CredentialsRequired {
+        } catch let error as BridgeError {
+            guard RepositoryURI.isCleartextS3(hostURL) else { throw error }
             let creds = try await prompt(hostURL: hostURL)
-            return try await Task.detached(priority: .userInitiated) {
-                try Bridge.encryptAndStoreS3Credentials(
+            let encoded = try await Task.detached(priority: .userInitiated) {
+                try Bridge.encodeS3URI(
                     hostUrl: hostURL,
                     passphrase: passphrase,
                     accessKeyId: creds.accessKeyId,
                     accessKey: creds.accessKey)
-                return try Bridge.openRepository(url: hostURL, password: passphrase)
+            }.value
+            RepositoryURIStore.set(encoded, for: hostURL)
+            return try await Task.detached(priority: .userInitiated) {
+                try Bridge.openRepository(url: encoded, password: passphrase)
             }.value
         }
+    }
+}
+
+enum RepositoryURI {
+    static func isCleartextS3(_ url: String) -> Bool {
+        let lower = url.lowercased()
+        let isS3 = lower.hasPrefix("s3+http://") || lower.hasPrefix("s3+https://")
+        return isS3 && !hasEmbeddedCredentials(url)
+    }
+
+    static func hasEmbeddedCredentials(_ url: String) -> Bool {
+        guard let schemeEnd = url.range(of: "://") else { return false }
+        return url[schemeEnd.upperBound...].prefix(while: { $0 != "/" }).contains("@")
+    }
+}
+
+// Persists the encrypted S3 repository URI per cleartext URL, so the credentials
+// (encrypted with the passphrase) are entered once and re-sent thereafter.
+enum RepositoryURIStore {
+    private static let key = "repositoryURIs"
+
+    static func get(for hostURL: String) -> String? {
+        dictionary()[hostURL]
+    }
+
+    static func set(_ uri: String, for hostURL: String) {
+        var dict = dictionary()
+        dict[hostURL] = uri
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    static func clear(for hostURL: String) {
+        var dict = dictionary()
+        dict.removeValue(forKey: hostURL)
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    private static func dictionary() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
     }
 }
 

@@ -8,7 +8,6 @@ struct ResolvedPassphrase {
 @MainActor
 extension ContentView {
     func initialize() async {
-        initBridge()
         applyUITestConfigurationIfNeeded()
         guard configuration.isConfigured else {
             appState = .needsSettings
@@ -20,16 +19,6 @@ extension ContentView {
         } else {
             repositoryConnected = false
             await enterReadyState()
-        }
-    }
-
-    private func initBridge() {
-        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        guard let dataDir = urls.first else { return }
-        do {
-            try Bridge.initBridge(dataDir: dataDir.path)
-        } catch {
-            // Non-fatal. S3 operations will surface a clearer error later.
         }
     }
 
@@ -63,7 +52,7 @@ extension ContentView {
         let repositoryChanged = previousConfiguration.repositoryID != configuration.repositoryID
         if repositoryChanged && !previousConfiguration.repositoryID.isEmpty {
             try? PassphraseStore.shared.clear(for: previousConfiguration.repositoryID)
-            try? Bridge.clearStoredS3Credentials(hostUrl: previousConfiguration.repositoryID)
+            RepositoryURIStore.clear(for: previousConfiguration.hostURL)
         }
         repositoryConnected = repositoryVerified || (!repositoryChanged && repositoryConnected)
         appState = .ready
@@ -132,10 +121,13 @@ extension ContentView {
         configuration: RepositoryConfiguration,
         promptIfNeeded: Bool
     ) async throws -> RepositoryConnectionInfo? {
-        // Check if the repository is already open for this URL and path prefix.
-        // If the parameters don't match, the bridge closes the repository.
+        // Check if the repository is already open. The repo is opened under the
+        // encrypted URI (S3 credentials embedded), so we must check that same URI;
+        // passing the cleartext host URL would look like a different repository and
+        // make the bridge close the open one, forcing a needless re-open.
+        let repositoryURI = RepositoryURIStore.get(for: configuration.hostURL) ?? configuration.hostURL
         let status = try await Task.detached(priority: .userInitiated) {
-            try Bridge.checkRepositoryOpen(url: configuration.hostURL)
+            try Bridge.checkRepositoryOpen(url: repositoryURI)
         }.value
         if status.open {
             return RepositoryConnectionInfo(headRevisionId: status.headRevisionId)
@@ -155,7 +147,7 @@ extension ContentView {
         }
 
         try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
-        let connection = try await s3CredentialsPromptController.openRepositoryWithS3Retry(
+        let connection = try await s3CredentialsPromptController.openRepository(
             hostURL: configuration.hostURL, passphrase: access.passphrase)
 
         if access.mode.savesInKeychain {

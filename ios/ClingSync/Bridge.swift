@@ -8,10 +8,6 @@ struct BridgeError: Error {
         self.message = message
         self.code = code
     }
-
-    var isS3CredentialsRequired: Bool {
-        code == "s3_credentials_required"
-    }
 }
 
 struct RepositoryConnectionInfo {
@@ -24,30 +20,23 @@ struct RepositoryStatus {
 }
 
 class Bridge {
-    // Gives the Go bridge a writable directory for its S3 credentials map. Must
-    // be called once per app launch before any S3-backed openRepository.
-    static func initBridge(dataDir: String) throws(BridgeError) {
-        _ = try execute(command: "initBridge", params: ["dataDir": dataDir])
-    }
-
-    static func encryptAndStoreS3Credentials(
+    // Encrypts the S3 credentials into the repository URI and returns it. The
+    // bridge keeps no credential state; the caller stores the URI and re-sends it.
+    static func encodeS3URI(
         hostUrl: String,
         passphrase: String,
         accessKeyId: String,
         accessKey: String
-    ) throws(BridgeError) {
-        _ = try execute(
-            command: "encryptAndStoreS3Credentials",
+    ) throws(BridgeError) -> String {
+        let result = try execute(
+            command: "encodeS3URI",
             params: [
                 "hostUrl": hostUrl,
                 "passphrase": passphrase,
                 "accessKeyId": accessKeyId,
                 "accessKey": accessKey,
             ])
-    }
-
-    static func clearStoredS3Credentials(hostUrl: String) throws(BridgeError) {
-        _ = try execute(command: "clearStoredS3Credentials", params: ["hostUrl": hostUrl])
+        return result["uri"] as? String ?? ""
     }
 
     static func checkRepositoryOpen(url: String) throws(BridgeError) -> RepositoryStatus {

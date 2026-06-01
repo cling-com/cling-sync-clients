@@ -392,6 +392,7 @@ fun MainScreen(
     var showSearch by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val repositoryUriStore = remember { RepositoryUriStore(context) }
     var currentUploadInfo by remember { mutableStateOf<UploadInfo?>(null) }
     var isUploading by remember { mutableStateOf(false) }
     var isUploadInitiated by remember { mutableStateOf(false) }
@@ -412,9 +413,8 @@ fun MainScreen(
     // Callbacks to invoke when connection succeeds.
     val pendingOnConnected = remember { mutableListOf<() -> Unit>() }
 
-    // Opens the repository with the given passphrase. On the first attempt the
-    // bridge may report that S3 credentials are missing for this URL. We then
-    // prompt for them, store them, and retry.
+    // Opens the repository. If a cleartext S3 URL fails to open, prompts for the
+    // S3 key/secret, encodes them into the URI, stores it, and retries.
     fun openRepository(
         passphrase: String,
         saveToKeychain: Boolean,
@@ -422,22 +422,35 @@ fun MainScreen(
         isConnecting = true
         coroutineScope.launch {
             try {
-                try {
+                val stored = repositoryUriStore.get(settings.repositoryID())
+                if (stored != null) {
                     withContext(ioDispatcher) {
-                        goBridge.openRepository(settings.hostUrl, passphrase)
+                        goBridge.openRepository(stored, passphrase)
                     }
-                } catch (_: S3CredentialsRequiredException) {
-                    // Ask the user for S3 key / access key, store, and retry once.
-                    val creds =
-                        awaitS3Credentials { request -> s3CredentialsRequest = request }
-                    withContext(ioDispatcher) {
-                        goBridge.encryptAndStoreS3Credentials(
-                            hostUrl = settings.hostUrl,
-                            passphrase = passphrase,
-                            accessKeyId = creds.accessKeyId,
-                            accessKey = creds.accessKey,
-                        )
-                        goBridge.openRepository(settings.hostUrl, passphrase)
+                } else {
+                    try {
+                        withContext(ioDispatcher) {
+                            goBridge.openRepository(settings.hostUrl, passphrase)
+                        }
+                    } catch (e: Exception) {
+                        if (!RepositoryUri.isCleartextS3(settings.hostUrl)) {
+                            throw e
+                        }
+                        val creds =
+                            awaitS3Credentials { request -> s3CredentialsRequest = request }
+                        val encoded =
+                            withContext(ioDispatcher) {
+                                goBridge.encodeS3URI(
+                                    hostUrl = settings.hostUrl,
+                                    passphrase = passphrase,
+                                    accessKeyId = creds.accessKeyId,
+                                    accessKey = creds.accessKey,
+                                )
+                            }
+                        repositoryUriStore.set(settings.repositoryID(), encoded)
+                        withContext(ioDispatcher) {
+                            goBridge.openRepository(encoded, passphrase)
+                        }
                     }
                 }
                 isConnecting = false
@@ -846,20 +859,13 @@ fun MainScreen(
     }
 
     LaunchedEffect(Unit) {
-        // Give the bridge a writable directory for its credentials map.
-        withContext(ioDispatcher) {
-            try {
-                goBridge.initBridge(context.filesDir.absolutePath)
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to init bridge: ${e.message}", e)
-            }
-        }
         if (settings.isValid()) {
             // Check if repo is already open (e.g. coming back to the app).
+            val repositoryUri = repositoryUriStore.get(settings.repositoryID()) ?: settings.hostUrl
             val alreadyOpen =
                 withContext(ioDispatcher) {
                     try {
-                        goBridge.checkRepositoryOpen(settings.hostUrl)
+                        goBridge.checkRepositoryOpen(repositoryUri)
                     } catch (e: Exception) {
                         false
                     }
@@ -1174,15 +1180,7 @@ fun MainScreen(
 
                     if (repositoryChanged) {
                         passphraseStore.delete(oldRepositoryID)
-                        coroutineScope.launch {
-                            try {
-                                withContext(ioDispatcher) {
-                                    goBridge.clearStoredS3Credentials(oldRepositoryID)
-                                }
-                            } catch (_: Exception) {
-                                // Best-effort cleanup. Ignore.
-                            }
-                        }
+                        repositoryUriStore.clear(oldRepositoryID)
                         fileStatus = emptyMap()
                         isConnected = false
                         selectedFiles = emptySet()
