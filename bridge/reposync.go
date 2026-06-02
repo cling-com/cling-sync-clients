@@ -266,6 +266,13 @@ func syncWorkspace(
 			return ErrNoSyncTargets
 		}
 
+		// The chain comes from the source repository and is the same for every
+		// target, so read it once.
+		chain, err := readSourceRevisionChain(ctx, ws, passphrase)
+		if err != nil {
+			return err
+		}
+
 		monitor := newSyncMonitor(state)
 		failures := 0
 		for _, t := range targets {
@@ -274,7 +281,10 @@ func syncWorkspace(
 			}
 			state.setRunningMessage("Syncing to " + t.Name + "...")
 			state.appendOutput(fmt.Sprintf("→ %s (%s) [%d workers]", t.Name, displaySyncURI(t.URI), workers))
-			runErr := workspace.RunSync(ctx, ws, t.Name, monitor, passphrase, workers)
+			runErr := workspace.RunSync(ctx, ws, t.Name, passphrase, chain, workspace.RunSyncOpts{ //nolint:exhaustruct
+				Monitor: monitor,
+				Workers: workers,
+			})
 			if runErr != nil && state.isCancelRequested() {
 				// Cancellation cancels ctx, which surfaces as a RunSync error.
 				return lib.ErrCancel
@@ -297,6 +307,29 @@ func syncWorkspace(
 		return nil
 	})
 	return summary, err
+}
+
+// readSourceRevisionChain reads the workspace repository's revision chain,
+// head first. RunSync uses it to verify each target's head is an ancestor of
+// the source head before copying.
+func readSourceRevisionChain(
+	ctx context.Context,
+	ws *workspace.Workspace,
+	passphrase []byte,
+) (lib.RevisionChain, error) {
+	storage, err := openWorkspaceStorage(ws, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := lib.OpenRepository(ctx, storage, passphrase)
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "failed to open source repository")
+	}
+	chain, err := lib.ReadRevisionChain(ctx, repository)
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "failed to read source revision chain")
+	}
+	return chain, nil
 }
 
 // -----------------------------------------------------------------------------
