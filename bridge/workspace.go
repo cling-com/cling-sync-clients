@@ -745,10 +745,29 @@ func workspacePassphrase(ws *workspace.Workspace, password string) ([]byte, erro
 	return passphrase, nil
 }
 
-func openWorkspace(localPath string) (*workspace.Workspace, error) {
-	tmpDir, err := os.MkdirTemp("", "cling-sync-workspace")
+// newWorkspaceTempDir returns a fresh per-workspace scratch dir. It lives under
+// the cache dir, not os.TempDir(), which points outside the macOS sandbox
+// container and is denied there.
+func newWorkspaceTempDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "failed to create temporary directory")
+		return "", lib.WrapErrorf(err, "failed to create temporary directory")
+	}
+	base := filepath.Join(cacheDir, "cling-sync")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", lib.WrapErrorf(err, "failed to create temporary directory")
+	}
+	tmpDir, err := os.MkdirTemp(base, "cling-sync-workspace")
+	if err != nil {
+		return "", lib.WrapErrorf(err, "failed to create temporary directory")
+	}
+	return tmpDir, nil
+}
+
+func openWorkspace(localPath string) (*workspace.Workspace, error) {
+	tmpDir, err := newWorkspaceTempDir()
+	if err != nil {
+		return nil, err
 	}
 	ws, err := workspace.OpenWorkspace(context.Background(), lib.NewRealFS(localPath), lib.NewRealFS(tmpDir))
 	if err != nil {
@@ -758,9 +777,9 @@ func openWorkspace(localPath string) (*workspace.Workspace, error) {
 }
 
 func createWorkspace(localPath, hostURL string, pathPrefix lib.Path) (*workspace.Workspace, error) {
-	tmpDir, err := os.MkdirTemp("", "cling-sync-workspace")
+	tmpDir, err := newWorkspaceTempDir()
 	if err != nil {
-		return nil, lib.WrapErrorf(err, "failed to create temporary directory")
+		return nil, err
 	}
 	ws, err := workspace.NewWorkspace(
 		context.Background(),
