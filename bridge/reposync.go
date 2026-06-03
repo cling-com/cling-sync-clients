@@ -273,7 +273,6 @@ func syncWorkspace(
 			return err
 		}
 
-		monitor := newSyncMonitor(state)
 		failures := 0
 		for _, t := range targets {
 			if state.isCancelRequested() {
@@ -281,6 +280,7 @@ func syncWorkspace(
 			}
 			state.setRunningMessage("Syncing to " + t.Name + "...")
 			state.appendOutput(fmt.Sprintf("→ %s (%s) [%d workers]", t.Name, displaySyncURI(t.URI), workers))
+			monitor := newSyncMonitor(state, t.Name)
 			runErr := workspace.RunSync(ctx, ws, t.Name, passphrase, chain, workspace.RunSyncOpts{ //nolint:exhaustruct
 				Monitor: monitor,
 				Workers: workers,
@@ -345,15 +345,17 @@ type asyncSyncRepoMonitor struct {
 	verbose  *workspace.DefaultSyncRepoMonitor
 }
 
-func newSyncMonitor(state *mergeWorkspaceState) *asyncSyncRepoMonitor {
+func newSyncMonitor(state *mergeWorkspaceState, targetName string) *asyncSyncRepoMonitor {
 	return &asyncSyncRepoMonitor{
 		progress: workspace.NewDefaultSyncRepoMonitor(
 			workspace.DefaultMonitorModeProgress,
 			func(text string) { state.setRunningMessage(text) },
+			targetName,
 		),
 		verbose: workspace.NewDefaultSyncRepoMonitor(
 			workspace.DefaultMonitorModeVerbose,
 			func(text string) { state.appendOutput(text) },
+			targetName,
 		),
 	}
 }
