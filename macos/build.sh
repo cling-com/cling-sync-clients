@@ -178,22 +178,19 @@ build_app() {
     echo ">>> Building macOS app"
     sync_icon
     build_go
-    # Sign with the App Sandbox entitlement so locally-run builds match the
-    # sandboxed TestFlight environment and sandbox-only bugs surface here instead
-    # of in production. We use the developer's "Apple Development" identity (not
-    # ad-hoc) so Gatekeeper doesn't flag it as an unverified developer.
-    # The XCUITest target builds separately and stays unsandboxed.
+    # Signing only matters when the app is launched under the App Sandbox, so
+    # build unsigned and let `run` opt in with --sign.
+    local sign_settings="CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="
+    if [ "${1:-}" = "--sign" ]; then
+        sign_settings="CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Automatic CODE_SIGN_ENTITLEMENTS=ClingSyncMac.entitlements DEVELOPMENT_TEAM=$development_team_id -allowProvisioningUpdates"
+    fi
     run_xcodebuild xcodebuild-build.log \
         -project "$xcode_project" \
         -scheme "$xcode_scheme" \
         -configuration Debug \
         -destination 'platform=macOS' \
         -derivedDataPath "$derived_data_path" \
-        CODE_SIGNING_ALLOWED=YES \
-        CODE_SIGN_STYLE=Automatic \
-        CODE_SIGN_ENTITLEMENTS=ClingSyncMac.entitlements \
-        DEVELOPMENT_TEAM="$development_team_id" \
-        -allowProvisioningUpdates \
+        $sign_settings \
         build
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
@@ -384,7 +381,9 @@ deploy_new_version() {
 }
 
 run_app() {
-    build_app
+    # Sign here so the app launches under the real App Sandbox and entitlement
+    # restrictions, surfacing sandbox-only bugs before TestFlight or production.
+    build_app --sign
     open "$app_path"
 }
 
