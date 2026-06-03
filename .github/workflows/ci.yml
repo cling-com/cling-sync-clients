@@ -17,6 +17,13 @@ jobs:
           # Keep the downloaded SDKs/toolchains under tools/ between runs instead
           # of letting `git clean` wipe them and force a multi-GB re-download.
           clean: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          # The self-hosted runner already persists the module cache on disk
+          # between runs, so the GitHub-side cache layer is just overhead.
+          cache: false
       - name: Sync cling-sync dependency
         run: |
           set -eu
@@ -25,7 +32,7 @@ jobs:
             git -C "$sibling" fetch origin main
             git -C "$sibling" checkout -f -B main FETCH_HEAD
           else
-            git clone git@github.com:cling-com/cling-sync.git "$sibling"
+            git clone https://github.com/cling-com/cling-sync.git "$sibling"
           fi
       - name: Build
         run: ./build.sh build
