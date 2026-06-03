@@ -15,6 +15,10 @@ struct BridgeError: Error {
     var isSyncAlreadyRunning: Bool {
         code == "sync_already_running"
     }
+
+    var isLocalAccessDenied: Bool {
+        code == "local_access_denied"
+    }
 }
 
 struct SyncTargetInfo: Identifiable, Equatable {
@@ -38,7 +42,9 @@ struct MergeWorkspaceStatus {
 
 struct StatusWorkspaceStatus {
     let running: Bool
+    let canCancel: Bool
     let completed: Bool
+    let cancelled: Bool
     let statusMessage: String
     let detailedOutput: String
     let errorMessage: String
@@ -182,11 +188,17 @@ enum Bridge {
         let result = try execute(command: "getStatusWorkspaceStatus", params: ["localPath": localPath])
         return StatusWorkspaceStatus(
             running: result["running"] as? Bool ?? false,
+            canCancel: result["canCancel"] as? Bool ?? false,
             completed: result["completed"] as? Bool ?? false,
+            cancelled: result["cancelled"] as? Bool ?? false,
             statusMessage: result["statusMessage"] as? String ?? "",
             detailedOutput: result["detailedOutput"] as? String ?? "",
             errorMessage: result["errorMessage"] as? String ?? ""
         )
+    }
+
+    static func cancelStatusWorkspace(localPath: String) throws {
+        _ = try execute(command: "cancelStatusWorkspace", params: ["localPath": localPath])
     }
 
     static func listSyncTargets(localPath: String) throws -> [SyncTargetInfo] {

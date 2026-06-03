@@ -48,6 +48,10 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     private var mergePollTask: Task<Void, Never>?
     private var statusPollTask: Task<Void, Never>?
     private var syncPollTask: Task<Void, Never>?
+    // Security-scoped folder URLs we hold access to, keyed by local path. In the
+    // sandbox a user-selected folder is only reachable while its bookmark is
+    // resolved and access is held open; we keep it open for the app's lifetime.
+    private var directoryAccessURLs: [String: URL] = [:]
 
     private var menuBuilder: AppMenuBuilder {
         AppMenuBuilder(controller: self)
@@ -64,6 +68,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         super.init()
         syncWorkers = max(1, (defaults.object(forKey: syncWorkersKey) as? Int) ?? 2)
         loadWorkspaceConfigs()
+        activateAllDirectoryAccess()
         selectInitialWorkspace()
         updateDraftFromSelection()
         updateStatusMessage()
@@ -351,7 +356,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
         if panel.runModal() == .OK, let url = panel.url {
             draftConfig.localDirectory = url.path
+            draftConfig.localDirectoryBookmark = try? url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
             draftConfig.verifiedAccessSignature = ""
+            activateDirectoryAccess(for: draftConfig)
             do {
                 let inspection = try Bridge.inspectWorkspace(localPath: url.path)
                 if inspection.exists {
@@ -403,6 +414,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func removeWorkspace(id: UUID) {
         if let workspace = workspace(for: id) {
             try? Bridge.clearWorkspacePassphrase(hostURL: workspace.bridgeRepositoryURI)
+            deactivateDirectoryAccess(forPath: workspace.normalizedLocalDirectory)
             mergeStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             mergeShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             syncStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
@@ -447,7 +459,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 }
             } catch {
                 isTesting = false
-                errorMessage = (error as? BridgeError)?.message ?? error.localizedDescription
+                errorMessage = userFacingMessage(for: error)
                 refreshMenu()
             }
         }
@@ -654,7 +666,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         statusStatusesByPath[workspace.normalizedLocalDirectory]
             ?? StatusWorkspaceStatus(
                 running: false,
+                canCancel: false,
                 completed: false,
+                cancelled: false,
                 statusMessage: "",
                 detailedOutput: "",
                 errorMessage: ""
@@ -691,6 +705,49 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         if let data = try? JSONEncoder().encode(workspaceConfigs) {
             defaults.set(data, forKey: workspaceConfigsKey)
         }
+    }
+
+    func activateAllDirectoryAccess() {
+        for config in workspaceConfigs {
+            activateDirectoryAccess(for: config)
+        }
+    }
+
+    func activateDirectoryAccess(for config: WorkspaceConfig) {
+        let path = config.normalizedLocalDirectory
+        guard !path.isEmpty, directoryAccessURLs[path] == nil, let bookmark = config.localDirectoryBookmark else {
+            return
+        }
+        var isStale = false
+        guard
+            let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: .withSecurityScope,
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ),
+            url.startAccessingSecurityScopedResource()
+        else {
+            return
+        }
+        directoryAccessURLs[path] = url
+    }
+
+    func deactivateDirectoryAccess(forPath path: String) {
+        guard let url = directoryAccessURLs.removeValue(forKey: path) else { return }
+        url.stopAccessingSecurityScopedResource()
+    }
+
+    // The sandbox drops a workspace folder's access once its security scope is
+    // gone (e.g. configs saved before bookmarks existed, or a relaunch where the
+    // bookmark no longer resolves), so the bridge's `local_access_denied` code is
+    // turned into guidance to re-pick the folder.
+    func userFacingMessage(for error: Error) -> String {
+        if let bridgeError = error as? BridgeError, bridgeError.isLocalAccessDenied {
+            return "macOS is blocking access to this workspace’s folder. "
+                + "Open Settings and use “Browse...” under Local Folder to select the folder again and restore access."
+        }
+        return (error as? BridgeError)?.message ?? error.localizedDescription
     }
 
     func selectInitialWorkspace() {
@@ -742,7 +799,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             repoPathPrefix: draftConfig.normalizedRepoPathPrefix,
             author: draftConfig.normalizedAuthor,
             verifiedAccessSignature: draftConfig.verifiedAccessSignature,
-            repositoryURI: draftConfig.repositoryURI
+            repositoryURI: draftConfig.repositoryURI,
+            localDirectoryBookmark: draftConfig.localDirectoryBookmark
         )
     }
 
@@ -802,13 +860,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Merge Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                    message: userFacingMessage(for: error),
                 )
             }
         } catch {
             showAlert(
                 title: "Merge Failed",
-                message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                message: userFacingMessage(for: error),
             )
         }
     }
@@ -830,14 +888,33 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         isMerging = hasActiveMerges
         refreshMenu()
         showMergeProgressWindow(for: workspace)
-        try await Task.detached(priority: .userInitiated) {
-            try Bridge.startMergeWorkspace(
-                localPath: workspace.normalizedLocalDirectory,
-                password: password,
-                author: workspace.normalizedAuthor,
-                message: "Merge from macOS menu bar",
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try Bridge.startMergeWorkspace(
+                    localPath: workspace.normalizedLocalDirectory,
+                    password: password,
+                    author: workspace.normalizedAuthor,
+                    message: "Merge from macOS menu bar",
+                )
+            }.value
+        } catch {
+            // The operation never started, so clear the optimistic "in progress"
+            // state instead of leaving it stuck running.
+            mergeStatusesByPath[workspace.normalizedLocalDirectory] = MergeWorkspaceStatus(
+                running: false,
+                canCancel: false,
+                completed: true,
+                cancelled: false,
+                upToDate: false,
+                statusMessage: "Merge failed",
+                detailedOutput: "",
+                revisionId: "",
+                errorMessage: userFacingMessage(for: error)
             )
-        }.value
+            isMerging = hasActiveMerges
+            refreshMenu()
+            throw error
+        }
         beginMergeStatusPolling()
     }
 
@@ -851,7 +928,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Cancel Merge Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                    message: userFacingMessage(for: error),
                 )
             }
         }
@@ -898,7 +975,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                     statusMessage: "Merge failed",
                     detailedOutput: "",
                     revisionId: "",
-                    errorMessage: (error as? BridgeError)?.message ?? error.localizedDescription
+                    errorMessage: userFacingMessage(for: error)
                 )
             }
         }
@@ -938,13 +1015,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Status Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                    message: userFacingMessage(for: error),
                 )
             }
         } catch {
             showAlert(
                 title: "Status Failed",
-                message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                message: userFacingMessage(for: error),
             )
         }
     }
@@ -952,7 +1029,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func startStatusWorkspace(_ workspace: WorkspaceConfig, password: String?) async throws {
         let runningStatus = StatusWorkspaceStatus(
             running: true,
+            canCancel: true,
             completed: false,
+            cancelled: false,
             statusMessage: "Scanning workspace...",
             detailedOutput: "",
             errorMessage: ""
@@ -960,13 +1039,45 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         statusStatusesByPath[workspace.normalizedLocalDirectory] = runningStatus
         refreshMenu()
         showStatusProgressWindow(for: workspace)
-        try await Task.detached(priority: .userInitiated) {
-            try Bridge.startStatusWorkspace(
-                localPath: workspace.normalizedLocalDirectory,
-                password: password,
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try Bridge.startStatusWorkspace(
+                    localPath: workspace.normalizedLocalDirectory,
+                    password: password,
+                )
+            }.value
+        } catch {
+            // The operation never started, so clear the optimistic "in progress"
+            // state instead of leaving it stuck running.
+            statusStatusesByPath[workspace.normalizedLocalDirectory] = StatusWorkspaceStatus(
+                running: false,
+                canCancel: false,
+                completed: true,
+                cancelled: false,
+                statusMessage: "Status failed",
+                detailedOutput: "",
+                errorMessage: userFacingMessage(for: error)
             )
-        }.value
+            refreshMenu()
+            throw error
+        }
         beginStatusPolling()
+    }
+
+    func cancelStatus(workspace: WorkspaceConfig) {
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try Bridge.cancelStatusWorkspace(localPath: workspace.normalizedLocalDirectory)
+                }.value
+                beginStatusPolling()
+            } catch {
+                showAlert(
+                    title: "Cancel Status Failed",
+                    message: userFacingMessage(for: error),
+                )
+            }
+        }
     }
 
     func beginStatusPolling() {
@@ -1007,10 +1118,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 statuses[localPath] = StatusWorkspaceStatus(
                     running: false,
+                    canCancel: false,
                     completed: true,
+                    cancelled: false,
                     statusMessage: "Status failed",
                     detailedOutput: "",
-                    errorMessage: (error as? BridgeError)?.message ?? error.localizedDescription
+                    errorMessage: userFacingMessage(for: error)
                 )
             }
         }
@@ -1095,13 +1208,13 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Add Sync Target Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                    message: userFacingMessage(for: error))
                 return false
             }
         } catch {
             showAlert(
                 title: "Add Sync Target Failed",
-                message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                message: userFacingMessage(for: error))
             return false
         }
     }
@@ -1130,7 +1243,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Remove Sync Target Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                    message: userFacingMessage(for: error))
             }
         }
     }
@@ -1224,12 +1337,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Sync Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                    message: userFacingMessage(for: error))
             }
         } catch {
             showAlert(
                 title: "Sync Failed",
-                message: (error as? BridgeError)?.message ?? error.localizedDescription)
+                message: userFacingMessage(for: error))
         }
     }
 
@@ -1253,13 +1366,31 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         syncStatusesByPath[workspace.normalizedLocalDirectory] = runningStatus
         refreshMenu()
         showSyncProgressWindow(for: workspace)
-        try await Task.detached(priority: .userInitiated) {
-            try Bridge.startSyncWorkspace(
-                localPath: workspace.normalizedLocalDirectory,
-                password: password,
-                workers: workers,
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try Bridge.startSyncWorkspace(
+                    localPath: workspace.normalizedLocalDirectory,
+                    password: password,
+                    workers: workers,
+                )
+            }.value
+        } catch {
+            // The operation never started, so clear the optimistic "in progress"
+            // state instead of leaving it stuck running.
+            syncStatusesByPath[workspace.normalizedLocalDirectory] = MergeWorkspaceStatus(
+                running: false,
+                canCancel: false,
+                completed: true,
+                cancelled: false,
+                upToDate: false,
+                statusMessage: "Sync failed",
+                detailedOutput: "",
+                revisionId: "",
+                errorMessage: userFacingMessage(for: error)
             )
-        }.value
+            refreshMenu()
+            throw error
+        }
         beginSyncPolling()
     }
 
@@ -1273,7 +1404,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             } catch {
                 showAlert(
                     title: "Abort Sync Failed",
-                    message: (error as? BridgeError)?.message ?? error.localizedDescription,
+                    message: userFacingMessage(for: error),
                 )
             }
         }
@@ -1320,7 +1451,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                     statusMessage: "Sync failed",
                     detailedOutput: "",
                     revisionId: "",
-                    errorMessage: (error as? BridgeError)?.message ?? error.localizedDescription
+                    errorMessage: userFacingMessage(for: error)
                 )
             }
         }

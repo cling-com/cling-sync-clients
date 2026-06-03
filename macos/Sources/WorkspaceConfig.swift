@@ -32,6 +32,9 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
     // The directly-openable repository URI sent to the bridge. For S3 it carries
     // the encrypted credentials; hostURL stays the cleartext value for display.
     var repositoryURI: String
+    // Security-scoped bookmark for `localDirectory`. A sandboxed app can only
+    // reach a user-selected folder across launches by resolving this.
+    var localDirectoryBookmark: Data?
 
     init(
         id: UUID = UUID(),
@@ -40,7 +43,8 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         repoPathPrefix: String = "",
         author: String = loginAuthorName,
         verifiedAccessSignature: String = "",
-        repositoryURI: String = ""
+        repositoryURI: String = "",
+        localDirectoryBookmark: Data? = nil
     ) {
         self.id = id
         self.hostURL = hostURL
@@ -49,6 +53,7 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         self.author = author
         self.verifiedAccessSignature = verifiedAccessSignature
         self.repositoryURI = repositoryURI
+        self.localDirectoryBookmark = localDirectoryBookmark
     }
 
     init(from decoder: Decoder) throws {
@@ -60,6 +65,7 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         author = try container.decodeIfPresent(String.self, forKey: .author) ?? loginAuthorName
         verifiedAccessSignature = try container.decodeIfPresent(String.self, forKey: .verifiedAccessSignature) ?? ""
         repositoryURI = try container.decodeIfPresent(String.self, forKey: .repositoryURI) ?? ""
+        localDirectoryBookmark = try container.decodeIfPresent(Data.self, forKey: .localDirectoryBookmark)
     }
 
     var isComplete: Bool {

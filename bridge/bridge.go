@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/flunderpero/cling-sync/lib"
 )
@@ -416,6 +417,27 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
+	case "cancelStatusWorkspace":
+		var params struct {
+			LocalPath string `json:"localPath"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		if err := CancelStatusWorkspace(params.LocalPath); err != nil {
+			if errors.Is(err, ErrStatusNotRunning) {
+				return errorResponseWithCode(err.Error(), "status_not_running")
+			}
+			return errorResponse(err.Error())
+		}
+		response := struct {
+			Success bool `json:"success"`
+		}{Success: true}
+		jsonBytes, err := json.Marshal(response)
+		if err != nil {
+			return errorResponse("Failed to marshal response: " + err.Error())
+		}
+		return string(jsonBytes)
 	case "encodeS3URI":
 		var params struct {
 			RawURL      string `json:"hostUrl"`
@@ -541,8 +563,11 @@ func successResponse() string {
 // errorResponseFor maps known sentinel errors to error response codes that
 // clients dispatch on. Falls back to a plain-message response.
 func errorResponseFor(err error) string {
-	if errors.Is(err, ErrPassphraseRequired) {
+	switch {
+	case errors.Is(err, ErrPassphraseRequired):
 		return errorResponseWithCode(err.Error(), "passphrase_required")
+	case errors.Is(err, fs.ErrPermission):
+		return errorResponseWithCode("permission denied accessing the workspace folder", "local_access_denied")
 	}
 	return errorResponse(err.Error())
 }

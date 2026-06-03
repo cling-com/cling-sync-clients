@@ -10,6 +10,7 @@ struct StatusProgressView: View {
         let status = controller.statusStatus(for: workspace)
         let showsDetails = controller.statusShowsDetails(for: workspace)
         let isRunning = status.running
+        let ranSuccessfully = status.completed && !status.cancelled && status.errorMessage.isEmpty
 
         VStack(alignment: .leading, spacing: 16) {
             Text(workspace.displayName)
@@ -93,12 +94,15 @@ struct StatusProgressView: View {
                         .controlSize(.small)
                 }
                 Spacer()
-                if status.completed && !controller.mergeStatus(for: workspace).running {
-                    Button("Merge") {
-                        controller.closeStatusProgressWindow()
-                        Task { await controller.startMergeFromMenu(workspace) }
-                    }
+                Button("Cancel Status") {
+                    controller.cancelStatus(workspace: workspace)
                 }
+                .disabled(!status.running || !status.canCancel)
+                Button("Merge") {
+                    controller.closeStatusProgressWindow()
+                    Task { await controller.startMergeFromMenu(workspace) }
+                }
+                .disabled(!ranSuccessfully || controller.mergeStatus(for: workspace).running)
                 Button("Close") {
                     controller.closeStatusProgressWindow()
                 }

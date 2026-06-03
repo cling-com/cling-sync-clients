@@ -26,6 +26,7 @@ var (
 	ErrMergeAlreadyRunning  = lib.Errorf("merge already running")
 	ErrMergeNotRunning      = lib.Errorf("merge not running")
 	ErrStatusAlreadyRunning = lib.Errorf("status already running")
+	ErrStatusNotRunning     = lib.Errorf("status not running")
 )
 
 type WorkspaceInfo struct {
@@ -211,12 +212,30 @@ func StartStatusWorkspace(localPath, password string) error {
 	}
 	state := &mergeWorkspaceState{status: MergeWorkspaceStatus{ //nolint:exhaustruct
 		Running:       true,
+		CanCancel:     true,
 		StatusMessage: "Scanning workspace...",
 	}}
 	statusWorkspaceStateStore.states[localPath] = state
 	statusWorkspaceStateStore.mu.Unlock()
 
 	go runStatusWorkspace(localPath, password, state)
+	return nil
+}
+
+func CancelStatusWorkspace(localPath string) error {
+	localPath = normalizeWorkspacePath(localPath)
+	statusWorkspaceStateStore.mu.Lock()
+	state := statusWorkspaceStateStore.states[localPath]
+	statusWorkspaceStateStore.mu.Unlock()
+	if state == nil || !state.snapshot().Running {
+		return ErrStatusNotRunning
+	}
+	state.requestCancel()
+	state.setStatus(MergeWorkspaceStatus{ //nolint:exhaustruct
+		Running:       true,
+		CanCancel:     false,
+		StatusMessage: "Cancelling status...",
+	})
 	return nil
 }
 
@@ -235,6 +254,9 @@ func runStatusWorkspace(localPath, password string, state *mergeWorkspaceState) 
 	result, err := statusWorkspaceSync(localPath, password, state)
 	status := StatusWorkspaceStatus{Completed: true} //nolint:exhaustruct
 	switch {
+	case errors.Is(err, lib.ErrCancel):
+		status.Cancelled = true
+		status.StatusMessage = "Status cancelled"
 	case err != nil:
 		status.StatusMessage = "Status failed"
 		status.ErrorMessage = err.Error()
@@ -264,9 +286,15 @@ func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState)
 
 	progressEmit := func(text string) { state.setRunningMessage(text) }
 	verboseEmit := func(text string) { state.appendOutput(text) }
+	cancel := func() error {
+		if state.isCancelRequested() {
+			return lib.ErrCancel
+		}
+		return nil
+	}
 	stagingMonitor := &asyncStagingMonitor{
-		progress: workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeProgress, nil, progressEmit),
-		verbose:  workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeVerbose, nil, verboseEmit),
+		progress: workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeProgress, cancel, progressEmit),
+		verbose:  workspace.NewDefaultStagingMonitor(workspace.DefaultMonitorModeVerbose, cancel, verboseEmit),
 	}
 
 	tmpFS := lib.NewMemoryFS(500_000_000)
