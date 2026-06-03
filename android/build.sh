@@ -60,6 +60,29 @@ JDK_VERSION="23.0.1+11"  # JDK version for Gradle 8.13 compatibility
 build_tools() {
     mkdir -p tools
     
+    # Install JDK (required for Gradle 8.13 compatibility)
+    if [ ! -d "tools/jdk" ]; then
+        echo ">>> Installing JDK $JDK_VERSION"
+        local os_name=$(uname -s)
+        local os_arch=$(uname -m)
+        
+        case "$os_name:$os_arch" in
+            Darwin:arm64)  local jdk_file="OpenJDK23U-jdk_aarch64_mac_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
+            Linux:aarch64) local jdk_file="OpenJDK23U-jdk_aarch64_linux_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
+            Linux:x86_64)  local jdk_file="OpenJDK23U-jdk_x64_linux_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
+            *) echo "    Unsupported platform: $os_name:$os_arch"; exit 1 ;;
+        esac
+        
+        echo "    Downloading JDK for $os_name $os_arch"
+        curl -SsL -o "tools/download_jdk.tar.gz" "https://github.com/adoptium/temurin23-binaries/releases/download/jdk-${JDK_VERSION}/${jdk_file}"
+        cd tools && tar -xzf download_jdk.tar.gz && rm download_jdk.tar.gz
+        mv jdk-* jdk
+        cd "$root"
+        echo "    JDK $JDK_VERSION installed successfully"
+    fi
+
+    set_local_path
+    
     # Install Android SDK Command Line Tools
     if [ ! -f tools/android-sdk/cmdline-tools/latest/bin/sdkmanager ]; then
         echo ">>> Installing Android SDK Command Line Tools"
@@ -76,9 +99,6 @@ build_tools() {
         
         # Install required Android components
         echo "    Installing Android SDK components"
-        export ANDROID_HOME="$root/tools/android-sdk"
-        export ANDROID_SDK_ROOT="$ANDROID_HOME"
-        export ANDROID_AVD_HOME="$ANDROID_HOME/avd"
         mkdir -p "$ANDROID_AVD_HOME"
         yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > tools/sdkmanager.log 2>&1 || true
         "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
@@ -108,27 +128,6 @@ build_tools() {
         cd tools/android-sdk/ndk
         ln -sf ${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include jni-headers
         cd "$root"
-    fi
-    
-    # Install JDK (required for Gradle 8.13 compatibility)
-    if [ ! -d "tools/jdk" ]; then
-        echo ">>> Installing JDK $JDK_VERSION"
-        local os_name=$(uname -s)
-        local os_arch=$(uname -m)
-        
-        case "$os_name:$os_arch" in
-            Darwin:arm64)  local jdk_file="OpenJDK23U-jdk_aarch64_mac_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
-            Linux:aarch64) local jdk_file="OpenJDK23U-jdk_aarch64_linux_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
-            Linux:x86_64)  local jdk_file="OpenJDK23U-jdk_x64_linux_hotspot_${JDK_VERSION/+/_}.tar.gz" ;;
-            *) echo "    Unsupported platform: $os_name:$os_arch"; exit 1 ;;
-        esac
-        
-        echo "    Downloading JDK for $os_name $os_arch"
-        curl -SsL -o "tools/download_jdk.tar.gz" "https://github.com/adoptium/temurin23-binaries/releases/download/jdk-${JDK_VERSION}/${jdk_file}"
-        cd tools && tar -xzf download_jdk.tar.gz && rm download_jdk.tar.gz
-        mv jdk-* jdk
-        cd "$root"
-        echo "    JDK $JDK_VERSION installed successfully"
     fi
 }
 
