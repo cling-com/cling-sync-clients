@@ -74,6 +74,11 @@ final class ClingSyncMacUITests: XCTestCase {
         waitForStatusToFinish(in: app)
         closeStatusProgressWindow(in: app)
 
+        // --- Workspace 1: exercise the background auto-merge before any manual
+        // merge, while the keychain already holds the passphrase, so its first
+        // recorded success is unambiguous. ---
+        exerciseAutoMerge(app, localDir: config.localDir)
+
         clickWorkspaceMerge(app, localDir: config.localDir)
         assertNoPassphrasePrompt(in: app)
         waitForMergeToFinish(in: app)
@@ -247,6 +252,87 @@ final class ClingSyncMacUITests: XCTestCase {
     private func clickWorkspaceMerge(_ app: XCUIApplication, localDir: String) {
         openTrayMenu(app, expecting: "Merge")
         clickWorkspaceMergeMenuItem(for: localDir, in: app)
+    }
+
+    // Drives the background auto-merge from the Options debug button and proves
+    // it ran. The workspace has not merged yet, so the menu's "Last Merge:" line can
+    // only turn from "never" into a real age once the scheduled merge records a
+    // success. Auto-merges present no progress window, so there is nothing to
+    // wait on except the menu.
+    private func exerciseAutoMerge(_ app: XCUIApplication, localDir: String) {
+        openTrayMenu(app, expecting: "Settings")
+        XCTAssertEqual(
+            lastMergeText(for: localDir, in: app), "Last Merge: never",
+            "expected no recorded merge before exercising auto-merge")
+        app.menuItems["Settings"].firstMatch.click()
+        selectSettingsTab("Options", in: app)
+        let scheduleButton = app.buttons["scheduleAutoMergeButton"]
+        XCTAssertTrue(scheduleButton.waitForExistence(timeout: 5), "schedule auto merge button not found")
+        scheduleButton.tap()
+        // Restore the default tab so later steps find the workspace editor.
+        selectSettingsTab("Workspaces", in: app)
+        closeSettingsWindow(in: app)
+
+        // The timer fires after 5s. Poll the menu until the "Last Merge:" line shows a
+        // real age, which happens only after the auto-merge records a success,
+        // and confirm it did not leave the merge item in the failed state.
+        let deadline = Date().addingTimeInterval(30)
+        var recordedMerge = false
+        while Date() < deadline {
+            openTrayMenu(app, expecting: "Settings")
+            let lastText = lastMergeText(for: localDir, in: app)
+            if let lastText, lastText.hasPrefix("Last Merge: "), lastText != "Last Merge: never" {
+                XCTAssertNotEqual(
+                    mergeItemText(for: localDir, in: app), "Merge (failed)",
+                    "auto-merge finished in a failed state")
+                recordedMerge = true
+                dismissMenuBarMenu(in: app)
+                break
+            }
+            dismissMenuBarMenu(in: app)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        XCTAssertTrue(recordedMerge, "auto-merge did not record a successful merge within 30s")
+    }
+
+    private func lastMergeText(for localDir: String, in app: XCUIApplication) -> String? {
+        let item = app.menuItems["workspace.last.\(localDir)"].firstMatch
+        guard item.waitToAppear(timeout: 5) else { return nil }
+        return menuItemTitle(item)
+    }
+
+    private func mergeItemText(for localDir: String, in app: XCUIApplication) -> String? {
+        let item = app.menuItems[workspaceMergeIdentifier(for: localDir)].firstMatch
+        guard item.exists else { return nil }
+        return menuItemTitle(item)
+    }
+
+    // A menu item exposes its display text as the accessibility title, not the
+    // label (which is empty once an identifier is set).
+    private func menuItemTitle(_ element: XCUIElement) -> String {
+        if !element.title.isEmpty {
+            return element.title
+        }
+        if let value = element.value as? String, !value.isEmpty {
+            return value
+        }
+        return element.label
+    }
+
+    private func selectSettingsTab(_ name: String, in app: XCUIApplication) {
+        let candidates = [app.radioButtons[name], app.buttons[name], app.tabs[name]]
+        for element in candidates where element.waitForExistence(timeout: 2) {
+            element.click()
+            return
+        }
+        XCTFail("\(name) settings tab not found")
+    }
+
+    private func closeSettingsWindow(in app: XCUIApplication) {
+        let window = app.windows["Cling Sync Settings"]
+        if window.waitForExistence(timeout: 2) {
+            window.buttons[XCUIIdentifierCloseWindow].firstMatch.click()
+        }
     }
 
     private func openSubmenu(named name: String, in app: XCUIApplication) {

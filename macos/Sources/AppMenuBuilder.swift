@@ -25,6 +25,10 @@ struct AppMenuBuilder {
             NSUserInterfaceItemIdentifier("workspace.progress.\(workspace.normalizedLocalDirectory)")
         }
 
+        static func last(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
+            NSUserInterfaceItemIdentifier("workspace.last.\(workspace.normalizedLocalDirectory)")
+        }
+
         static func openFolder(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
             NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.normalizedLocalDirectory)")
         }
@@ -119,24 +123,36 @@ struct AppMenuBuilder {
         let pathItem = NSMenuItem(title: workspace.detailText, action: nil, keyEquivalent: "")
         pathItem.isEnabled = false
         menu.addItem(pathItem)
+
+        let lastDate = controller.lastSuccessfulMergeByPath[workspace.normalizedLocalDirectory]
+        let lastText =
+            lastDate.map { "Last Merge: \(AutoMergePolicy.coarseAge(Date().timeIntervalSince($0))) ago" }
+            ?? "Last Merge: never"
+        let lastItem = NSMenuItem(title: lastText, action: nil, keyEquivalent: "")
+        lastItem.isEnabled = false
+        lastItem.identifier = MenuItemID.last(workspace)
+        menu.addItem(lastItem)
+
         menu.addItem(.separator())
 
-        // Each operation's own item carries its "(in progress)" label and stays
-        // clickable (to reopen its window) while it runs; the other operations
-        // are disabled so they cannot start concurrently.
-        let mergeRunning = controller.mergeStatus(for: workspace).running
+        // A running or failed item stays enabled to open its window. While any
+        // operation runs the others are disabled so they cannot overlap.
+        let mergeState = controller.mergeStatus(for: workspace)
+        let mergeRunning = mergeState.running
+        let mergeFailed = mergeState.completed && !mergeState.running && !mergeState.errorMessage.isEmpty
         let statusRunning = controller.statusStatus(for: workspace).running
         let syncRunning = controller.syncStatus(for: workspace).running
         let idle = !controller.isBusy(workspace) && !controller.isSaving && !controller.isTesting
 
+        let mergeTitle = mergeRunning ? "Merge (in progress)" : (mergeFailed ? "Merge (failed)" : "Merge")
         let mergeItem = NSMenuItem(
-            title: mergeRunning ? "Merge (in progress)" : "Merge",
+            title: mergeTitle,
             action: #selector(AppController.handleMergeWorkspace(_:)),
             keyEquivalent: "",
         )
         mergeItem.target = controller
         mergeItem.representedObject = workspace.id.uuidString
-        mergeItem.isEnabled = mergeRunning || idle
+        mergeItem.isEnabled = mergeRunning || mergeFailed || idle
         mergeItem.identifier = MenuItemID.merge(workspace)
         menu.addItem(mergeItem)
 

@@ -4,16 +4,106 @@ struct PreferencesView: View {
     @ObservedObject var controller: AppController
 
     var body: some View {
+        TabView(selection: $controller.selectedSettingsTab) {
+            workspacesTab
+                .tabItem { Label("Workspaces", systemImage: "folder") }
+                .tag(0)
+            optionsTab
+                .tabItem { Label("Options", systemImage: "gearshape") }
+                .tag(1)
+        }
+        .frame(minWidth: 820, minHeight: 480)
+        .onChange(of: controller.draftConfig.hostURL) { _ in controller.handleDraftAccessChange() }
+        .onChange(of: controller.draftConfig.localDirectory) { _ in controller.handleDraftAccessChange() }
+        .onChange(of: controller.draftConfig.repoPathPrefix) { _ in controller.handleDraftAccessChange() }
+        .onChange(of: controller.draftConfig.author) { _ in controller.handleDraftMetadataChange() }
+    }
+
+    private var workspacesTab: some View {
         HSplitView {
             workspaceListPane
             if controller.selectedWorkspaceID != nil {
                 workspaceEditorPane
             }
         }
-        .onChange(of: controller.draftConfig.hostURL) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.localDirectory) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.repoPathPrefix) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.author) { _ in controller.handleDraftMetadataChange() }
+    }
+
+    private var optionsTab: some View {
+        Form {
+            Section("Sync") {
+                LabeledContent("Sync workers") {
+                    Stepper(value: $controller.syncWorkers, in: 1...64) {
+                        Text("\(controller.syncWorkers)")
+                            .monospacedDigit()
+                    }
+                    .fixedSize()
+                    .accessibilityIdentifier("syncWorkersStepper")
+                }
+                Text(
+                    "Number of blocks copied in parallel when syncing a repository to a backup target. "
+                        + "Higher values can speed up large syncs over a fast connection."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Automatic Merge") {
+                LabeledContent("Automatically merge") {
+                    Picker("Automatically merge", selection: $controller.autoMergeIntervalHours) {
+                        Text("Off").tag(0)
+                        ForEach(controller.autoMergeChoices, id: \.self) { hours in
+                            Text(controller.autoMergeIntervalLabel(hours)).tag(hours)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityIdentifier("autoMergeIntervalPicker")
+                }
+                Text(
+                    "Periodically merges every configured folder with its repository in the background, "
+                        + "so remote changes arrive without opening the menu. Cling Sync notifies you when "
+                        + "changes are merged or if a merge fails, and clicking the notification opens its "
+                        + "merge window. A connection problem is retried more often without alerts, and the "
+                        + "menu shows \"Merge (failed)\" so you can open the error."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Button("Schedule auto merge in 5s") {
+                    controller.scheduleAutoMergeSoon()
+                }
+                .accessibilityIdentifier("scheduleAutoMergeButton")
+                Text("Runs an automatic merge for every folder after a few seconds, to try it out on demand.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Health") {
+                LabeledContent("Warn if no merge for") {
+                    Picker("Warn if no merge for", selection: $controller.notifyStaleDays) {
+                        Text("Off").tag(0)
+                        ForEach(controller.notifyStaleDayChoices, id: \.self) { days in
+                            Text(controller.staleDaysLabel(days)).tag(days)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityIdentifier("notifyStaleDaysPicker")
+                }
+                Text(
+                    "Sends a notification when a folder has not merged successfully for this long, "
+                        + "so a folder that silently stops working does not go unnoticed for days."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+        }
+        .formStyle(.grouped)
     }
 
     private var workspaceListPane: some View {
@@ -57,22 +147,6 @@ struct PreferencesView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-
-            Divider()
-
-            HStack {
-                Text("Sync workers")
-                Spacer()
-                Stepper(value: $controller.syncWorkers, in: 1...64) {
-                    Text("\(controller.syncWorkers)")
-                        .monospacedDigit()
-                }
-                .fixedSize()
-                .accessibilityIdentifier("syncWorkersStepper")
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .help("Number of blocks copied in parallel when syncing a repository to a target.")
         }
         .padding(18)
     }

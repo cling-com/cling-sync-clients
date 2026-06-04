@@ -46,6 +46,7 @@ type MergeWorkspaceStatus struct {
 	DetailedOutput string `json:"detailedOutput,omitempty"`
 	RevisionID     string `json:"revisionId,omitempty"`
 	ErrorMessage   string `json:"errorMessage,omitempty"`
+	ErrorIsNetwork bool   `json:"errorIsNetwork,omitempty"`
 }
 
 type mergeWorkspaceState struct {
@@ -449,6 +450,7 @@ func runMergeWorkspace(localPath, password, author, message string, state *merge
 	case err != nil:
 		status.StatusMessage = "Merge failed"
 		status.ErrorMessage = err.Error()
+		status.ErrorIsNetwork = isNetworkError(err)
 	case upToDate:
 		status.StatusMessage = "Up to date"
 	default:

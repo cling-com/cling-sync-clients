@@ -19,6 +19,10 @@ struct BridgeError: Error {
     var isLocalAccessDenied: Bool {
         code == "local_access_denied"
     }
+
+    var isNetworkError: Bool {
+        code == "network_unreachable"
+    }
 }
 
 struct SyncTargetInfo: Identifiable, Equatable {
@@ -38,6 +42,8 @@ struct MergeWorkspaceStatus {
     let detailedOutput: String
     let revisionId: String
     let errorMessage: String
+    // Defaulted so the existing constructor call sites compile unchanged.
+    var errorIsNetwork: Bool = false
 }
 
 struct StatusWorkspaceStatus {
@@ -163,7 +169,8 @@ enum Bridge {
             statusMessage: result["statusMessage"] as? String ?? "",
             detailedOutput: result["detailedOutput"] as? String ?? "",
             revisionId: result["revisionId"] as? String ?? "",
-            errorMessage: result["errorMessage"] as? String ?? ""
+            errorMessage: result["errorMessage"] as? String ?? "",
+            errorIsNetwork: result["errorIsNetwork"] as? Bool ?? false
         )
     }
 
@@ -256,7 +263,8 @@ enum Bridge {
             statusMessage: result["statusMessage"] as? String ?? "",
             detailedOutput: result["detailedOutput"] as? String ?? "",
             revisionId: result["revisionId"] as? String ?? "",
-            errorMessage: result["errorMessage"] as? String ?? ""
+            errorMessage: result["errorMessage"] as? String ?? "",
+            errorIsNetwork: result["errorIsNetwork"] as? Bool ?? false
         )
     }
 

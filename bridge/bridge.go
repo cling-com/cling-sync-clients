@@ -568,6 +568,8 @@ func errorResponseFor(err error) string {
 		return errorResponseWithCode(err.Error(), "passphrase_required")
 	case errors.Is(err, fs.ErrPermission):
 		return errorResponseWithCode("permission denied accessing the workspace folder", "local_access_denied")
+	case isNetworkError(err):
+		return errorResponseWithCode(err.Error(), "network_unreachable")
 	}
 	return errorResponse(err.Error())
 }

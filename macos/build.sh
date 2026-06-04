@@ -67,7 +67,8 @@ usage() {
     echo "  test [--remote]"
     echo "      Run integration tests (go/main_test.go, which drives the xcodebuild UI tests)."
     echo "      Pass --remote to rsync this worktree and ../cling-sync to the runner VM"
-    echo "      (REMOTE_RUNNER_HOST/REMOTE_RUNNER_USER from .env) and run the tests there."
+    echo "      (REMOTE_RUNNER_HOST/REMOTE_RUNNER_USER from .env) and run the integration tests"
+    echo "      there. Unit tests always run locally."
     echo
     echo "  tools"
     echo "      Install development tools (swiftlint, golangci-lint)"
@@ -223,6 +224,17 @@ lint() {
     cd "$root"
     echo "    Linting Swift code"
     "$swiftlint_bin" lint --quiet --strict --config "$root/.swiftlint.yml" "$root"
+}
+
+unit_test() {
+    echo ">>> Running Swift unit tests"
+    out=$(mktemp -d)
+    swiftc -O \
+        "$root/Sources/AutoMergePolicy.swift" \
+        "$root/UnitTests/AutoMergePolicyTests.swift" \
+        -o "$out/unittests"
+    "$out/unittests"
+    rm -rf "$out"
 }
 
 integration_test() {
@@ -462,6 +474,7 @@ case "$cmd" in
                 --remote) run_remote=1 ;;
             esac
         done
+        unit_test
         if [ -n "$run_remote" ]; then
             remote_integration_test
         else
@@ -475,6 +488,7 @@ case "$cmd" in
         build_tools
         fmt
         lint
+        unit_test
         load_env
         if [ -z "${REMOTE_RUNNER_HOST:-}" ]; then
             echo ">>> REMOTE_RUNNER_HOST not set, running integration tests locally"

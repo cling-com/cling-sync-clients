@@ -7,6 +7,15 @@ struct PassphrasePromptResult {
     let rememberInKeychain: Bool
 }
 
+// Holds a status poller's task plus a flag an operation sets when it registers
+// while the poller is winding down, so the poller does one more pass and never
+// leaves a freshly started operation unobserved.
+@MainActor
+private final class PollerState {
+    var task: Task<Void, Never>?
+    var restartRequested = false
+}
+
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     @Published var workspaceConfigs: [WorkspaceConfig] = []
@@ -29,10 +38,46 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     @Published var syncWorkers: Int = 2 {
         didSet { defaults.set(syncWorkers, forKey: syncWorkersKey) }
     }
+    @Published var autoMergeIntervalHours: Int = 0 {
+        didSet {
+            guard autoMergeIntervalHours != oldValue else { return }
+            defaults.set(autoMergeIntervalHours, forKey: autoMergeIntervalHoursKey)
+            // Honor the chosen interval rather than a leftover backoff interval.
+            networkBackoffPaths.removeAll()
+            rescheduleAutoMerge()
+        }
+    }
+    @Published var notifyStaleDays: Int = 0 {
+        didSet {
+            guard notifyStaleDays != oldValue else { return }
+            defaults.set(notifyStaleDays, forKey: notifyStaleDaysKey)
+            rescheduleStaleCheck()
+        }
+    }
+    @Published var selectedSettingsTab = 0
 
     private let defaults: UserDefaults
     private let workspaceConfigsKey = "workspaceConfigs"
     private let syncWorkersKey = "syncWorkers"
+    private let autoMergeIntervalHoursKey = "autoMergeIntervalHours"
+    private let notifyStaleDaysKey = "notifyStaleDays"
+    private let lastSuccessfulMergeKey = "lastSuccessfulMergeByPath"
+    private let firstTrackedKey = "firstTrackedByPath"
+    private let lastStaleNotifiedKey = "lastStaleNotifiedByPath"
+    var autoMergeTimer: Timer?
+    // Background merges in flight, so their completion routes to a notification
+    // rather than a modal alert.
+    var autoMergePaths: Set<String> = []
+    var lastSuccessfulMergeByPath: [String: Date] = [:]
+    // The staleness clock for a workspace that has never merged.
+    var firstTrackedByPath: [String: Date] = [:]
+    var lastStaleNotifiedByPath: [String: Date] = [:]
+    // Paths whose last auto-merge hit a connectivity error. While non-empty the
+    // auto-merge interval is shortened until they recover.
+    var networkBackoffPaths: Set<String> = []
+    var staleCheckTimer: Timer?
+    var manualAutoMergeTimer: Timer?
+    private var trayAnimator: TrayIconAnimator?
     private var statusItem: NSStatusItem?
     private var preferencesWindow: NSWindow?
     private var testMenuHostWindow: NSWindow?
@@ -45,9 +90,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     private var syncProgressWindow: NSWindow?
     private var syncProgressWorkspaceID: UUID?
     private var statusMenuItem: NSMenuItem?
-    private var mergePollTask: Task<Void, Never>?
-    private var statusPollTask: Task<Void, Never>?
-    private var syncPollTask: Task<Void, Never>?
+    private let mergePoller = PollerState()
+    private let statusPoller = PollerState()
+    private let syncPoller = PollerState()
     // Security-scoped folder URLs we hold access to, keyed by local path. In the
     // sandbox a user-selected folder is only reachable while its bookmark is
     // resolved and access is held open; we keep it open for the app's lifetime.
@@ -67,11 +112,70 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
         super.init()
         syncWorkers = max(1, (defaults.object(forKey: syncWorkersKey) as? Int) ?? 2)
+        autoMergeIntervalHours = max(0, (defaults.object(forKey: autoMergeIntervalHoursKey) as? Int) ?? 0)
+        notifyStaleDays = max(0, (defaults.object(forKey: notifyStaleDaysKey) as? Int) ?? 0)
         loadWorkspaceConfigs()
+        loadMergeTrackingState()
+        ensureMergeTracking()
         activateAllDirectoryAccess()
         selectInitialWorkspace()
         updateDraftFromSelection()
         updateStatusMessage()
+    }
+
+    func loadMergeTrackingState() {
+        lastSuccessfulMergeByPath = loadDateDict(lastSuccessfulMergeKey)
+        firstTrackedByPath = loadDateDict(firstTrackedKey)
+        lastStaleNotifiedByPath = loadDateDict(lastStaleNotifiedKey)
+    }
+
+    func persistMergeTrackingState() {
+        saveDateDict(lastSuccessfulMergeByPath, lastSuccessfulMergeKey)
+        saveDateDict(firstTrackedByPath, firstTrackedKey)
+        saveDateDict(lastStaleNotifiedByPath, lastStaleNotifiedKey)
+    }
+
+    private func loadDateDict(_ key: String) -> [String: Date] {
+        let raw = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    private func saveDateDict(_ dict: [String: Date], _ key: String) {
+        defaults.set(dict.mapValues { $0.timeIntervalSince1970 }, forKey: key)
+    }
+
+    // Starts the staleness clock for any complete workspace not seen before, so a
+    // folder that never once merges still trips the overdue notification.
+    func ensureMergeTracking() {
+        let now = Date()
+        var changed = false
+        for workspace in workspaceConfigs where workspace.isComplete {
+            let path = workspace.normalizedLocalDirectory
+            guard !path.isEmpty, firstTrackedByPath[path] == nil else { continue }
+            firstTrackedByPath[path] = now
+            changed = true
+        }
+        if changed {
+            persistMergeTrackingState()
+        }
+    }
+
+    // "up to date" also counts: a reachable repository with nothing to merge ends
+    // the staleness clock and the path's connectivity backoff.
+    func recordSuccessfulMerge(_ path: String) {
+        lastSuccessfulMergeByPath[path] = Date()
+        lastStaleNotifiedByPath.removeValue(forKey: path)
+        persistMergeTrackingState()
+        setNetworkBackoff(false, for: path)
+    }
+
+    func forgetMergeTracking(_ path: String) {
+        autoMergePaths.remove(path)
+        lastSuccessfulMergeByPath.removeValue(forKey: path)
+        firstTrackedByPath.removeValue(forKey: path)
+        lastStaleNotifiedByPath.removeValue(forKey: path)
+        persistMergeTrackingState()
+        setNetworkBackoff(false, for: path)
     }
 
     var selectedWorkspaceIndex: Int? {
@@ -130,6 +234,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
         setupStatusItem()
         loadAllSyncTargets()
+        rescheduleAutoMerge()
+        rescheduleStaleCheck()
         if isTestMode {
             showTestMenuHost()
         }
@@ -140,12 +246,45 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
 
     func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = trayIconImage()
+        let idleImage = trayIconImage()
+        item.button?.image = idleImage
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "Cling Sync"
         item.button?.setAccessibilityLabel("Cling Sync")
         statusItem = item
+        trayAnimator = TrayIconAnimator(button: item.button, idleImage: idleImage)
         rebuildMenu()
+    }
+
+    var anyOperationRunning: Bool {
+        hasActiveMerges || hasActiveStatuses || hasActiveSyncs
+    }
+
+    // One label per running operation across every workspace, used to build the
+    // "X in progress" tray tooltip.
+    var runningOperationLabels: [String] {
+        var labels: [String] = []
+        for workspace in workspaceConfigs {
+            if mergeStatus(for: workspace).running { labels.append("Merge") }
+            if syncStatus(for: workspace).running { labels.append("Sync") }
+            if statusStatus(for: workspace).running { labels.append("Status") }
+        }
+        return labels
+    }
+
+    var trayTooltip: String {
+        let labels = runningOperationLabels
+        switch labels.count {
+        case 0: return "Cling Sync"
+        case 1: return "\(labels[0]) in progress"
+        default: return "\(labels.count) operations in progress"
+        }
+    }
+
+    func updateTrayIcon() {
+        trayAnimator?.setAnimating(anyOperationRunning)
+        statusItem?.button?.toolTip = trayTooltip
+        statusItem?.button?.setAccessibilityLabel(trayTooltip)
     }
 
     func trayIconImage() -> NSImage? {
@@ -209,6 +348,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     func refreshMenu() {
         updateStatusMessage()
         rebuildMenu()
+        updateTrayIcon()
         if let hostingController = preferencesWindow?.contentViewController as? NSHostingController<PreferencesView> {
             hostingController.rootView = PreferencesView(controller: self)
         }
@@ -257,7 +397,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Cling Sync Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 860, height: 500))
+        window.setContentSize(NSSize(width: 880, height: 560))
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -415,6 +555,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         if let workspace = workspace(for: id) {
             try? Bridge.clearWorkspacePassphrase(hostURL: workspace.bridgeRepositoryURI)
             deactivateDirectoryAccess(forPath: workspace.normalizedLocalDirectory)
+            forgetMergeTracking(workspace.normalizedLocalDirectory)
             mergeStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             mergeShowsDetailsByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
             syncStatusesByPath.removeValue(forKey: workspace.normalizedLocalDirectory)
@@ -788,6 +929,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
         workspaceConfigs[index] = draftConfig
         persistWorkspaceConfigs()
+        ensureMergeTracking()
         refreshMenu()
     }
 
@@ -811,6 +953,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 || previous.bridgeRepositoryURI != config.bridgeRepositoryURI
             {
                 try? Bridge.clearWorkspacePassphrase(hostURL: previous.bridgeRepositoryURI)
+                forgetMergeTracking(previous.normalizedLocalDirectory)
                 mergeStatusesByPath.removeValue(forKey: previous.normalizedLocalDirectory)
                 mergeShowsDetailsByPath.removeValue(forKey: previous.normalizedLocalDirectory)
             }
@@ -819,6 +962,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
             workspaceConfigs.append(config)
         }
         persistWorkspaceConfigs()
+        ensureMergeTracking()
         selectedWorkspaceID = config.id
         draftConfig = config
     }
@@ -846,7 +990,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func startMergeFromMenu(_ workspace: WorkspaceConfig) async {
-        guard !mergeStatus(for: workspace).running else { return }
+        guard !isBusy(workspace) else { return }
         errorMessage = ""
         do {
             try await startMergeWorkspace(workspace, password: nil)
@@ -871,7 +1015,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         }
     }
 
-    func startMergeWorkspace(_ workspace: WorkspaceConfig, password: String?) async throws {
+    func startMergeWorkspace(_ workspace: WorkspaceConfig, password: String?, presentWindow: Bool = true) async throws {
         lastResultMessage = ""
         let runningStatus = MergeWorkspaceStatus(
             running: true,
@@ -887,7 +1031,9 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
         mergeStatusesByPath[workspace.normalizedLocalDirectory] = runningStatus
         isMerging = hasActiveMerges
         refreshMenu()
-        showMergeProgressWindow(for: workspace)
+        if presentWindow {
+            showMergeProgressWindow(for: workspace)
+        }
         do {
             try await Task.detached(priority: .userInitiated) {
                 try Bridge.startMergeWorkspace(
@@ -935,19 +1081,45 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func beginMergeStatusPolling() {
-        guard mergePollTask == nil else { return }
-        mergePollTask = Task { [weak self] in
+        drivePoller(
+            mergePoller,
+            hasActive: { [weak self] in self?.hasActiveMerges ?? false },
+            poll: { [weak self] in await self?.pollMergeStatuses() }
+        )
+    }
+
+    // Clearing poller.task and re-checking restartRequested happen together under
+    // MainActor, so an operation that registered while the task was winding down
+    // restarts the poller instead of being stranded with none.
+    private func drivePoller(
+        _ poller: PollerState,
+        hasActive: @escaping () -> Bool,
+        poll: @escaping () async -> Void
+    ) {
+        if poller.task != nil {
+            poller.restartRequested = true
+            return
+        }
+        poller.task = Task { [weak self] in
             guard let self else { return }
-            while !Task.isCancelled {
-                await self.pollMergeStatuses()
-                if !self.hasActiveMerges {
-                    break
+            while true {
+                await poll()
+                if hasActive() {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
                 }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            await MainActor.run {
-                self.mergePollTask = nil
-                self.refreshMenu()
+                let stop = await MainActor.run { () -> Bool in
+                    if poller.restartRequested {
+                        poller.restartRequested = false
+                        return false
+                    }
+                    poller.task = nil
+                    self.refreshMenu()
+                    return true
+                }
+                if stop {
+                    return
+                }
             }
         }
     }
@@ -988,7 +1160,12 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
                 guard let status = statuses[localPath], status.completed else { continue }
                 let previous = previousStatuses[localPath]
                 if previous?.running == true || previous?.statusMessage != status.statusMessage {
-                    if !status.errorMessage.isEmpty {
+                    if status.errorMessage.isEmpty, !status.cancelled {
+                        recordSuccessfulMerge(localPath)
+                    }
+                    if autoMergePaths.remove(localPath) != nil {
+                        handleAutoMergeCompletion(workspace: workspace, status: status)
+                    } else if !status.errorMessage.isEmpty {
                         showAlert(title: "Merge Failed", message: status.errorMessage)
                     }
                     lastResultMessage = "\(workspace.displayName): \(status.statusMessage)"
@@ -1001,7 +1178,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     // MARK: - Status
 
     func startStatusFromMenu(_ workspace: WorkspaceConfig) async {
-        guard !statusStatus(for: workspace).running else { return }
+        guard !isBusy(workspace) else { return }
         errorMessage = ""
         do {
             try await startStatusWorkspace(workspace, password: nil)
@@ -1081,21 +1258,11 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func beginStatusPolling() {
-        guard statusPollTask == nil else { return }
-        statusPollTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                await self.pollStatusStatuses()
-                if !self.hasActiveStatuses {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            await MainActor.run {
-                self.statusPollTask = nil
-                self.refreshMenu()
-            }
-        }
+        drivePoller(
+            statusPoller,
+            hasActive: { [weak self] in self?.hasActiveStatuses ?? false },
+            poll: { [weak self] in await self?.pollStatusStatuses() }
+        )
     }
 
     var hasActiveStatuses: Bool {
@@ -1319,7 +1486,7 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func startSyncFromMenu(_ workspace: WorkspaceConfig) async {
-        guard !syncStatus(for: workspace).running else { return }
+        guard !isBusy(workspace) else { return }
         errorMessage = ""
         do {
             try await startSyncWorkspace(workspace, password: nil)
@@ -1411,21 +1578,11 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
 
     func beginSyncPolling() {
-        guard syncPollTask == nil else { return }
-        syncPollTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                await self.pollSyncStatuses()
-                if !self.hasActiveSyncs {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            await MainActor.run {
-                self.syncPollTask = nil
-                self.refreshMenu()
-            }
-        }
+        drivePoller(
+            syncPoller,
+            hasActive: { [weak self] in self?.hasActiveSyncs ?? false },
+            poll: { [weak self] in await self?.pollSyncStatuses() }
+        )
     }
 
     func pollSyncStatuses() async {
@@ -1590,7 +1747,8 @@ final class AppController: NSObject, NSApplicationDelegate, ObservableObject, NS
     }
     @objc func handleMergeWorkspace(_ sender: NSMenuItem) {
         guard let id = workspaceID(from: sender), let workspace = workspace(for: id) else { return }
-        if mergeStatus(for: workspace).running {
+        let status = mergeStatus(for: workspace)
+        if status.running || (status.completed && !status.errorMessage.isEmpty) {
             showMergeProgressWindow(for: workspace)
         } else {
             Task { await startMergeFromMenu(workspace) }
