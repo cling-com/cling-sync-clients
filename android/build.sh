@@ -258,13 +258,41 @@ start_emulator_if_needed() {
             avd="ClingSync_Pixel_7"
         fi
         
-        "$ANDROID_HOME/emulator/emulator" -avd "$avd" -no-snapshot-load &
+        echo "    hv_support=$(sysctl -n kern.hv_support 2>/dev/null) arch=$(uname -m)"
+        "$ANDROID_HOME/emulator/emulator" -accel-check 2>&1 || true
+
+        # Without hardware virtualization the CPU and GPU must run in software
+        # and there is no display to render into.
+        local extra_args=""
+        if [ "$(sysctl -n kern.hv_support 2>/dev/null)" != "1" ]; then
+            extra_args="-accel off -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim"
+        fi
+        echo "    Starting emulator (${extra_args:-hardware})"
+        "$ANDROID_HOME/emulator/emulator" -avd "$avd" -no-snapshot-load $extra_args > tools/emulator.log 2>&1 &
+        local emu_pid=$!
         
-        # Wait for it to boot.
-        adb wait-for-device
+        # Poll for boot, capped so a stuck or dead emulator fails fast.
+        local waited=0
+        local boot_timeout=600
         while [ "$(adb shell getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
-            sleep 2
+            if ! kill -0 "$emu_pid" 2>/dev/null; then
+                echo "    Emulator process exited before boot. Log:" >&2
+                cat tools/emulator.log >&2 2>/dev/null || true
+                exit 1
+            fi
+            if [ "$waited" -ge "$boot_timeout" ]; then
+                echo "    Emulator did not boot within ${boot_timeout}s." >&2
+                echo "--- emulator.log ---" >&2; cat tools/emulator.log >&2 2>/dev/null || true
+                echo "--- logcat tail ---" >&2; adb logcat -d 2>/dev/null | tail -80 >&2 || true
+                exit 1
+            fi
+            sleep 5
+            waited=$((waited + 5))
+            if [ "$((waited % 60))" -eq 0 ]; then
+                echo "    ...still booting (${waited}s)"
+            fi
         done
+        echo "    Emulator booted after ${waited}s"
     fi
 }
 
