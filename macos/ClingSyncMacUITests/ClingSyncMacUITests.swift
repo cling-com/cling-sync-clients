@@ -35,7 +35,7 @@ final class ClingSyncMacUITests: XCTestCase {
 
         // --- Workspace 1: plain S3 URL → passphrase prompt → S3 prompt. ---
         let localFolderField = app.textFields["localFolderField"]
-        XCTAssertTrue(localFolderField.waitForExistence(timeout: 5))
+        XCTAssertTrue(localFolderField.waitToAppear(timeout: 5))
 
         replaceText(in: localFolderField, with: config.localDir)
         replaceText(in: app.textFields["authorField"], with: config.author)
@@ -56,17 +56,17 @@ final class ClingSyncMacUITests: XCTestCase {
         assertNoPreferencesError(in: app, context: "after testWorkspace")
 
         let saveButton = app.buttons["saveWorkspaceButton"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(saveButton.waitToAppear(timeout: 5))
         waitForButtonToEnable(saveButton)
         saveButton.tap()
         waitForElementToDisappear(saveButton)
 
         openTrayMenu(app, expecting: "Settings")
-        XCTAssertTrue(app.menuItems[config.localDir].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Merge"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Status"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Open Local Folder"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems[config.localDir].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems["Merge"].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems["Status"].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems["Open Local Folder"].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitToAppear(timeout: 5))
 
         // Run status first.
         clickWorkspaceStatusMenuItem(for: config.localDir, in: app)
@@ -92,7 +92,7 @@ final class ClingSyncMacUITests: XCTestCase {
             app.menuItems["Settings"].firstMatch.click()
 
             let addTargetButton = app.buttons["addSyncTargetButton"]
-            XCTAssertTrue(addTargetButton.waitForExistence(timeout: 5), "addSyncTargetButton not found")
+            XCTAssertTrue(addTargetButton.waitToAppear(timeout: 5), "addSyncTargetButton not found")
             addTargetButton.tap()
 
             replaceText(in: app.textFields["syncTargetNameField"], with: "backup")
@@ -100,7 +100,7 @@ final class ClingSyncMacUITests: XCTestCase {
             app.buttons["Add"].firstMatch.tap()
 
             XCTAssertTrue(
-                app.staticTexts["backup"].waitForExistence(timeout: 5), "sync target not listed after adding")
+                app.staticTexts["backup"].waitToAppear(timeout: 5), "sync target not listed after adding")
 
             closePreferences(in: app)
 
@@ -118,7 +118,7 @@ final class ClingSyncMacUITests: XCTestCase {
         }
         openTrayMenu(app, expecting: "Settings")
         let settingsItem = app.menuItems["Settings"].firstMatch
-        XCTAssertTrue(settingsItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(settingsItem.waitToAppear(timeout: 5))
         settingsItem.click()
 
         app.buttons["addFolderButton"].tap()
@@ -137,9 +137,9 @@ final class ClingSyncMacUITests: XCTestCase {
         waitForElementToDisappear(saveButton)
 
         openTrayMenu(app, expecting: "Settings")
-        XCTAssertTrue(app.menuItems[displayName(for: config.localDir)].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems[displayName(for: config.secondLocalDir)].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems[displayName(for: config.localDir)].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems[displayName(for: config.secondLocalDir)].firstMatch.waitToAppear(timeout: 5))
+        XCTAssertTrue(app.menuItems["Settings"].firstMatch.waitToAppear(timeout: 5))
         dismissMenuBarMenu(in: app)
 
         openTrayMenu(app, expecting: displayName(for: config.secondLocalDir))
@@ -159,7 +159,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let app = launchApp(defaultsSuiteSuffix: "createnewrepo")
 
         let localFolderField = app.textFields["localFolderField"]
-        XCTAssertTrue(localFolderField.waitForExistence(timeout: 5))
+        XCTAssertTrue(localFolderField.waitToAppear(timeout: 5))
         replaceText(in: localFolderField, with: config.localDir)
         replaceText(in: app.textFields["serverURLField"], with: newRepoPath)
         replaceText(in: app.textFields["authorField"], with: config.author)
@@ -170,20 +170,20 @@ final class ClingSyncMacUITests: XCTestCase {
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
         let cancelButton = app.buttons["Cancel"].firstMatch
-        XCTAssertTrue(cancelButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(cancelButton.waitToAppear(timeout: 5))
         cancelButton.tap()
-        XCTAssertTrue(localFolderField.waitForExistence(timeout: 2))
+        XCTAssertTrue(localFolderField.waitToAppear(timeout: 2))
         XCTAssertFalse(app.secureTextFields["newRepositoryPassphraseField"].exists)
 
         // Second attempt: accept the prompt, supply a passphrase, and confirm
         // that no "save in keychain" option is offered for the new repository.
         testButton.tap()
         let createButton = app.buttons["Create"].firstMatch
-        XCTAssertTrue(createButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(createButton.waitToAppear(timeout: 5))
         createButton.tap()
 
         let newPassphraseField = app.secureTextFields["newRepositoryPassphraseField"]
-        XCTAssertTrue(newPassphraseField.waitForExistence(timeout: 5))
+        XCTAssertTrue(newPassphraseField.waitToAppear(timeout: 5))
         XCTAssertFalse(
             app.checkBoxes["passphrasePromptRemember"].exists,
             "save-to-keychain checkbox should not appear when initializing a new repository",
@@ -191,13 +191,13 @@ final class ClingSyncMacUITests: XCTestCase {
         newPassphraseField.tap()
         newPassphraseField.typeText(config.passphrase)
         let confirmCreate = app.buttons["Create"].firstMatch
-        XCTAssertTrue(confirmCreate.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirmCreate.waitToAppear(timeout: 5))
         confirmCreate.tap()
 
         assertNoPreferencesError(in: app, context: "after creating new repository")
 
         let saveButton = app.buttons["saveWorkspaceButton"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(saveButton.waitToAppear(timeout: 5))
         waitForButtonToEnable(saveButton)
         saveButton.tap()
         waitForElementToDisappear(saveButton)
@@ -226,11 +226,11 @@ final class ClingSyncMacUITests: XCTestCase {
     private func openTrayMenu(_ app: XCUIApplication, expecting expectedMenuItem: String) {
         app.activate()
         let button = app.buttons["testAppMenuHostButton"]
-        XCTAssertTrue(button.waitForExistence(timeout: 5), "testAppMenuHostButton not found")
+        XCTAssertTrue(button.waitToAppear(timeout: 5), "testAppMenuHostButton not found")
         let expectedItem = app.menuItems[expectedMenuItem].firstMatch
         for _ in 0..<3 {
             button.click()
-            if expectedItem.waitForExistence(timeout: 2) {
+            if expectedItem.waitToAppear(timeout: 2) {
                 return
             }
             dismissMenuBarMenu(in: app)
@@ -251,38 +251,38 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func openSubmenu(named name: String, in app: XCUIApplication) {
         let item = app.menuItems[name].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "\(name) menu item not found")
+        XCTAssertTrue(item.waitToAppear(timeout: 5), "\(name) menu item not found")
         item.click()
     }
 
     private func clickWorkspaceStatusMenuItem(for localDir: String, in app: XCUIApplication) {
         let item = app.menuItems[workspaceStatusIdentifier(for: localDir)].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "status menu item not found for \(localDir)")
+        XCTAssertTrue(item.waitToAppear(timeout: 5), "status menu item not found for \(localDir)")
         item.click()
     }
 
     private func clickWorkspaceMergeMenuItem(for localDir: String, in app: XCUIApplication) {
         let item = app.menuItems[workspaceMergeIdentifier(for: localDir)].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "merge menu item not found for \(localDir)")
+        XCTAssertTrue(item.waitToAppear(timeout: 5), "merge menu item not found for \(localDir)")
         item.click()
     }
 
     private func clickWorkspaceSyncMenuItem(for localDir: String, in app: XCUIApplication) {
         let item = app.menuItems[workspaceSyncIdentifier(for: localDir)].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "sync menu item not found for \(localDir)")
+        XCTAssertTrue(item.waitToAppear(timeout: 5), "sync menu item not found for \(localDir)")
         item.click()
     }
 
     private func closePreferences(in app: XCUIApplication) {
         let cancelButton = app.buttons["Cancel"].firstMatch
-        if cancelButton.waitForExistence(timeout: 3) {
+        if cancelButton.waitToAppear(timeout: 3) {
             cancelButton.tap()
         }
     }
 
     private func waitForSyncToFinish(in app: XCUIApplication) {
         let status = app.staticTexts["testStatusLabel"]
-        XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
+        XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
         let successPredicate = NSPredicate(
             format: "value CONTAINS[c] %@ OR label CONTAINS[c] %@",
@@ -293,7 +293,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let result = waitForFirstMatch(
             success: successPredicate,
             successObject: status,
-            failure: existsPredicate(),
+            failure: terminalErrorPredicate(),
             failureObject: errorLabel,
             timeout: 30,
         )
@@ -309,13 +309,13 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func closeSyncProgressWindow(in app: XCUIApplication) {
         let closeButton = app.buttons["Close"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "Close button not found in sync progress window")
+        XCTAssertTrue(closeButton.waitToAppear(timeout: 5), "Close button not found in sync progress window")
         closeButton.tap()
     }
 
     private func waitForStatusToFinish(in app: XCUIApplication) {
         let status = app.staticTexts["testStatusLabel"]
-        XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
+        XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
         // Race the success predicate against the error label so a failure
         // surfaces with the actual error text instead of timing out.
@@ -330,7 +330,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let result = waitForFirstMatch(
             success: successPredicate,
             successObject: status,
-            failure: existsPredicate(),
+            failure: terminalErrorPredicate(),
             failureObject: errorLabel,
             timeout: 30,
         )
@@ -346,13 +346,13 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func closeStatusProgressWindow(in app: XCUIApplication) {
         let closeButton = app.buttons["Close"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "Close button not found in status progress window")
+        XCTAssertTrue(closeButton.waitToAppear(timeout: 5), "Close button not found in status progress window")
         closeButton.tap()
     }
 
     private func waitForMergeToFinish(in app: XCUIApplication) {
         let status = app.staticTexts["testStatusLabel"]
-        XCTAssertTrue(status.waitForExistence(timeout: 5), "testStatusLabel not found")
+        XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
         let successPredicate = NSPredicate(
             format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
@@ -365,7 +365,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let result = waitForFirstMatch(
             success: successPredicate,
             successObject: status,
-            failure: existsPredicate(),
+            failure: terminalErrorPredicate(),
             failureObject: errorLabel,
             timeout: 30,
         )
@@ -381,26 +381,30 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func closeMergeProgressWindow(in app: XCUIApplication) {
         let closeButton = app.buttons["Close"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "Close button not found in merge progress window")
+        XCTAssertTrue(closeButton.waitToAppear(timeout: 5), "Close button not found in merge progress window")
         closeButton.tap()
     }
 
     private func waitForButtonToEnable(_ button: XCUIElement) {
-        let predicate = NSPredicate(format: "enabled == true")
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: button)
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 30), .completed)
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, !button.isEnabled {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(button.isEnabled)
     }
 
     private func waitForElementToDisappear(_ element: XCUIElement) {
-        let predicate = NSPredicate(format: "exists == false")
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 10), .completed)
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, element.exists {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertFalse(element.exists)
     }
 
     private func enterPassphraseIfNeeded(in app: XCUIApplication, saveToKeychain: Bool) {
         let config = loadConfig()
         let field = app.secureTextFields["passphrasePromptField"]
-        guard field.waitForExistence(timeout: 5) else {
+        guard field.waitToAppear(timeout: 5) else {
             return
         }
         field.tap()
@@ -408,7 +412,7 @@ final class ClingSyncMacUITests: XCTestCase {
 
         if saveToKeychain {
             let remember = app.checkBoxes["passphrasePromptRemember"]
-            if remember.waitForExistence(timeout: 1), remember.value as? Int != 1 {
+            if remember.waitToAppear(timeout: 1), remember.value as? Int != 1 {
                 remember.tap()
             }
         }
@@ -418,13 +422,13 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func assertNoPassphrasePrompt(in app: XCUIApplication) {
         let field = app.secureTextFields["passphrasePromptField"]
-        XCTAssertFalse(field.waitForExistence(timeout: 2), "passphrase prompt unexpectedly appeared")
+        XCTAssertFalse(field.waitToAppear(timeout: 2), "passphrase prompt unexpectedly appeared")
     }
 
     private func enterS3CredentialsIfNeeded(in app: XCUIApplication) {
         let config = loadConfig()
         let keyIdField = app.textFields["s3KeyIdField"]
-        guard keyIdField.waitForExistence(timeout: 5) else {
+        guard keyIdField.waitToAppear(timeout: 5) else {
             return
         }
         keyIdField.tap()
@@ -435,21 +439,21 @@ final class ClingSyncMacUITests: XCTestCase {
         accessKeyField.typeText(config.s3AccessKey ?? "minioadmin")
 
         let continueButton = app.buttons["Continue"].firstMatch
-        XCTAssertTrue(continueButton.waitForExistence(timeout: 2))
+        XCTAssertTrue(continueButton.waitToAppear(timeout: 2))
         continueButton.tap()
     }
 
     private func assertNoS3Prompt(in app: XCUIApplication) {
         let keyIdField = app.textFields["s3KeyIdField"]
         XCTAssertFalse(
-            keyIdField.waitForExistence(timeout: 2),
+            keyIdField.waitToAppear(timeout: 2),
             "S3 credentials prompt unexpectedly appeared for an embedded-credentials URL")
     }
 
     private func assertNoPreferencesError(in app: XCUIApplication, context: String) {
         let errorLabel = app.staticTexts["preferencesErrorMessage"]
         // Give SwiftUI a brief moment to bind the error message before asserting.
-        if errorLabel.waitForExistence(timeout: 2) {
+        if errorLabel.waitToAppear(timeout: 2) {
             let message = (errorLabel.value as? String) ?? errorLabel.label
             XCTFail("preferences error \(context): \(message)")
         }
@@ -457,7 +461,7 @@ final class ClingSyncMacUITests: XCTestCase {
 
     private func assertPreferencesError(in app: XCUIApplication, contains needle: String) {
         let errorLabel = app.staticTexts["preferencesErrorMessage"]
-        XCTAssertTrue(errorLabel.waitForExistence(timeout: 5), "expected preferencesErrorMessage to appear")
+        XCTAssertTrue(errorLabel.waitToAppear(timeout: 5), "expected preferencesErrorMessage to appear")
         let message = (errorLabel.value as? String) ?? errorLabel.label
         XCTAssertTrue(
             message.localizedCaseInsensitiveContains(needle),
@@ -495,12 +499,19 @@ final class ClingSyncMacUITests: XCTestCase {
             : (failure.evaluate(with: failureObject) ? .failure : .timeout)
     }
 
-    private func existsPredicate() -> NSPredicate {
-        NSPredicate(format: "exists == true")
+    private func terminalErrorPredicate() -> NSPredicate {
+        // A "passphrase required" error is transient here: the test answers the
+        // prompt and the operation re-runs, clearing it a beat later (after the
+        // optional keychain store). Don't latch onto it as a terminal failure.
+        NSPredicate(
+            format: "exists == true AND NOT (value CONTAINS[c] %@ OR label CONTAINS[c] %@)",
+            "passphrase",
+            "passphrase"
+        )
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        XCTAssertTrue(element.waitToAppear(timeout: 5))
         element.click()
         let current = (element.value as? String) ?? ""
         if !current.isEmpty {
@@ -546,5 +557,21 @@ final class ClingSyncMacUITests: XCTestCase {
             XCTFail("Failed to load UI test config: \(error)")
             fatalError("Failed to load UI test config: \(error)")
         }
+    }
+}
+
+extension XCUIElement {
+    // waitForExistence re-evaluates its predicate on a fixed ~1s timer, so on the
+    // CI VM it costs ~1s per call even though the snapshot is instant and the
+    // element usually appears within a few ms. Poll fast instead.
+    func waitToAppear(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return exists
     }
 }

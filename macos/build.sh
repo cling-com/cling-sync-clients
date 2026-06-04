@@ -61,12 +61,13 @@ usage() {
     echo "      Lint code"
     echo
     echo "  precommit"
-    echo "      Run all checks before committing (fmt, lint, test)"
+    echo "      Run all checks before committing (fmt, lint, test). Tests run on"
+    echo "      REMOTE_RUNNER_HOST when it is set in .env and reachable, otherwise locally."
     echo
-    echo "  test [--xcuitest]"
-    echo "      Run integration tests"
-    echo "      This runs go/main_test.go which in turn runs xcodebuild UI tests."
-    echo "      Pass --xcuitest to run the XCUITest target directly."
+    echo "  test [--remote]"
+    echo "      Run integration tests (go/main_test.go, which drives the xcodebuild UI tests)."
+    echo "      Pass --remote to rsync this worktree and ../cling-sync to the runner VM"
+    echo "      (REMOTE_RUNNER_HOST/REMOTE_RUNNER_USER from .env) and run the tests there."
     echo
     echo "  tools"
     echo "      Install development tools (swiftlint, golangci-lint)"
@@ -230,18 +231,40 @@ integration_test() {
     go test -v -count=1 -timeout 20m ./...
 }
 
-integration_test_xcuitest() {
-    echo ">>> Running XCUITests"
-    sync_icon
-    run_xcodebuild xcodebuild-test.log \
-        -project "$xcode_project" \
-        -scheme "$xcode_scheme" \
-        -destination 'platform=macOS' \
-        -derivedDataPath "$derived_data_path" \
-        -test-timeouts-enabled YES \
-        -default-test-execution-time-allowance 30 \
-        -maximum-test-execution-time-allowance 90 \
-        test
+# Mirror this worktree and its sibling cling-sync to the runner VM and run the
+# integration tests there, so the XCUITests do not take over the local machine.
+remote_integration_test() {
+    load_env
+    if [ -z "${REMOTE_RUNNER_HOST:-}" ] || [ -z "${REMOTE_RUNNER_USER:-}" ]; then
+        echo "Error: REMOTE_RUNNER_HOST and REMOTE_RUNNER_USER must be set in .env"
+        exit 1
+    fi
+    remote="$REMOTE_RUNNER_USER@$REMOTE_RUNNER_HOST"
+
+    # Keep the worktree's own name so parallel worktrees do not clobber each
+    # other, and keep cling-sync beside it so the go.mod ../../../cling-sync
+    # replace still resolves on the runner.
+    clients_root=$(cd "$root/.." && pwd)
+    folder=$(basename "$clients_root")
+    sibling="$clients_root/../cling-sync"
+    if [ ! -d "$sibling" ]; then
+        echo "Error: sibling cling-sync not found at $sibling"
+        exit 1
+    fi
+
+    base="remote_runner"
+    ssh_opts="-o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+    excludes="--exclude=.git --exclude=build --exclude=tools --exclude=DerivedData --exclude=.DS_Store"
+
+    echo ">>> Syncing $folder and cling-sync to $remote:~/$base"
+    ssh $ssh_opts "$remote" "mkdir -p '$base'"
+    rsync -az --delete -e "ssh $ssh_opts" $excludes "$clients_root/" "$remote:$base/$folder/"
+    rsync -az --delete -e "ssh $ssh_opts" $excludes "$sibling/" "$remote:$base/cling-sync/"
+
+    # Run under a login shell so the runner's profile (Homebrew PATH for go and
+    # friends) is sourced. A bare ssh command shell does not read it.
+    echo ">>> Running macOS tests on $remote ($base/$folder)"
+    ssh $ssh_opts "$remote" "bash -lc 'cd \"$base/$folder\" && ./build.sh macos test'"
 }
 
 development_team_id="253W4734C9"
@@ -433,8 +456,14 @@ case "$cmd" in
         lint
         ;;
     test)
-        if [ $# -gt 0 ] && [ "$1" = "--xcuitest" ]; then
-            integration_test_xcuitest
+        run_remote=""
+        for arg in "$@"; do
+            case "$arg" in
+                --remote) run_remote=1 ;;
+            esac
+        done
+        if [ -n "$run_remote" ]; then
+            remote_integration_test
         else
             integration_test
         fi
@@ -446,7 +475,16 @@ case "$cmd" in
         build_tools
         fmt
         lint
-        integration_test
+        load_env
+        if [ -z "${REMOTE_RUNNER_HOST:-}" ]; then
+            echo ">>> REMOTE_RUNNER_HOST not set, running integration tests locally"
+            integration_test
+        elif ! ping -c 1 -t 2 "$REMOTE_RUNNER_HOST" >/dev/null 2>&1; then
+            echo ">>> Remote runner $REMOTE_RUNNER_HOST is not reachable, running integration tests locally"
+            integration_test
+        else
+            remote_integration_test
+        fi
         ;;
     run)
         run_app
