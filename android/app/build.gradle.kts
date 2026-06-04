@@ -50,6 +50,15 @@ android {
     }
 }
 
+// The Go-driven unit tests (android/go TestAndroidUnit) pass the local
+// execute-server URL here; bridge-backed tests are skipped without it.
+tasks.withType<Test>().configureEach {
+    systemProperty(
+        "clingsync.executeServerUrl",
+        project.findProperty("clingsync.executeServerUrl")?.toString() ?: "",
+    )
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.appcompat:appcompat:1.7.1")

@@ -21,6 +21,14 @@ open class GoBridge : IGoBridge {
         params: String,
     ): String
 
+    // The raw string transport. Production calls the JNI [Execute]; tests can
+    // override this to route the exact same command/JSON to a host-side execute
+    // server while reusing all the translation below (no fake bridge).
+    protected open fun rawExecute(
+        command: String,
+        params: String,
+    ): String = Execute(command, params)
+
     private fun executeInternal(
         command: String,
         params: JSONObject,
@@ -28,7 +36,7 @@ open class GoBridge : IGoBridge {
         Log.d("GoBridge", "Executing command: $command")
         synchronized(executeLock) {
             try {
-                val result = Execute(command, params.toString())
+                val result = rawExecute(command, params.toString())
                 val response = JSONObject(result)
 
                 if (response.has("error")) {

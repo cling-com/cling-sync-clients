@@ -14,23 +14,13 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.clingsync.android.data.UploadProgressIo
+import com.clingsync.android.data.UploadStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.File
-
-data class Upload(
-    val files: List<String>,
-    val author: String,
-    val message: String,
-    val hostUrl: String,
-    val password: String,
-    val repoPathPrefix: String,
-) {
-    val revisionEntries: MutableList<String> = mutableListOf()
-}
 
 class UploadWorker(
     context: Context,
@@ -77,8 +67,7 @@ class UploadWorker(
 
     private val goBridge = GoBridgeProvider.getInstance()
     private val statusFile = File(applicationContext.cacheDir, STATUS_FILE_NAME)
-    private val fileStatuses = mutableMapOf<String, String>()
-    private var totalBytes = 0L
+    private val fileStatuses = mutableMapOf<String, UploadStatus>()
     private var uploadedBytes = 0L
 
     override suspend fun doWork(): Result =
@@ -107,14 +96,9 @@ class UploadWorker(
                 // Show foreground notification.
                 setForeground(createForegroundInfo(0, filePaths.size))
 
-                // Calculate total bytes
-                filePaths.forEach { path ->
-                    totalBytes += File(path).length()
-                }
-
                 // Initialize all files as waiting (keyed by absolute path).
                 filePaths.forEach { path ->
-                    fileStatuses[path] = "waiting"
+                    fileStatuses[path] = UploadStatus.WAITING
                 }
 
                 // Verify repository is open. The UI must open it before starting the worker.
@@ -137,7 +121,7 @@ class UploadWorker(
                     val fileSize = File(filePath).length()
                     Log.d("Worker", "Uploading file ${index + 1}/${filePaths.size}: $filePath")
 
-                    fileStatuses[filePath] = "uploading"
+                    fileStatuses[filePath] = UploadStatus.UPLOADING
 
                     // Update progress notification.
                     setForeground(createForegroundInfo(index + 1, filePaths.size, File(filePath).name))
@@ -148,18 +132,18 @@ class UploadWorker(
                     if (revisionEntry != null) {
                         revisionEntries.add(revisionEntry)
                         uploadedBytes += fileSize
-                        fileStatuses[filePath] = "uploaded"
+                        fileStatuses[filePath] = UploadStatus.UPLOADED
                     } else {
                         Log.d("Worker", "Skipped file $filePath - already exists with same hash")
-                        fileStatuses[filePath] = "skipped"
+                        fileStatuses[filePath] = UploadStatus.SKIPPED
                         uploadedBytes += fileSize
                     }
                 }
 
                 // Mark all files as committing.
                 filePaths.forEach { path ->
-                    if (fileStatuses[path] == "uploading" || fileStatuses[path] == "uploaded") {
-                        fileStatuses[path] = "committing"
+                    if (fileStatuses[path] == UploadStatus.UPLOADING || fileStatuses[path] == UploadStatus.UPLOADED) {
+                        fileStatuses[path] = UploadStatus.COMMITTING
                     }
                 }
 
@@ -184,28 +168,17 @@ class UploadWorker(
 
                 // Build complete status file and send as result
                 val resultFile = File(applicationContext.cacheDir, "upload_result_${System.currentTimeMillis()}.json")
-                val resultJson =
-                    JSONObject().apply {
-                        fileStatuses.forEach { (fileName, status) ->
-                            put(fileName, status)
-                        }
-                    }
-                resultFile.writeText(resultJson.toString())
+                UploadProgressIo.write(resultFile, fileStatuses)
 
                 // Return success with revision ID and result file.
                 val outputData =
                     workDataOf(
                         KEY_REVISION_ID to revisionId,
                         "result_file" to resultFile.absolutePath,
-                        "total_files" to filePaths.size,
                     )
-                // Cancel progress job and write final status
-                progressJob.cancel()
-                updateProgressFile()
 
                 Result.success(outputData)
             } catch (e: Exception) {
-                progressJob.cancel()
                 Log.e("Worker", "Upload failed", e)
 
                 // Build detailed error message with stack trace.
@@ -227,6 +200,13 @@ class UploadWorker(
                 Result.failure(
                     workDataOf("error" to errorMessage),
                 )
+            } finally {
+                // Stop the periodic updater and write the final status. This must
+                // run on every exit path, including the early `return@withContext`
+                // failures above, or the infinite progress loop would keep the
+                // enclosing withContext from ever completing.
+                progressJob.cancel()
+                updateProgressFile()
             }
         }
 
@@ -287,21 +267,13 @@ class UploadWorker(
 
     private suspend fun updateProgressFile() {
         try {
-            // Write status to file
-            val statusJson =
-                JSONObject().apply {
-                    fileStatuses.forEach { (fileName, status) ->
-                        put(fileName, status)
-                    }
-                }
-            statusFile.writeText(statusJson.toString())
+            UploadProgressIo.write(statusFile, fileStatuses)
 
             // Send progress update with just the filename
             setProgress(
                 workDataOf(
                     "status_file" to statusFile.absolutePath,
                     "uploaded_bytes" to uploadedBytes,
-                    "total_bytes" to totalBytes,
                 ),
             )
         } catch (e: Exception) {

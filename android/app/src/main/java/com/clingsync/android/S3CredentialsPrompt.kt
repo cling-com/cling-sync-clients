@@ -31,44 +31,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 data class S3CredentialsResult(
     val accessKeyId: String,
     val accessKey: String,
 )
-
-data class S3CredentialsRequest(
-    val onConfirm: (S3CredentialsResult) -> Unit,
-    val onCancel: () -> Unit,
-)
-
-// Shows the S3 credentials prompt and suspends until the user confirms or
-// cancels. `install` is called with the request the UI should render, then
-// with `null` after the prompt resolves.
-suspend fun awaitS3Credentials(install: (S3CredentialsRequest?) -> Unit): S3CredentialsResult =
-    suspendCancellableCoroutine { cont ->
-        install(
-            S3CredentialsRequest(
-                onConfirm = { result ->
-                    install(null)
-                    if (cont.isActive) {
-                        cont.resumeWith(Result.success(result))
-                    }
-                },
-                onCancel = {
-                    install(null)
-                    if (cont.isActive) {
-                        cont.resumeWith(
-                            Result.failure(CancellationException("S3 credentials prompt cancelled")),
-                        )
-                    }
-                },
-            ),
-        )
-        cont.invokeOnCancellation { install(null) }
-    }
 
 @Composable
 fun S3CredentialsPromptDialog(

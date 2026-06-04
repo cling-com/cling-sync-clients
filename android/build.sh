@@ -321,13 +321,20 @@ test_integration() {
     done
     start_emulator_if_needed
     cd go
-    go test -v -count=1 ./... "$@"
+    go test -v -count=1 -run TestAndroidIntegration ./... "$@"
 }
 
+# The JVM unit tests run against the REAL Go bridge: a Go driver starts a
+# host-side execute server (wrapping bridge.Execute over an in-process repo) and
+# runs the Robolectric tests pointed at it. No emulator, no fake bridge.
 test_unit() {
     echo ">>> Running unit tests"
-    set_local_path
-    ./gradlew testDebugUnitTest --rerun-tasks -q "$@"
+    # Subshell so the cd into go/ does not leak into a following test_integration.
+    (
+        set_local_path
+        cd go
+        go test -v -count=1 -run TestAndroidUnit ./... "$@"
+    )
 }
 
 test_all() {
