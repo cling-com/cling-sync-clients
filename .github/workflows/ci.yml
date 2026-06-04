@@ -38,8 +38,9 @@ jobs:
         run: ./build.sh build
       - name: Lint
         run: ./build.sh lint
-      - name: Test (android)
-        run: ./build.sh android test
+      - name: Test (android unit)
+        # Integration tests need an emulator with hardware virtualization.
+        run: ./build.sh android test unit
       - name: Test (ios)
         run: ./build.sh ios test
       - name: Test (macos)

@@ -359,14 +359,14 @@ simulator_device_id=""
 # Input:
 #   $1: Simulator name (default: "ClingSync-Dev")
 #   $2: Device type (default: "iPhone 15")  
-#   $3: OS version (default: "17")
+#   $3: OS version (default: "17.5")
 #
 # Output:
 #   $simulator_device_id: Simulator device ID
 ensure_simulator() {
     local simulator_name="${1:-ClingSync-Dev}"
     local device_type="${2:-iPhone 15}"
-    local os_version="${3:-17}"
+    local os_version="${3:-17.5}"
     
     # Check if simulator exists.
     simulator_device_id=$(xcrun simctl list devices | grep "$simulator_name" | grep -oE '[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}' | head -1)

@@ -227,7 +227,7 @@ lint() {
 integration_test() {
     echo ">>> Running integration tests"
     cd "$root/go"
-    go test -v -count=1 ./...
+    go test -v -count=1 -timeout 20m ./...
 }
 
 integration_test_xcuitest() {

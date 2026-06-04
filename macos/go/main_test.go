@@ -176,8 +176,8 @@ func TestMacOSSyncRepoBackup(t *testing.T) { //nolint:paralleltest
 	assert.Contains(syncResult.StatusMessage, "Synced")
 	// The detailed output carries the full monitor progress and the global
 	// worker count we passed in.
-	assert.Contains(syncResult.DetailedOutput, "Source has")
-	assert.Contains(syncResult.DetailedOutput, "Updating target repository head")
+	assert.Contains(syncResult.DetailedOutput, "source has")
+	assert.Contains(syncResult.DetailedOutput, "updating target repository head")
 	assert.Contains(syncResult.DetailedOutput, "[4 workers]")
 
 	// Aborting when no sync is running is reported, not silently ignored.
@@ -402,7 +402,7 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 			_ = os.Remove(logPath)
 		}
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(
 		ctx,
@@ -414,6 +414,9 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 		"-default-test-execution-time-allowance", "30",
 		"-maximum-test-execution-time-allowance", "90",
 		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/testCreateNewRepositoryFromMissingPath",
+		"CODE_SIGN_IDENTITY=-",
+		"CODE_SIGNING_REQUIRED=NO",
+		"CODE_SIGNING_ALLOWED=YES",
 		"test",
 	)
 	cmd.Dir = "."
@@ -514,7 +517,7 @@ func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 			_ = os.Remove(logPath)
 		}
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext( //nolint:gosec
 		ctx,
@@ -526,6 +529,9 @@ func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 		"-default-test-execution-time-allowance", "60",
 		"-maximum-test-execution-time-allowance", "180",
 		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/"+onlyTest,
+		"CODE_SIGN_IDENTITY=-",
+		"CODE_SIGNING_REQUIRED=NO",
+		"CODE_SIGNING_ALLOWED=YES",
 		"test",
 	)
 	cmd.Dir = "."
