@@ -242,6 +242,13 @@ create_sample_files() {
 }
 
 start_emulator_if_needed() {
+    # Remove any stale emulator and AVD so a half-booted or corrupt device
+    # cannot interfere with a fresh boot.
+    killall qemu-system-aarch64 2>/dev/null || true
+    for existing in $("$ANDROID_HOME/emulator/emulator" -list-avds 2>/dev/null); do
+        "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" delete avd --name "$existing" 2>/dev/null || true
+    done
+
     if ! adb devices | grep -q "device$"; then
         echo ">>> No devices connected. Starting emulator..."
         
@@ -258,8 +265,12 @@ start_emulator_if_needed() {
             avd="ClingSync_Pixel_7"
         fi
         
-        echo "    hv_support=$(sysctl -n kern.hv_support 2>/dev/null) arch=$(uname -m)"
-        "$ANDROID_HOME/emulator/emulator" -accel-check 2>&1 || true
+        echo "    --- HVF diagnostics (arch=$(uname -m)) ---"
+        sysctl kern.hv_support kern.hv_vmm_present 2>&1 | sed 's/^/    /' || true
+        "$ANDROID_HOME/emulator/emulator" -accel-check 2>&1 | sed 's/^/    /' || true
+        local qemu_bin=$(find "$ANDROID_HOME/emulator" -name 'qemu-system-aarch64*' 2>/dev/null | head -1)
+        [ -n "$qemu_bin" ] && codesign -d --entitlements :- "$qemu_bin" 2>&1 | sed 's/^/    /' || true
+        echo "    --- end diagnostics ---"
 
         # Without hardware virtualization the CPU and GPU must run in software
         # and there is no display to render into.
