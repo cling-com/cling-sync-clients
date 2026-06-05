@@ -41,6 +41,9 @@ type executeServer struct {
 
 func newExecuteServer(t *testing.T) *executeServer {
 	t.Helper()
+	// The app calls the bridge's "init" once at startup to set a writable cache
+	// dir; mirror that here so the process-global bridge is ready for every test.
+	bridge.Init(t.TempDir())
 	es := &executeServer{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/execute", es.handleExecute)

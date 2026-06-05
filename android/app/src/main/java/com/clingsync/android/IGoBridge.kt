@@ -1,6 +1,10 @@
 package com.clingsync.android
 
 interface IGoBridge {
+    // Sets the directory the bridge writes its caches to. Called once per process
+    // before any other call.
+    fun initialize(cacheDir: String)
+
     fun checkRepositoryOpen(repositoryUri: String): Boolean
 
     // Opens the repository. `repositoryUri` is a file path or an `s3+...` URI
@@ -10,7 +14,9 @@ interface IGoBridge {
         password: String,
     )
 
-    fun checkFiles(sha256s: List<String>): List<String>
+    // Reports, per input hash, whether its content is present in the repository's
+    // HEAD. Backed by the persisted hash index, so it works without an open repo.
+    fun checkFiles(sha256s: List<String>): List<Boolean>
 
     fun uploadFile(
         localFilePath: String,

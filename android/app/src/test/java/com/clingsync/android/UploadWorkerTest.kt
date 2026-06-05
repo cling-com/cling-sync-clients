@@ -122,9 +122,9 @@ class UploadWorkerTest {
         val result = runWorker(listOf(a, b))
 
         assertTrue(result is ListenableWorker.Result.Success)
-        // The files are genuinely in the repository at the prefixed paths.
+        // The files are genuinely in the repository.
         assertEquals(
-            listOf("phone/a.jpg", "phone/b.jpg"),
+            listOf(true, true),
             bridge.checkFiles(listOf(sha256(a), sha256(b))),
         )
     }
@@ -136,7 +136,7 @@ class UploadWorkerTest {
 
         runWorker(listOf(nested))
 
-        assertEquals(listOf("backup/vacation/sunset.jpg"), bridge.checkFiles(listOf(sha256(nested))))
+        assertEquals(listOf(true), bridge.checkFiles(listOf(sha256(nested))))
     }
 
     @Test
@@ -146,7 +146,7 @@ class UploadWorkerTest {
 
         runWorker(listOf(a))
 
-        assertEquals(listOf("a.jpg"), bridge.checkFiles(listOf(sha256(a))))
+        assertEquals(listOf(true), bridge.checkFiles(listOf(sha256(a))))
     }
 
     @Test
@@ -161,7 +161,7 @@ class UploadWorkerTest {
         val statuses = resultStatuses(result)
         assertEquals("skipped", statuses[a.absolutePath])
         assertEquals("committing", statuses[b.absolutePath])
-        assertEquals(listOf("phone/a.jpg", "phone/b.jpg"), bridge.checkFiles(listOf(sha256(a), sha256(b))))
+        assertEquals(listOf(true, true), bridge.checkFiles(listOf(sha256(a), sha256(b))))
     }
 
     @Test

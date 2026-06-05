@@ -85,7 +85,9 @@ final class FileChecker {
             do {
                 let results = try Bridge.checkFiles(sha256s: batch.map { $0.sha256 })
                 for (index, file) in batch.enumerated() {
-                    fileStatuses[file.file.id] = index < results.count ? results[index] : ""
+                    // CheckFiles now reports presence only; the repo path is no longer
+                    // returned, so a non-empty marker stands in for "present".
+                    fileStatuses[file.file.id] = (index < results.count && results[index]) ? "exists" : ""
                 }
             } catch {
                 for file in batch {

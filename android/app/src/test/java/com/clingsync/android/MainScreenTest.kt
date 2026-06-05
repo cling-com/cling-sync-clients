@@ -97,7 +97,7 @@ class MainScreenTest {
     fun aSyncedRowIsNotSelectable() {
         // The whole row is toggleable; a synced (Exists/Done) file must not be
         // selectable by tapping it, matching Select All which already excludes it.
-        render(connectedState(mapOf("/sdcard/DCIM/synced.jpg" to FileStatus.Exists("phone/synced.jpg"))))
+        render(connectedState(mapOf("/sdcard/DCIM/synced.jpg" to FileStatus.Exists)))
         composeTestRule.waitForIdle()
         composeTestRule.onNode(hasText("synced.jpg", substring = true)).assertIsNotEnabled()
     }

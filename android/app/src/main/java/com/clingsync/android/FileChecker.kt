@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
 
 data class FileCheckUpdate(
     val statuses: Map<String, FileStatus>,
@@ -60,7 +59,7 @@ class FileChecker(
                             if (cached != null) {
                                 cached
                             } else {
-                                calculateSHA256(file).also {
+                                fileSha256(file).also {
                                     sha256Cache.store(filePath, file.length(), file.lastModified(), it)
                                     newHashCount++
                                     if (newHashCount % 10 == 0) sha256Cache.save()
@@ -75,8 +74,8 @@ class FileChecker(
                         try {
                             val results = goBridge.checkFiles(batchSha256s)
                             for (i in batchPaths.indices) {
-                                val repoPath = if (i < results.size) results[i] else ""
-                                val status = if (repoPath.isNotEmpty()) FileStatus.Exists(repoPath) else FileStatus.New
+                                val exists = i < results.size && results[i]
+                                val status = if (exists) FileStatus.Exists else FileStatus.New
                                 fileStatuses[batchPaths[i]] = status
                                 batchStatuses[batchPaths[i]] = status
                                 processedCount++
@@ -115,18 +114,6 @@ class FileChecker(
                 sha256Cache.save()
             }
         }
-
-    private fun calculateSHA256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { fis ->
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (fis.read(buffer).also { read = it } > 0) {
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
 
     companion object {
         private const val MAX_BATCH_SIZE = 100

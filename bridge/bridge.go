@@ -27,6 +27,15 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 	}()
 
 	switch command {
+	case "init":
+		var params struct {
+			CacheDir string `json:"cacheDir"`
+		}
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return errorResponse("Failed to parse parameters: " + err.Error())
+		}
+		Init(params.CacheDir)
+		return successResponse()
 	case "checkRepositoryOpen":
 		var params struct {
 			HostURL string `json:"hostUrl"`
@@ -86,7 +95,7 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse(err.Error())
 		}
 		response := struct {
-			Results []string `json:"results"`
+			Results []bool `json:"results"`
 		}{Results: res}
 		jsonBytes, err := json.Marshal(response)
 		if err != nil {

@@ -15,9 +15,10 @@ if [ $# -eq 0 ]; then
     echo "  build [target]"
     echo "      Build the target. If no target is specified, build all targets."
     echo "      Available targets:"
-    echo "        go  - build the Go shared library"
-    echo "        apk - build the Android APK"
-    echo "        all - build both Go library and APK (default)"
+    echo "        go      - build the Go shared library"
+    echo "        apk     - build the debug Android APK"
+    echo "        release - build the Go library and an unsigned release APK"
+    echo "        all     - build both Go library and debug APK (default)"
     echo
     echo "  tools"
     echo "      Install Android SDK and Gradle under ./tools/"
@@ -215,6 +216,18 @@ build_apk() {
     cp app/build/outputs/apk/debug/app-debug.apk "$repo_build/clingsync-debug.apk"
 }
 
+# Build the release APK. No signing config is set up, so the output is unsigned and
+# must be signed before it can be installed or published.
+build_apk_release() {
+    echo ">>> Building Android release APK"
+    set_local_path
+    ./gradlew assembleRelease -q
+    local repo_build="$root/../build"
+    mkdir -p "$repo_build"
+    echo ">>> Copying APK to $repo_build/clingsync-release-unsigned.apk"
+    cp app/build/outputs/apk/release/app-release-unsigned.apk "$repo_build/clingsync-release-unsigned.apk"
+}
+
 build_all() {
     build_go
     build_apk
@@ -390,12 +403,16 @@ case "$cmd" in
             apk)
                 build_apk "$@"
                 ;;
+            release)
+                build_go
+                build_apk_release
+                ;;
             all)
                 build_all "$@"
                 ;;
             *)
                 echo "Unknown build target: $1"
-                echo "Available targets: go, apk, all"
+                echo "Available targets: go, apk, release, all"
                 exit 1
                 ;;
         esac

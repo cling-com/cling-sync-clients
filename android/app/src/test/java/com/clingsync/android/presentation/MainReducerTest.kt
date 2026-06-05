@@ -49,7 +49,7 @@ class MainReducerTest {
             stateWithFiles(
                 mapOf(
                     path("new.jpg") to FileStatus.New,
-                    path("synced.jpg") to FileStatus.Exists("phone/synced.jpg"),
+                    path("synced.jpg") to FileStatus.Exists,
                     path("done.jpg") to FileStatus.Done,
                     path("aborted.jpg") to FileStatus.Aborted,
                 ),

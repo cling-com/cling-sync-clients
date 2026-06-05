@@ -6,7 +6,7 @@ sealed class FileStatus {
 
     object New : FileStatus()
 
-    data class Exists(val repoPath: String) : FileStatus()
+    object Exists : FileStatus()
 
     object Waiting : FileStatus()
 

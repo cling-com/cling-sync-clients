@@ -55,6 +55,11 @@ open class GoBridge : IGoBridge {
         }
     }
 
+    override fun initialize(cacheDir: String) {
+        val params = JSONObject().apply { put("cacheDir", cacheDir) }
+        executeInternal("init", params)
+    }
+
     override fun checkRepositoryOpen(repositoryUri: String): Boolean {
         val params = JSONObject().apply { put("hostUrl", repositoryUri) }
         val response = executeInternal("checkRepositoryOpen", params)
@@ -89,7 +94,7 @@ open class GoBridge : IGoBridge {
         return executeInternal("encodeS3URI", params).getString("uri")
     }
 
-    override fun checkFiles(sha256s: List<String>): List<String> {
+    override fun checkFiles(sha256s: List<String>): List<Boolean> {
         val params =
             JSONObject().apply {
                 put("sha256s", org.json.JSONArray(sha256s))
@@ -97,7 +102,7 @@ open class GoBridge : IGoBridge {
 
         val response = executeInternal("checkFiles", params)
         val resultsArray = response.getJSONArray("results")
-        return List(resultsArray.length()) { i -> resultsArray.getString(i) }
+        return List(resultsArray.length()) { i -> resultsArray.getBoolean(i) }
     }
 
     override fun uploadFile(

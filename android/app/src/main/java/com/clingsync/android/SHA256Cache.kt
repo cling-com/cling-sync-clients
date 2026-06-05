@@ -5,6 +5,15 @@ import android.system.Os
 import android.util.Log
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+// A read-only view of a cache entry, exposed without the staleness check or
+// eviction that lookup() performs.
+data class CachedEntry(
+    val size: Long,
+    val lastModified: Long,
+    val sha256: String,
+)
 
 class SHA256Cache private constructor(context: Context) {
     companion object {
@@ -29,7 +38,11 @@ class SHA256Cache private constructor(context: Context) {
     )
 
     private val cacheFile = File(context.filesDir, "sha256cache.json")
-    private val entries = mutableMapOf<String, Entry>()
+
+    // Concurrent because the background reminder reads (peek) while a foreground
+    // scan writes (store) and persists (save) from another thread. A plain map's
+    // iteration in save() would throw under that contention.
+    private val entries = ConcurrentHashMap<String, Entry>()
 
     init {
         load()
@@ -48,6 +61,10 @@ class SHA256Cache private constructor(context: Context) {
         }
         return entry.sha256
     }
+
+    // Returns the cached entry for `name` without checking staleness or evicting,
+    // or null if the path is unknown.
+    fun peek(name: String): CachedEntry? = entries[name]?.let { CachedEntry(it.size, it.lastModified, it.sha256) }
 
     fun store(
         name: String,

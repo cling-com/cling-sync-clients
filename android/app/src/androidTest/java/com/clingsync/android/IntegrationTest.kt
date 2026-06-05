@@ -80,6 +80,7 @@ class IntegrationTest {
             Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.READ_EXTERNAL_STORAGE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            Manifest.permission.POST_NOTIFICATIONS,
         )
 
     @get:Rule(order = 2)

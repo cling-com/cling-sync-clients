@@ -64,6 +64,12 @@ struct WorkspaceInspection {
 }
 
 enum Bridge {
+    // Points the bridge at an app-writable directory for its caches. Call once at
+    // startup before any other bridge call.
+    static func initialize(cacheDir: String) throws {
+        _ = try execute(command: "init", params: ["cacheDir": cacheDir])
+    }
+
     // Encrypts the S3 credentials into the repository URI and returns it. The
     // bridge keeps no credential state; the caller stores the URI and re-sends it.
     static func encodeS3URI(

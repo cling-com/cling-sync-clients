@@ -36,7 +36,7 @@ class UploadProgressIoTest {
         assertEquals(FileStatus.Waiting, progress["a"])
         assertEquals(FileStatus.Uploading, progress["b"])
         assertEquals(FileStatus.Uploaded, progress["c"])
-        assertEquals(FileStatus.Exists(""), progress["d"])
+        assertEquals(FileStatus.Exists, progress["d"])
         assertEquals(FileStatus.Committing, progress["e"])
     }
 
@@ -58,7 +58,7 @@ class UploadProgressIoTest {
 
         assertEquals(FileStatus.Done, result["committed"])
         assertEquals(FileStatus.Done, result["uploaded"])
-        assertEquals(FileStatus.Exists(""), result["skipped"])
+        assertEquals(FileStatus.Exists, result["skipped"])
         // Non-terminal states must not overwrite existing UI state on completion.
         assertNull(result["waiting"])
         assertNull(result["uploading"])

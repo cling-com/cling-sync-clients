@@ -72,6 +72,8 @@ class UploadWorker(
 
     override suspend fun doWork(): Result =
         withContext(Dispatchers.IO) {
+            GoBridgeProvider.initialize(applicationContext)
+
             // Setup a coroutine to periodically update progress
             val progressJob =
                 launch {

@@ -85,7 +85,7 @@ class FileCheckerTest {
 
             val result = checker().checkFiles(listOf(a, b).map { it.absolutePath }).getOrThrow()
 
-            assertEquals(FileStatus.Exists("phone/a.jpg"), result.statuses[a.absolutePath])
+            assertEquals(FileStatus.Exists, result.statuses[a.absolutePath])
             assertEquals(FileStatus.New, result.statuses[b.absolutePath])
         }
 

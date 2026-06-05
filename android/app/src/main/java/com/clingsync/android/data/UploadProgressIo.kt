@@ -24,7 +24,7 @@ object UploadProgressIo {
                 UploadStatus.WAITING -> FileStatus.Waiting
                 UploadStatus.UPLOADING -> FileStatus.Uploading
                 UploadStatus.UPLOADED -> FileStatus.Uploaded
-                UploadStatus.SKIPPED -> FileStatus.Exists("")
+                UploadStatus.SKIPPED -> FileStatus.Exists
                 UploadStatus.COMMITTING -> FileStatus.Committing
                 null -> FileStatus.New
             }
@@ -36,7 +36,7 @@ object UploadProgressIo {
         read(file) { status ->
             when (status) {
                 UploadStatus.COMMITTING, UploadStatus.UPLOADED -> FileStatus.Done
-                UploadStatus.SKIPPED -> FileStatus.Exists("")
+                UploadStatus.SKIPPED -> FileStatus.Exists
                 else -> null
             }
         }

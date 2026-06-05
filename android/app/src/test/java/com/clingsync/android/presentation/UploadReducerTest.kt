@@ -109,12 +109,12 @@ class UploadReducerTest {
     fun succeededMarksFinalStatusesClearsSelectionAndResets() {
         val state = uploading(listOf("/a", "/b"), FileStatus.Committing).copy(selectedPaths = setOf("/x"))
         val update =
-            WorkUpdate.Succeeded(mapOf("/a" to FileStatus.Done, "/b" to FileStatus.Exists("")))
+            WorkUpdate.Succeeded(mapOf("/a" to FileStatus.Done, "/b" to FileStatus.Exists))
 
         val next = UploadReducer.reduce(state, update)
 
         assertEquals(FileStatus.Done, next.fileStatus["/a"])
-        assertEquals(FileStatus.Exists(""), next.fileStatus["/b"])
+        assertEquals(FileStatus.Exists, next.fileStatus["/b"])
         assertFalse(next.isUploading)
         assertFalse(next.isUploadInitiated)
         assertNull(next.currentUploadId)

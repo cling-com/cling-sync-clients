@@ -3,6 +3,7 @@ package com.clingsync.android
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import com.clingsync.android.effect.SafPathDecoder
@@ -87,6 +89,8 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_ClingSync)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        GoBridgeProvider.initialize(applicationContext)
+        MergeReminderScheduler.ensureScheduled(applicationContext)
         setContent {
             ClingSyncTheme {
                 MainRoot(activity = this, viewModel = viewModel)
@@ -110,6 +114,19 @@ fun MainRoot(
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             viewModel.dispatch(MainEvent.PermissionResult(permissions.values.all { it }))
         }
+
+    // Notifications are optional (only the daily backup reminder uses them), so the
+    // request is kept out of the file-access gate and its result is not acted on.
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     var directoryPickerCallback by remember { mutableStateOf<((String) -> Unit)?>(null) }
     val directoryPickerLauncher =

@@ -20,6 +20,12 @@ struct RepositoryStatus {
 }
 
 class Bridge {
+    // Points the bridge at an app-writable directory for its caches. Call once at
+    // startup before any other bridge call.
+    static func initialize(cacheDir: String) throws(BridgeError) {
+        _ = try execute(command: "init", params: ["cacheDir": cacheDir])
+    }
+
     // Encrypts the S3 credentials into the repository URI and returns it. The
     // bridge keeps no credential state; the caller stores the URI and re-sends it.
     static func encodeS3URI(
@@ -96,10 +102,10 @@ class Bridge {
         return revisionId
     }
 
-    static func checkFiles(sha256s: [String]) throws(BridgeError) -> [String] {
+    static func checkFiles(sha256s: [String]) throws(BridgeError) -> [Bool] {
         let result = try execute(command: "checkFiles", params: ["sha256s": sha256s])
 
-        guard let results = result["results"] as? [String] else {
+        guard let results = result["results"] as? [Bool] else {
             throw BridgeError(message: "Missing results in response")
         }
 

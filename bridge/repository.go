@@ -1,6 +1,8 @@
 package bridge
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	clinghttp "github.com/flunderpero/cling-sync/http"
@@ -21,7 +24,15 @@ var (
 	head              lib.RevisionId                     //nolint:gochecknoglobals
 	snapshot          *lib.Temp[*lib.RevisionEntry]      //nolint:gochecknoglobals
 	snapshotCache     *lib.TempCache[*lib.RevisionEntry] //nolint:gochecknoglobals
+
+	repositoryFileHashes *RepositoryFileHashes //nolint:gochecknoglobals
 )
+
+// Init sets the directory the bridge writes its caches to. Apps must call this
+// once at startup before the repository file hash index can be persisted or read.
+func Init(cacheDir string) {
+	repositoryFileHashes = NewRepositoryFileHashes(cacheDir)
+}
 
 // CheckRepositoryOpen returns true if a repository is currently open for the given host URL.
 // If the repository is open but the host URL does not match, it is closed to prevent misuse.
@@ -137,6 +148,9 @@ func refreshSnapshot() error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision cache")
 	}
+	if err := repositoryFileHashes.Write(snapshot); err != nil {
+		return lib.WrapErrorf(err, "failed to write repository file hash index")
+	}
 	return nil
 }
 
@@ -146,37 +160,127 @@ func closeRepository() {
 	head = lib.RevisionId{}
 	snapshot = nil
 	snapshotCache = nil
+	repositoryFileHashes.Clear()
 }
 
-// Check if the given files (based on their SHA256 hashes) are *somewhere* in the HEAD
-// revision of the repository.
-// If a file is found, the path inside the repository is returned, otherwise an empty string.
-func CheckFiles(sha256s []lib.Sha256) ([]string, error) {
-	if repository == nil {
-		return nil, lib.Errorf("repository not opened - call 'OpenRepository' first")
+// RepositoryFileHashes is the sorted set of file content hashes in the
+// repository's HEAD, kept in memory and persisted to disk so membership can be
+// answered without the repository open.
+type RepositoryFileHashes struct {
+	path   string
+	hashes []lib.Sha256
+}
+
+const repositoryFileHashesFileName = "repository_file_hashes.bin"
+
+func NewRepositoryFileHashes(cacheDir string) *RepositoryFileHashes {
+	return &RepositoryFileHashes{
+		path:   filepath.Join(cacheDir, repositoryFileHashesFileName),
+		hashes: nil,
 	}
-	r := snapshot.Reader(nil)
-	res := make([]string, len(sha256s))
-	// Reused within this call only — we can't assume CheckFiles is never
-	// invoked concurrently from the native side.
+}
+
+// Write captures every file content hash in the snapshot as a sorted index, in
+// memory and (when a cache dir is set) on disk.
+func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry]) error {
+	reader := snapshot.Reader(nil)
 	buf := lib.NewBlockBuf()
+	hashes := make([]lib.Sha256, 0)
 	for {
-		re, err := r.Read(buf)
+		entry, err := reader.Read(buf)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return nil, lib.WrapErrorf(err, "failed to read revision")
+			return lib.WrapErrorf(err, "failed to read revision")
 		}
-		if re.Kind == lib.RevisionEntryKindDelete {
-			// This should never happen because we are reading from a snapshot.
+		// Directories and other non-file entries carry a zero hash.
+		if entry.Kind == lib.RevisionEntryKindDelete || entry.Metadata.FileHash == (lib.Sha256{}) {
 			continue
 		}
-		for i, sha256 := range sha256s {
-			if sha256 == re.Metadata.FileHash {
-				res[i] = re.Path.String()
-			}
+		hashes = append(hashes, entry.Metadata.FileHash)
+	}
+	sort.Slice(hashes, func(i, j int) bool { return bytes.Compare(hashes[i][:], hashes[j][:]) < 0 })
+	r.hashes = hashes
+
+	// Write the file.
+	tmp := r.path + ".tmp"
+	file, err := os.Create(tmp)
+	if err != nil {
+		return lib.WrapErrorf(err, "failed to create %s", tmp)
+	}
+	writer := bufio.NewWriter(file)
+	for i := range r.hashes {
+		if i > 0 && r.hashes[i] == r.hashes[i-1] {
+			continue
 		}
+		if _, err := writer.Write(r.hashes[i][:]); err != nil {
+			_ = file.Close()
+			return lib.WrapErrorf(err, "failed to write %s", tmp)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		_ = file.Close()
+		return lib.WrapErrorf(err, "failed to flush %s", tmp)
+	}
+	if err := file.Close(); err != nil {
+		return lib.WrapErrorf(err, "failed to close %s", tmp)
+	}
+	if err := os.Rename(tmp, r.path); err != nil {
+		return lib.WrapErrorf(err, "failed to replace %s", r.path)
+	}
+	return nil
+}
+
+// Contains reports whether the hash is in the index, loading it from disk on first
+// use. An absent or unreadable index reads as empty.
+func (r *RepositoryFileHashes) Contains(hash lib.Sha256) bool {
+	hashes := r.get()
+	i := sort.Search(len(hashes), func(i int) bool { return bytes.Compare(hashes[i][:], hash[:]) >= 0 })
+	return i < len(hashes) && hashes[i] == hash
+}
+
+// Clear drops the index in memory and on disk. Called before a commit, which moves
+// HEAD and so invalidates it; refreshSnapshot rewrites it afterwards.
+func (r *RepositoryFileHashes) Clear() {
+	r.hashes = nil
+	_ = os.Remove(r.path)
+}
+
+func (r *RepositoryFileHashes) get() []lib.Sha256 {
+	if r.hashes != nil {
+		return r.hashes
+	}
+	file, err := os.Open(r.path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close() //nolint:errcheck
+	info, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	r.hashes = make([]lib.Sha256, int(info.Size())/sha256.Size)
+	reader := bufio.NewReader(file)
+	for i := range r.hashes {
+		if _, err := io.ReadFull(reader, r.hashes[i][:]); err != nil {
+			return r.hashes[:i]
+		}
+	}
+	return r.hashes
+}
+
+// CheckFiles reports, for each given SHA-256, whether its content is present in
+// the repository's HEAD. It answers from the persisted index rather than the live
+// snapshot, so it does not require the repository open: a background process can
+// call it against the index written during the last foreground session.
+func CheckFiles(sha256s []lib.Sha256) ([]bool, error) {
+	if repositoryFileHashes == nil {
+		panic("Init() must be called first")
+	}
+	res := make([]bool, len(sha256s))
+	for i := range sha256s {
+		res[i] = repositoryFileHashes.Contains(sha256s[i])
 	}
 	return res, nil
 }
@@ -258,6 +362,9 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if repository == nil {
 		return "", lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
+	// The commit moves HEAD, invalidating the hash index; drop it up front so a
+	// failure here can't leave a stale index. refreshSnapshot rewrites it below.
+	repositoryFileHashes.Clear()
 	ctx := context.Background()
 	tempFS := lib.NewMemoryFS(500_000_000)
 	commit, err := lib.NewCommit(ctx, repository, tempFS)

@@ -20,12 +20,17 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Exposes the manual "Test daily/weekly reminder" controls in Settings.
+            buildConfigField("boolean", "REMINDER_TEST_CONTROLS", "true")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            buildConfigField("boolean", "REMINDER_TEST_CONTROLS", "false")
         }
     }
     compileOptions {
@@ -42,6 +47,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
