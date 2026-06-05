@@ -121,19 +121,12 @@ extension ContentView {
         configuration: RepositoryConfiguration,
         promptIfNeeded: Bool
     ) async throws -> RepositoryConnectionInfo? {
-        // Check if the repository is already open. The repo is opened under the
-        // encrypted URI (S3 credentials embedded), so we must check that same URI;
-        // passing the cleartext host URL would look like a different repository and
-        // make the bridge close the open one, forcing a needless re-open.
-        let repositoryURI = RepositoryURIStore.get(for: configuration.hostURL) ?? configuration.hostURL
-        let status = try await Task.detached(priority: .userInitiated) {
-            try Bridge.checkRepositoryOpen(url: repositoryURI)
-        }.value
+        let status = await repositoryGateway.isAlreadyOpen(hostURL: configuration.hostURL)
         if status.open {
             return RepositoryConnectionInfo(headRevisionId: status.headRevisionId)
         }
 
-        // Repository not open — we need the passphrase.
+        // Repository not open, so we need the passphrase.
         guard
             let access = try await passphrasePromptController.resolvePassphrase(
                 repositoryID: configuration.repositoryID,
@@ -147,8 +140,11 @@ extension ContentView {
         }
 
         try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
-        let connection = try await s3CredentialsPromptController.openRepository(
-            hostURL: configuration.hostURL, passphrase: access.passphrase)
+        let connection = try await repositoryGateway.open(
+            hostURL: configuration.hostURL,
+            passphrase: access.passphrase,
+            askS3: { try await self.s3CredentialsPromptController.prompt(hostURL: configuration.hostURL) }
+        )
 
         if access.mode.savesInKeychain {
             try PassphraseStore.shared.save(

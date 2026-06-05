@@ -27,7 +27,7 @@ class Bridge {
     }
 
     // Encrypts the S3 credentials into the repository URI and returns it. The
-    // bridge keeps no credential state; the caller stores the URI and re-sends it.
+    // bridge keeps no credential state. The caller stores the URI and re-sends it.
     static func encodeS3URI(
         hostUrl: String,
         passphrase: String,

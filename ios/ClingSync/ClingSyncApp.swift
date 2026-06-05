@@ -1,10 +1,3 @@
-//
-//  ClingSyncApp.swift
-//  ClingSync
-//
-//  Created by Peter Romianowski on 14.07.25.
-//
-
 import SwiftUI
 
 @main

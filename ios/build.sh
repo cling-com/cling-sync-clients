@@ -345,10 +345,23 @@ lint() {
     "$swiftlint_bin" lint --quiet --strict --config "$root/.swiftlint.yml" .
 }
 
+unit_test() {
+    echo ">>> Running unit tests"
+    cd go
+    go test -v -count=1 -run TestIOSUnit ./... "$@"
+    cd "$root"
+}
+
 integration_test() {
     echo ">>> Running integration tests"
     cd go
-    go test -v -count=1 ./... "$@"
+    go test -v -count=1 -run TestIOSIntegration ./... "$@"
+    cd "$root"
+}
+
+test_all() {
+    unit_test
+    integration_test
 }
 
 # Global variable to store the simulator device ID. Is set by `ensure_simulator`.
@@ -358,7 +371,7 @@ simulator_device_id=""
 #
 # Input:
 #   $1: Simulator name (default: "ClingSync-Dev")
-#   $2: Device type (default: "iPhone 15")  
+#   $2: Device type (default: "iPhone 15")
 #   $3: OS version (default: "17.5")
 #
 # Output:
@@ -367,10 +380,10 @@ ensure_simulator() {
     local simulator_name="${1:-ClingSync-Dev}"
     local device_type="${2:-iPhone 15}"
     local os_version="${3:-17.5}"
-    
+
     # Check if simulator exists.
     simulator_device_id=$(xcrun simctl list devices | grep "$simulator_name" | grep -oE '[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}' | head -1)
-    
+
     if [ -z "$simulator_device_id" ]; then
         echo ">>> Creating simulator: $simulator_name" >&2
         simulator_device_id=$(xcrun simctl create "$simulator_name" "$device_type" "iOS$os_version")
@@ -378,7 +391,7 @@ ensure_simulator() {
     else
         echo ">>> Using existing simulator: $simulator_name (ID: $simulator_device_id)" >&2
     fi
-    
+
     # Check if already booted.
     local state=$(xcrun simctl list devices | grep "$simulator_device_id" | grep -oE '\(Booted\)')
     if [ -z "$state" ]; then
@@ -391,6 +404,22 @@ ensure_simulator() {
     fi
 }
 
+# Used by the Go test harness to run the unit tests.
+unit_xcode() {
+    echo ">>> Running unit tests (ClingSyncTests) on simulator"
+    ensure_simulator "ClingSync-UnitTest"
+    build_go --simulator
+    echo ">>> Running ClingSyncTests on simulator: $simulator_device_id"
+    run_xcodebuild xcodebuild-unit.log \
+        test \
+        -project ClingSync.xcodeproj \
+        -scheme ClingSync \
+        -destination "id=$simulator_device_id" \
+        -parallel-testing-enabled NO \
+        -only-testing:ClingSyncTests
+}
+
+# Used by the Go test harness to run the SwiftUI tests.
 integration_test_swiftui() {
     echo ">>> Running the SwiftUI integration test"
     local simulator_name="ClingSync-UITest"
@@ -414,20 +443,18 @@ integration_test_swiftui() {
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 \
             -maximum-test-execution-time-allowance 240 \
-            -only-testing:ClingSyncUITests/ClingSyncUITests/testHappyPath
+            -only-testing:ClingSyncUITests
         then
             break
         fi
         if ! grep -q "Failed to clone device" "$logs_dir/xcodebuild-test.log" || [ "$attempt" -ge 3 ]; then
-            echo "❌ UI test failed"
+            echo "UI test failed"
             return 1
         fi
         attempt=$((attempt + 1))
         echo ">>> Retrying after simulator clone failure (attempt $attempt)"
         sleep 2
     done
-    
-    echo "✅ UI test passed"
 }
 
 clean() {
@@ -473,11 +500,34 @@ case "$cmd" in
         lint
         ;;
     test)
-        if [ $# -gt 0 ] && [ "$1" == "--swiftui" ]; then
-            integration_test_swiftui
-        else
-            integration_test 
+        target="all"
+        if [ $# -gt 0 ]; then
+            target="$1"
+            shift
         fi
+        case "$target" in
+            unit)
+                unit_test "$@"
+                ;;
+            integration)
+                integration_test "$@"
+                ;;
+            all)
+                test_all
+                ;;
+            # Internal targets re-invoked by the Go drivers.
+            --unit-xcode)
+                unit_xcode
+                ;;
+            --swiftui)
+                integration_test_swiftui
+                ;;
+            *)
+                echo "Unknown test target: $target"
+                echo "Available targets: unit, integration, all"
+                exit 1
+                ;;
+        esac
         ;;
     tools)
         build_tools
@@ -486,7 +536,7 @@ case "$cmd" in
         build_tools
         fmt
         lint
-        integration_test
+        test_all
         ;;
     run)
         run_app "$@"

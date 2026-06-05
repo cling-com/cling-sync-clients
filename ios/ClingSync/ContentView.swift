@@ -17,6 +17,7 @@ struct ContentView: View {
     @State var showSettings = false
     @StateObject var passphrasePromptController = PassphrasePromptController()
     @StateObject var s3CredentialsPromptController = S3CredentialsPromptController()
+    let repositoryGateway = RepositoryGateway()
     @State var uploader: Uploader?
     @State var appState: AppState = .initializing
 

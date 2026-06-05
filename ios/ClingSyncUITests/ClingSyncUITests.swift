@@ -1,38 +1,33 @@
 import XCTest
 
 final class ClingSyncUITests: XCTestCase {
-    private static let passphrase = "testpassphrase"
-    private static let hostURL = "s3+http://127.0.0.1:9124"
-    private static let embeddedHostURL =
+    static let passphrase = "testpassphrase"
+    static let wrongPassphrase = "definitely-the-wrong-passphrase"
+    static let hostURL =
+        ProcessInfo.processInfo.environment["TEST_HOST_URL"] ?? "s3+http://127.0.0.1:9124"
+    static let embeddedHostURL =
         ProcessInfo.processInfo.environment["TEST_HOST_URL_EMBEDDED"] ?? ""
-    private static let s3AccessKeyId =
+    static let switchURL =
+        ProcessInfo.processInfo.environment["TEST_SWITCH_URL"] ?? ""
+    static let multiURL =
+        ProcessInfo.processInfo.environment["TEST_MULTI_URL"] ?? ""
+    static let abortURL =
+        ProcessInfo.processInfo.environment["TEST_ABORT_URL"] ?? ""
+    static let abortControlURL =
+        ProcessInfo.processInfo.environment["TEST_ABORT_CONTROL_URL"] ?? ""
+    static let failureURL =
+        ProcessInfo.processInfo.environment["TEST_FAILURE_URL"] ?? ""
+    static let failureControlURL =
+        ProcessInfo.processInfo.environment["TEST_FAILURE_CONTROL_URL"] ?? ""
+    static let s3AccessKeyId =
         ProcessInfo.processInfo.environment["TEST_S3_ACCESS_KEY_ID"] ?? "minioadmin"
-    private static let s3AccessKey =
+    static let s3AccessKey =
         ProcessInfo.processInfo.environment["TEST_S3_ACCESS_KEY"] ?? "minioadmin"
 
     let app = XCUIApplication()
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-    }
-
-    private func launchApp(hostURL: String) {
-        app.launchArguments = ["--reset", "--ui-test-mode"]
-        app.launchEnvironment["CLING_SYNC_UI_TEST_MODE"] = "1"
-        app.launchEnvironment["CLING_SYNC_UI_TEST_HOST_URL"] = hostURL
-        app.launchEnvironment["CLING_SYNC_UI_TEST_REPO_PATH_PREFIX"] = "/uitest"
-        app.launchEnvironment["CLING_SYNC_UI_TEST_AUTHOR"] = "Testinger"
-        app.resetAuthorizationStatus(for: .photos)
-        app.launch()
-
-        addUIInterruptionMonitor(withDescription: "Photo Library Permission") { alert in
-            let allowButton = alert.buttons.element(boundBy: 1)
-            if allowButton.exists {
-                allowButton.tap()
-                return true
-            }
-            return false
-        }
     }
 
     @MainActor
@@ -51,19 +46,19 @@ final class ClingSyncUITests: XCTestCase {
         app.navigationBars["Repository Settings"].buttons["Cancel"].tap()
         waitForMainScreen()
 
-        // Upload first photo — repository is already open from test connection.
+        // Upload the first photo. The repository is already open from the test connection.
         selectPhoto("IMG_0001.JPG")
         app.buttons["Upload"].tap()
         waitForUploadSuccess(fileCount: 1)
         app.buttons["OK"].tap()
 
-        // Change path prefix — connection stays open (prefix is client-side only).
+        // Change the path prefix. The connection stays open because the prefix is client-side only.
         openSettingsFromMainScreen()
         changeRepoPathPrefix("uitest/sub")
         app.navigationBars["Repository Settings"].buttons["Save"].tap()
         waitForMainScreen()
 
-        // Upload second photo — no re-authentication needed.
+        // Upload the second photo. No re-authentication is needed.
         selectPhoto("IMG_0004.JPG")
         app.buttons["Upload"].tap()
         waitForUploadSuccess(fileCount: 1)
@@ -81,113 +76,194 @@ final class ClingSyncUITests: XCTestCase {
         waitForMainScreen()
         openSettingsFromMainScreen()
         app.buttons["Test Connection"].tap()
-        XCTAssertTrue(app.navigationBars["Repository Passphrase"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Repository Passphrase"].waitToAppear(timeout: 5))
         enterPassphrase(saveToKeychain: false)
 
         // No S3 dialog should appear. Connection should succeed directly.
         let s3Nav = app.navigationBars["S3 Credentials"]
         XCTAssertFalse(
-            s3Nav.waitForExistence(timeout: 3),
+            s3Nav.waitToAppear(timeout: 3),
             "S3 credentials prompt unexpectedly appeared for an embedded-credentials URL")
-        XCTAssertTrue(app.alerts["Connection Succeeded"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.alerts["Connection Succeeded"].waitToAppear(timeout: 10))
         app.alerts["Connection Succeeded"].buttons["OK"].tap()
     }
 
-    private func openSettingsFromMainScreen() {
-        app.navigationBars["Cling Sync"].buttons["Settings"].tap()
-        XCTAssertTrue(app.navigationBars["Repository Settings"].waitForExistence(timeout: 3))
-    }
+    // A wrong passphrase surfaces the Settings Error alert (the open fails after
+    // the S3 credentials are entered and encoded with the wrong passphrase), and
+    // the user can recover by retrying with the correct passphrase. The recovery
+    // leg guards against the failed attempt persisting a wrong-passphrase encoded
+    // URI that would lock the user out.
+    @MainActor
+    func testWrongPassphraseShowsErrorThenRecovers() async throws {
+        launchApp(hostURL: Self.hostURL)
 
-    // Replaces the Host URL with a non-S3 value and verifies that Test
-    // Connection surfaces the validation alert. The caller is responsible for
-    // restoring the URL (typically by dismissing and re-opening settings).
-    private func rejectInvalidHostURL() {
-        let field = app.textFields["Host URL"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        replaceText(in: field, with: "https://wrong.example.com")
+        waitForMainScreen()
+        openSettingsFromMainScreen()
         app.buttons["Test Connection"].tap()
+        enterPassphrase(Self.wrongPassphrase, saveToKeychain: false)
+        enterS3CredentialsIfPrompted()
+
         let alert = app.alerts["Settings Error"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.waitToAppear(timeout: 20))
         alert.buttons["OK"].tap()
-    }
+        // The settings dialog stays usable (no stuck "Testing connection..." overlay).
+        XCTAssertTrue(app.buttons["Test Connection"].waitToAppear(timeout: 5))
 
-    private func replaceText(in field: XCUIElement, with value: String) {
-        field.tap()
-        if let current = field.value as? String, !current.isEmpty {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
-        }
-        field.typeText(value)
-    }
-
-    private func verifyConnectionWithoutSavingPassphrase() {
         app.buttons["Test Connection"].tap()
-        XCTAssertTrue(app.navigationBars["Repository Passphrase"].waitForExistence(timeout: 5))
         enterPassphrase(saveToKeychain: false)
         enterS3CredentialsIfPrompted()
-        XCTAssertTrue(app.alerts["Connection Succeeded"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.alerts["Connection Succeeded"].waitToAppear(timeout: 10))
         app.alerts["Connection Succeeded"].buttons["OK"].tap()
     }
 
-    private func enterS3CredentialsIfPrompted() {
-        let s3Nav = app.navigationBars["S3 Credentials"]
-        guard s3Nav.waitForExistence(timeout: 5) else {
-            return
+    // Cancelling the passphrase prompt must not leave a stuck "Testing
+    // connection..." overlay. The settings dialog stays usable.
+    @MainActor
+    func testCancelPassphrasePromptRecoverable() async throws {
+        launchApp(hostURL: Self.hostURL)
+
+        waitForMainScreen()
+        openSettingsFromMainScreen()
+        app.buttons["Test Connection"].tap()
+        XCTAssertTrue(app.navigationBars["Repository Passphrase"].waitToAppear(timeout: 5))
+        app.navigationBars["Repository Passphrase"].buttons["Cancel"].tap()
+
+        // Cancelling surfaces a dismissable error. The dialog stays usable.
+        let alert = app.alerts["Settings Error"]
+        if alert.waitToAppear(timeout: 5) {
+            alert.buttons["OK"].tap()
         }
-        let keyIdField = app.textFields["S3 Key ID"]
-        XCTAssertTrue(keyIdField.waitForExistence(timeout: 3))
-        keyIdField.tap()
-        keyIdField.typeText(Self.s3AccessKeyId)
-
-        let accessKeyField = app.secureTextFields["S3 Access Key"]
-        accessKeyField.tap()
-        accessKeyField.typeText(Self.s3AccessKey)
-
-        s3Nav.buttons["Continue"].tap()
-    }
-    private func waitForMainScreen() {
-        let mainNavBar = app.navigationBars["Cling Sync"]
-        XCTAssertTrue(mainNavBar.waitForExistence(timeout: 20))
-        mainNavBar.tap()
+        XCTAssertTrue(app.buttons["Test Connection"].waitToAppear(timeout: 5))
     }
 
-    private func selectPhoto(_ name: String) {
-        let photo = app.staticTexts[name]
-        XCTAssertTrue(photo.waitForExistence(timeout: 20))
-        photo.tap()
-
-        let selectedText = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS '1 selected'")
-        ).firstMatch
-        XCTAssertTrue(selectedText.waitForExistence(timeout: 10))
-    }
-
-    private func waitForUploadSuccess(fileCount: Int) {
-        let successMessage = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS 'Success! \(fileCount) file'")
-        ).firstMatch
-        XCTAssertTrue(successMessage.waitForExistence(timeout: 40))
-    }
-
-    private func changeRepoPathPrefix(_ newPrefix: String) {
-        let field = app.textFields["Destination path"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        replaceText(in: field, with: newPrefix)
-    }
-
-    private func enterPassphrase(saveToKeychain: Bool) {
-        let passphraseField = app.secureTextFields["Passphrase"]
-        XCTAssertTrue(passphraseField.waitForExistence(timeout: 5))
-        passphraseField.tap()
-        passphraseField.typeText(Self.passphrase)
-
-        let saveToggle = app.switches["Save in iPhone Keychain"]
-        if saveToggle.exists {
-            let isOn = (saveToggle.value as? String) == "1"
-            if saveToKeychain != isOn {
-                saveToggle.tap()
-            }
+    // Aborting mid-upload returns the screen to a usable, non-uploading state.
+    // (We assert the recovery, not a per-row label, which the current uploader
+    // can race-overwrite.)
+    @MainActor
+    func testAbortMidUpload() async throws {
+        guard !Self.abortURL.isEmpty else {
+            throw XCTSkip("TEST_ABORT_URL not set. Run via go test harness.")
         }
+        injectFault(controlURL: Self.abortControlURL, "reset")
+        launchApp(hostURL: Self.abortURL)
 
-        app.navigationBars["Repository Passphrase"].buttons["Continue"].tap()
+        waitForMainScreen()
+        openSettingsFromMainScreen()
+        verifyConnectionWithoutSavingPassphrase()
+        app.navigationBars["Repository Settings"].buttons["Save"].tap()
+        waitForMainScreen()
+
+        // Slow the uploads so the abort lands while work is in flight.
+        injectFault(controlURL: Self.abortControlURL, "latency?ms=4000")
+        app.navigationBars["Cling Sync"].buttons["Select All"].tap()
+        app.buttons["Upload"].tap()
+
+        let abortButton = app.buttons["Abort"]
+        XCTAssertTrue(abortButton.waitToAppear(timeout: 15))
+        abortButton.tap()
+        // Let the in-flight request finish quickly so the abort can take effect.
+        injectFault(controlURL: Self.abortControlURL, "reset")
+
+        let okButton = app.buttons["OK"]
+        XCTAssertTrue(okButton.waitToAppear(timeout: 30), "aborted upload should reach a terminal, dismissable state")
+        okButton.tap()
+        XCTAssertTrue(app.navigationBars["Cling Sync"].buttons["Select All"].waitToAppear(timeout: 15))
+    }
+
+    // A failing upload surfaces a dismissable error and never reports success.
+    // The screen stays usable afterwards.
+    @MainActor
+    func testUploadFailureShowsError() async throws {
+        guard !Self.failureURL.isEmpty else {
+            throw XCTSkip("TEST_FAILURE_URL not set. Run via go test harness.")
+        }
+        injectFault(controlURL: Self.failureControlURL, "reset")
+        launchApp(hostURL: Self.failureURL)
+
+        waitForMainScreen()
+        openSettingsFromMainScreen()
+        verifyConnectionWithoutSavingPassphrase()
+        app.navigationBars["Repository Settings"].buttons["Save"].tap()
+        waitForMainScreen()
+
+        injectFault(controlURL: Self.failureControlURL, "fail-writes?on=true")
+        selectPhoto("IMG_0001.JPG")
+        app.buttons["Upload"].tap()
+
+        let okButton = app.buttons["OK"]
+        XCTAssertTrue(okButton.waitToAppear(timeout: 30), "a failed upload should surface a dismissable error")
+        XCTAssertFalse(
+            app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Success!'")).firstMatch.exists,
+            "a failed upload must not report success")
+        okButton.tap()
+        injectFault(controlURL: Self.failureControlURL, "reset")
+        XCTAssertTrue(app.navigationBars["Cling Sync"].buttons["Select All"].waitToAppear(timeout: 15))
+    }
+
+    // Changing the Host URL switches repository: the connection must reset and
+    // the "Repository access needed" banner must be offered (clearing the prior
+    // repository's stored passphrase/URI is what prevents a stale-connection
+    // lockout). Reconnecting itself is covered by the happy path.
+    @MainActor
+    func testRepositorySwitchRequiresReconnect() async throws {
+        guard !Self.switchURL.isEmpty else {
+            throw XCTSkip("TEST_SWITCH_URL not set. Run via go test harness.")
+        }
+        launchApp(hostURL: Self.hostURL)
+
+        waitForMainScreen()
+        openSettingsFromMainScreen()
+        verifyConnectionWithoutSavingPassphrase()
+        app.navigationBars["Repository Settings"].buttons["Save"].tap()
+        waitForMainScreen()
+
+        openSettingsFromMainScreen()
+        replaceText(in: app.textFields["Host URL"], with: Self.switchURL)
+        changeRepoPathPrefix("switched")
+        app.navigationBars["Repository Settings"].buttons["Save"].tap()
+        waitForMainScreen()
+
+        XCTAssertTrue(
+            app.staticTexts["Repository access needed"].waitToAppear(timeout: 10),
+            "Switching repository must reset the connection")
+        // The new repository is not yet connected, so its files are offered as
+        // selectable rather than already-synced.
+        XCTAssertTrue(app.staticTexts["IMG_0001.JPG"].waitToAppear(timeout: 10))
+    }
+
+    // Select All picks both new files. Uploading them together marks both Done,
+    // after which they are no longer selectable (dedup via the local index).
+    @MainActor
+    func testSelectMultipleUploadMarksAllDone() async throws {
+        guard !Self.multiURL.isEmpty else {
+            throw XCTSkip("TEST_MULTI_URL not set. Run via go test harness.")
+        }
+        launchApp(hostURL: Self.multiURL)
+
+        waitForMainScreen()
+        openSettingsFromMainScreen()
+        verifyConnectionWithoutSavingPassphrase()
+        app.navigationBars["Repository Settings"].buttons["Save"].tap()
+        waitForMainScreen()
+
+        app.navigationBars["Cling Sync"].buttons["Select All"].tap()
+        let selected = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS '2 selected'")
+        ).firstMatch
+        XCTAssertTrue(selected.waitToAppear(timeout: 5))
+
+        app.buttons["Upload"].tap()
+        waitForUploadSuccess(fileCount: 2)
+        app.buttons["OK"].tap()
+
+        // Both files are now Done, so Select All can select nothing.
+        XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitToAppear(timeout: 10))
+        app.navigationBars["Cling Sync"].buttons["Select All"].tap()
+        let anySelected = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'selected'")
+        ).firstMatch
+        XCTAssertFalse(
+            anySelected.waitToAppear(timeout: 3),
+            "Already-synced files must not be selectable")
     }
 }

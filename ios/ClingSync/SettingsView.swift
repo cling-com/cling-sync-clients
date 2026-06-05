@@ -11,6 +11,7 @@ struct SettingsView: View {
     let onSave: (RepositoryConfiguration, Bool) -> Void
     @StateObject private var passphrasePromptController = PassphrasePromptController()
     @StateObject private var s3CredentialsPromptController = S3CredentialsPromptController()
+    private let repositoryGateway = RepositoryGateway()
     @State private var author = ""
     @State private var errorMessage = ""
     @State private var hostURL = ""
@@ -202,9 +203,11 @@ struct SettingsView: View {
         }
         let currentConfiguration = configuration
         try await Bridge.triggerNetworkPermissionIfNeeded(url: currentConfiguration.hostURL)
-        _ = try await s3CredentialsPromptController.openRepository(
+        _ = try await repositoryGateway.open(
             hostURL: currentConfiguration.hostURL,
-            passphrase: resolved.passphrase)
+            passphrase: resolved.passphrase,
+            askS3: { try await self.s3CredentialsPromptController.prompt(hostURL: currentConfiguration.hostURL) }
+        )
 
         if resolved.mode.savesInKeychain {
             try PassphraseStore.shared.save(

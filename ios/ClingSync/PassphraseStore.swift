@@ -26,7 +26,7 @@ final class PassphraseStore {
         var query = baseQuery(for: repositoryID)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        // Prevent biometric prompt — we only want to check existence.
+        // Prevent the biometric prompt, since we only want to check existence.
         let context = LAContext()
         context.interactionNotAllowed = true
         query[kSecUseAuthenticationContext as String] = context

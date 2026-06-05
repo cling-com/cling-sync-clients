@@ -326,7 +326,7 @@
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Cling Sync uses Face ID to protect your passphrase.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Cling Sync needs to access your local network to connect to the server.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access your Photo Library in order to backup photos.";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LIBRARY_SEARCH_PATHS = ClingSync/go;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -390,7 +390,7 @@
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Cling Sync uses Face ID to protect your passphrase.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Cling Sync needs to access your local network to connect to the server.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cling Sync needs to access your Photo Library in order to backup photos.";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LIBRARY_SEARCH_PATHS = ClingSync/go;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -484,7 +484,7 @@
 				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 253W4734C9;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSyncTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -503,7 +503,7 @@
 				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 253W4734C9;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cling.ClingSyncTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
