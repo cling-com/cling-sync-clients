@@ -5,12 +5,14 @@ import Security
 struct PassphraseStoreError: LocalizedError {
     let message: String
     let missingPassphrase: Bool
+    let cancelled: Bool
 
     var errorDescription: String? { message }
 
-    init(message: String, missingPassphrase: Bool = false) {
+    init(message: String, missingPassphrase: Bool = false, cancelled: Bool = false) {
         self.message = message
         self.missingPassphrase = missingPassphrase
+        self.cancelled = cancelled
     }
 }
 
@@ -108,7 +110,7 @@ final class PassphraseStore {
             }
             return passphrase
         case errSecUserCanceled, errSecAuthFailed:
-            throw PassphraseStoreError(message: "Authentication was cancelled.")
+            throw PassphraseStoreError(message: "Authentication was cancelled.", cancelled: true)
         case errSecItemNotFound:
             return nil
         default:

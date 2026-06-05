@@ -13,25 +13,31 @@ enum RepositoryURI {
     }
 }
 
-// Persists the encrypted S3 repository URI per cleartext URL, so the credentials
-// (encrypted with the passphrase) are entered once and re-sent thereafter.
+// Persists the encrypted S3 repository URI per repository, so the credentials
+// (encrypted with the passphrase) are entered once and re-sent thereafter. Keyed
+// by the repository id (the host URL with surrounding slashes trimmed), matching
+// PassphraseStore, so invalidating a repository clears both by the same key.
 enum RepositoryURIStore {
     private static let key = "repositoryURIs"
 
-    static func get(for hostURL: String) -> String? {
-        dictionary()[hostURL]
+    static func get(for repository: String) -> String? {
+        dictionary()[normalize(repository)]
     }
 
-    static func set(_ uri: String, for hostURL: String) {
+    static func set(_ uri: String, for repository: String) {
         var dict = dictionary()
-        dict[hostURL] = uri
+        dict[normalize(repository)] = uri
         UserDefaults.standard.set(dict, forKey: key)
     }
 
-    static func clear(for hostURL: String) {
+    static func clear(for repository: String) {
         var dict = dictionary()
-        dict.removeValue(forKey: hostURL)
+        dict.removeValue(forKey: normalize(repository))
         UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    private static func normalize(_ repository: String) -> String {
+        repository.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     private static func dictionary() -> [String: String] {

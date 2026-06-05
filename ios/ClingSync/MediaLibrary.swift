@@ -1,6 +1,6 @@
 import Photos
 
-func loadUITestFiles() -> [MediaFile] {
+func loadUITestFiles() -> [(file: SourceFile, url: URL)] {
     let fileManager = FileManager.default
     let directory = fileManager.temporaryDirectory.appendingPathComponent("ClingSyncUITestMedia", isDirectory: true)
     try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -16,16 +16,8 @@ func loadUITestFiles() -> [MediaFile] {
         let attributes = try? fileManager.attributesOfItem(atPath: url.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         let modificationDate = attributes?[.modificationDate] as? Date ?? .distantPast
-        return MediaFile(localFileURL: url, size: size, modificationDate: modificationDate)
-    }
-}
-
-func isSelectable(_ file: MediaFile) -> Bool {
-    switch file.uploadState {
-    case .none, .new:
-        return true
-    default:
-        return false
+        let file = SourceFile(id: fixture.name, name: fixture.name, size: size, modificationDate: modificationDate)
+        return (file, url)
     }
 }
 

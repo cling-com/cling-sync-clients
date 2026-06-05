@@ -22,16 +22,16 @@ extension BridgeSuite {
         let sha = sha256Hex(of: file)
         let repoPath = "smoke/\(file.lastPathComponent)"
 
-        // Before upload: the file is new (empty repo path).
-        #expect(try Bridge.checkFiles(sha256s: [sha]) == [""])
+        // Before upload: the content is not yet in the repository.
+        #expect(try Bridge.checkFiles(sha256s: [sha]) == [false])
 
         let entry = try Bridge.uploadFile(localFilePath: file.path, repoFilePath: repoPath)
         let revisionEntry = try #require(entry, "a new file must produce a revision entry")
         let revision = try Bridge.commit(revisionEntries: [revisionEntry], author: "Tester", message: "smoke commit")
         #expect(!revision.isEmpty)
 
-        // After commit: the same content is found at its repo path.
-        #expect(try Bridge.checkFiles(sha256s: [sha]) == [repoPath])
+        // After commit: the same content is now present in the repository.
+        #expect(try Bridge.checkFiles(sha256s: [sha]) == [true])
 
         // Re-uploading the identical file is skipped by the real bridge.
         #expect(try Bridge.uploadFile(localFilePath: file.path, repoFilePath: repoPath) == nil)

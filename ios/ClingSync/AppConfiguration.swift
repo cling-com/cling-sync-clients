@@ -4,10 +4,8 @@ enum AppStorageKey {
     static let author = "author"
     static let hostURL = "hostURL"
     static let passphraseStorageMode = "passphraseStorageMode"
-    static let repoHeadRevisionId = "repoHeadRevisionId"
-    static let repoIdentifier = "repoIdentifier"
     static let repoPathPrefix = "repoPathPrefix"
-    static let syncedFileIndex = "syncedFileIndex"
+    static let sourceBookmark = "sourceBookmark"
 }
 
 enum PassphraseStorageMode: String {

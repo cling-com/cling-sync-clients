@@ -1,5 +1,10 @@
 import SwiftUI
 
+struct ResolvedPassphrase {
+    let passphrase: String
+    let mode: PassphraseStorageMode
+}
+
 struct PassphrasePromptRequest: Identifiable {
     let id = UUID()
     let title: String
@@ -21,6 +26,10 @@ final class PassphrasePromptController: ObservableObject {
 
     func prompt(_ request: PassphrasePromptRequest) async throws -> PassphrasePromptResult {
         try await withCheckedThrowingContinuation { continuation in
+            // A prior pending prompt (e.g. a connect superseded by another) must be
+            // resumed before we overwrite it, or its awaiting task leaks forever.
+            self.continuation?.resume(
+                throwing: PassphraseStoreError(message: "Authentication was cancelled.", cancelled: true))
             self.request = request
             self.continuation = continuation
         }
@@ -37,7 +46,8 @@ final class PassphrasePromptController: ObservableObject {
     }
 
     func cancel() {
-        continuation?.resume(throwing: PassphraseStoreError(message: "Authentication was cancelled."))
+        continuation?.resume(
+            throwing: PassphraseStoreError(message: "Authentication was cancelled.", cancelled: true))
         continuation = nil
         request = nil
     }

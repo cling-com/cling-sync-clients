@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @AppStorage(AppStorageKey.author) private var storedAuthor = ""
@@ -8,7 +9,10 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.repoPathPrefix) private var storedRepoPathPrefix = ""
 
     @Binding var isPresented: Bool
-    let onSave: (RepositoryConfiguration, Bool) -> Void
+    let onSave: (RepositoryConfiguration) -> Void
+    let onConnected: (RepositoryConfiguration) -> Void
+    let currentSource: SourceSelection
+    let onSelectSource: (SourceSelection) -> Void
     @StateObject private var passphrasePromptController = PassphrasePromptController()
     @StateObject private var s3CredentialsPromptController = S3CredentialsPromptController()
     private let repositoryGateway = RepositoryGateway()
@@ -17,9 +21,9 @@ struct SettingsView: View {
     @State private var hostURL = ""
     @State private var isTesting = false
     @State private var repoPathPrefix = ""
-    @State private var testedConfiguration: RepositoryConfiguration?
     @State private var showError = false
     @State private var showSuccess = false
+    @State private var showFolderPicker = false
 
     private var configuration: RepositoryConfiguration {
         RepositoryConfiguration(hostURL: hostURL, repoPathPrefix: repoPathPrefix, author: author)
@@ -84,6 +88,22 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Section("Backup Source") {
+                    Text(sourceLabel)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Use Photo Library") {
+                        onSelectSource(.photoLibrary)
+                        isPresented = false
+                    }
+                    Button("Choose Folder…") {
+                        showFolderPicker = true
+                    }
+                }
+            }
+            .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
+                handleFolderPick(result)
             }
             .navigationTitle("Repository Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -143,7 +163,6 @@ struct SettingsView: View {
         hostURL = storedHostURL
         repoPathPrefix = storedRepoPathPrefix
         author = storedAuthor
-        testedConfiguration = nil
     }
 
     private func saveSettings() {
@@ -156,9 +175,8 @@ struct SettingsView: View {
         storedAuthor = author
         isPresented = false
         let configuration = configuration
-        let repositoryVerified = testedConfiguration == configuration
         DispatchQueue.main.async {
-            onSave(configuration, repositoryVerified)
+            onSave(configuration)
         }
     }
 
@@ -176,11 +194,13 @@ struct SettingsView: View {
                 if resolved.mode.savesInKeychain {
                     storedPassphraseStorageMode = resolved.mode.rawValue
                 }
-                testedConfiguration = configuration
                 isTesting = false
                 showSuccess = true
+                onConnected(configuration)
             } catch let error as BridgeError {
                 show(error.message)
+            } catch is CancellationError {
+                show("Credential entry was cancelled.")
             } catch let error as PassphraseStoreError {
                 show(error.message)
             } catch {
@@ -220,12 +240,30 @@ struct SettingsView: View {
         do {
             try PassphraseStore.shared.clear(for: configuration.repositoryID)
             storedPassphraseStorageMode = PassphraseStorageMode.session.rawValue
-            testedConfiguration = nil
         } catch let error as PassphraseStoreError {
             show(error.message)
         } catch {
             show(error.localizedDescription)
         }
+    }
+
+    private var sourceLabel: String {
+        switch currentSource {
+        case .photoLibrary: return "Backing up from your photo library."
+        case .folder: return "Backing up from a selected folder."
+        }
+    }
+
+    private func handleFolderPick(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let bookmark = try? url.bookmarkData() else {
+            show("Could not access the selected folder.")
+            return
+        }
+        onSelectSource(.folder(bookmark: bookmark))
+        isPresented = false
     }
 
     private func show(_ message: String) {
@@ -236,5 +274,10 @@ struct SettingsView: View {
 }
 
 #Preview {
-    SettingsView(isPresented: .constant(true), onSave: { _, _ in })
+    SettingsView(
+        isPresented: .constant(true),
+        onSave: { _ in },
+        onConnected: { _ in },
+        currentSource: .photoLibrary,
+        onSelectSource: { _ in })
 }

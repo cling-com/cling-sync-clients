@@ -1,125 +1,88 @@
-import Photos
 import SwiftUI
 
-enum AppState {
-    case initializing
-    case needsSettings
-    case connectingToServer
-    case connectionFailed(String)
-    case ready
-}
-
 struct ContentView: View {
-    @State var selectedFileNames = Set<String>()
-    @State var files = [MediaFile]()
-    @State var isLoading = false
-    @State var repositoryConnected = false
-    @State var showSettings = false
-    @StateObject var passphrasePromptController = PassphrasePromptController()
-    @StateObject var s3CredentialsPromptController = S3CredentialsPromptController()
-    let repositoryGateway = RepositoryGateway()
-    @State var uploader: Uploader?
-    @State var appState: AppState = .initializing
+    @StateObject private var passphraseController: PassphrasePromptController
+    @StateObject private var s3Controller: S3CredentialsPromptController
+    @StateObject private var store: MainStore
 
-    @AppStorage(AppStorageKey.author) var author = ""
-    @AppStorage(AppStorageKey.hostURL) var hostURL = ""
-    @AppStorage(AppStorageKey.passphraseStorageMode) var passphraseStorageModeRaw = PassphraseStorageMode.session
-        .rawValue
-    @AppStorage(AppStorageKey.repoPathPrefix) var repoPathPrefix = ""
-    var configuration: RepositoryConfiguration {
-        RepositoryConfiguration(hostURL: hostURL, repoPathPrefix: repoPathPrefix, author: author)
-    }
-
-    var passphraseStorageMode: PassphraseStorageMode {
-        PassphraseStorageMode(rawValue: passphraseStorageModeRaw) ?? .session
-    }
-
-    var hasStoredPassphrase: Bool {
-        PassphraseStore.shared.hasStoredPassphrase(for: configuration.repositoryID, mode: passphraseStorageMode)
-    }
-
-    var isUITestMode: Bool {
-        ProcessInfo.processInfo.arguments.contains("--ui-test-mode")
-    }
-
-    var selectableFiles: [MediaFile] {
-        files.filter { $0.uploadState == .none || $0.uploadState == .new }
-    }
-
-    var selectedFiles: [MediaFile] {
-        files.filter { selectedFileNames.contains($0.id) }
-    }
-
-    var canUploadSelection: Bool {
-        !selectedFiles.isEmpty && !selectedFiles.contains { $0.uploadState == .checking }
-    }
-
-    var visibleAppState: AppState {
-        if case .needsSettings = appState, configuration.isConfigured, !showSettings {
-            return .ready
-        }
-        return appState
+    init() {
+        let passphrase = PassphrasePromptController()
+        let s3Prompt = S3CredentialsPromptController()
+        _passphraseController = StateObject(wrappedValue: passphrase)
+        _s3Controller = StateObject(wrappedValue: s3Prompt)
+        _store = StateObject(wrappedValue: MainStore(passphraseController: passphrase, s3Controller: s3Prompt))
     }
 
     var body: some View {
         Group {
-            switch visibleAppState {
+            switch store.state.phase {
             case .initializing:
                 ProgressView("Loading...")
-                    .task { await initialize() }
             case .needsSettings:
-                WelcomeStateView(isBusy: uploader != nil, showSettings: $showSettings)
+                WelcomeStateView(isBusy: store.state.isBusy, showSettings: showSettings)
             case .connectingToServer:
                 ConnectingStateView()
             case .connectionFailed(let message):
                 ConnectionFailedStateView(
                     message: message,
-                    isBusy: uploader != nil,
-                    retry: { Task { await connectToRepository(promptIfNeeded: true) } },
-                    showSettings: $showSettings
-                )
+                    isBusy: store.state.isBusy,
+                    retry: { store.dispatch(.connectClicked) },
+                    showSettings: showSettings)
             case .ready:
                 readyView
             }
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(isPresented: $showSettings) { configuration, repositoryVerified in
-                handleSettingsSave(configuration: configuration, repositoryVerified: repositoryVerified)
-            }
+        .task { store.onStart() }
+        .sheet(isPresented: showSettings) {
+            SettingsView(
+                isPresented: showSettings,
+                onSave: { store.handleSettingsSaved($0) },
+                onConnected: { store.reflectConnected($0) },
+                currentSource: store.sourceSelection,
+                onSelectSource: { store.selectSource($0) })
         }
-        .sheet(item: $passphrasePromptController.request) { request in
-            PassphrasePromptView(controller: passphrasePromptController, request: request)
+        .sheet(item: $passphraseController.request) { request in
+            PassphrasePromptView(controller: passphraseController, request: request)
         }
-        .sheet(item: $s3CredentialsPromptController.request) { request in
-            S3CredentialsPromptView(controller: s3CredentialsPromptController, request: request)
+        .sheet(item: $s3Controller.request) { request in
+            S3CredentialsPromptView(controller: s3Controller, request: request)
+        }
+        .alert(overlayTitle, isPresented: showOverlay) {
+            Button("OK", role: .cancel) { store.dispatch(.errorDismissed) }
+        } message: {
+            Text(overlayMessage)
         }
     }
 
-    var readyView: some View {
+    private var readyView: some View {
         NavigationView {
             ZStack {
                 VStack(spacing: 0) {
-                    if !repositoryConnected, configuration.isConfigured {
-                        RepositoryAccessBanner {
-                            Task { await connectToRepository(promptIfNeeded: true) }
-                        }
+                    if !store.state.isConnected, store.state.configuration.isConfigured {
+                        RepositoryAccessBanner { store.dispatch(.connectClicked) }
                     }
 
                     List {
-                        ForEach(files) { file in
+                        ForEach(store.state.displayedFiles) { file in
                             Button {
-                                toggleSelection(for: file)
+                                store.dispatch(
+                                    .fileSelectionChanged(
+                                        id: file.id, selected: !store.state.selectedIds.contains(file.id)))
                             } label: {
-                                MediaFileView(file: file, isSelected: selectedFileNames.contains(file.id))
+                                MediaFileView(
+                                    file: file,
+                                    status: store.state.fileStatus[file.id],
+                                    isSelected: store.state.selectedIds.contains(file.id),
+                                    loadThumbnail: { await store.thumbnail(for: file) })
                             }
                             .buttonStyle(.plain)
-                            .disabled(!isSelectable(file))
+                            .disabled(!isSelectable(store.state.fileStatus[file.id]))
                         }
                     }
                 }
-                .opacity(isLoading ? 0 : 1)
+                .opacity(store.state.isLoadingFiles ? 0 : 1)
 
-                if isLoading {
+                if store.state.isLoadingFiles {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle())
                         .scaleEffect(1.5)
@@ -128,59 +91,85 @@ struct ContentView: View {
             .navigationTitle("Cling Sync")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(
-                        selectableFiles.count == selectedFileNames.count && !selectableFiles.isEmpty
-                            ? "Deselect All" : "Select All"
-                    ) {
-                        toggleSelectAll()
+                    if allSelectableSelected {
+                        Button("Deselect All") { store.dispatch(.deselectAllClicked) }
+                    } else {
+                        Button("Select All") { store.dispatch(.selectAllClicked) }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Settings") {
-                        showSettings = true
-                    }
-                    .disabled(uploader != nil)
+                    Button("Settings") { store.dispatch(.settingsClicked) }
+                        .disabled(store.state.isBusy)
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                bottomBar
-            }
-            .animation(.easeInOut(duration: 0.25), value: selectedFileNames.isEmpty)
-            .onAppear {
-                if files.isEmpty {
-                    Task { await loadMediaLibrary() }
-                }
-            }
-            .onChange(of: selectedFileNames) { _ in
-                if uploader?.finished == true {
-                    uploader = nil
-                }
-            }
+            .safeAreaInset(edge: .bottom) { bottomBar }
+            .animation(.easeInOut(duration: 0.25), value: store.state.selectedIds.isEmpty)
         }
     }
 
     @ViewBuilder
-    var bottomBar: some View {
-        if let uploader {
-            UploadProgress(uploader: uploader) {
-                self.uploader = nil
-            }
-        } else if !selectedFileNames.isEmpty {
+    private var bottomBar: some View {
+        if store.state.isUploading || store.state.isUploadInitiated || store.uploadOutcome != nil {
+            UploadProgress(
+                currentFile: store.state.uploadInfo?.currentFile,
+                uploadedBytes: store.state.uploadedBytes,
+                totalBytes: uploadTotalBytes,
+                outcome: store.uploadOutcome,
+                onAbort: { store.dispatch(.abortClicked) },
+                onDismiss: { store.dismissUploadOutcome() })
+        } else if !store.state.selectedFiles.isEmpty {
+            let selected = store.state.selectedFiles
+            let selectedSize = selected.reduce(Int64(0)) { $0 + $1.size }
             HStack {
-                let selectedSize = selectedFiles.reduce(Int64(0)) { $0 + $1.size }
-                Text("\(selectedFileNames.count) selected (\(fileSizeFormatter.string(fromByteCount: selectedSize)))")
+                Text("\(selected.count) selected (\(fileSizeFormatter.string(fromByteCount: selectedSize)))")
                     .font(.subheadline)
                 Spacer()
-                Button("Upload") {
-                    Task { await startUpload() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canUploadSelection)
+                Button("Upload") { store.dispatch(.uploadClicked) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        !store.state.isConnected
+                            || selected.contains { store.state.fileStatus[$0.id] == .checking })
             }
             .padding()
             .background(.regularMaterial)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    private var allSelectableSelected: Bool {
+        let targets = store.state.selectAllTargets
+        return !targets.isEmpty && targets.isSubset(of: store.state.selectedIds)
+    }
+
+    private var uploadTotalBytes: Int64 {
+        store.state.files
+            .filter { store.state.currentUploadIds.contains($0.id) }
+            .reduce(Int64(0)) { $0 + $1.size }
+    }
+
+    private var showSettings: Binding<Bool> {
+        Binding(
+            get: { store.state.showSettings },
+            set: { store.dispatch($0 ? .settingsClicked : .settingsDismissed) })
+    }
+
+    private var showOverlay: Binding<Bool> {
+        Binding(
+            get: {
+                if case .error = store.state.overlay { return true }
+                return false
+            },
+            set: { if !$0 { store.dispatch(.errorDismissed) } })
+    }
+
+    private var overlayTitle: String {
+        if case .error(let title, _) = store.state.overlay { return title }
+        return ""
+    }
+
+    private var overlayMessage: String {
+        if case .error(_, let message) = store.state.overlay { return message }
+        return ""
     }
 }
 

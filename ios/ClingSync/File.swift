@@ -1,4 +1,3 @@
-import Photos
 import SwiftUI
 import UIKit
 
@@ -10,79 +9,49 @@ enum FileStatus: Equatable {
     case waiting
     case sending
     case sentWaitingCommit
+    case committing
     case done
-}
-
-final class MediaFile: ObservableObject, Identifiable {
-    let id: String
-    let name: String
-    let size: Int64
-    let modificationDate: Date
-    let asset: PHAsset?
-    let resource: PHAssetResource?
-    let localFileURL: URL?
-    @Published var uploadState: FileStatus = .none
-    @Published var revisionEntry: String?
-
-    var syncedRecord: SyncedFileRecord {
-        SyncedFileRecord(name: name, size: size, modificationDate: modificationDate)
-    }
-
-    init(name: String, size: Int64, asset: PHAsset, resource: PHAssetResource, modificationDate: Date) {
-        self.id = asset.localIdentifier + ":" + resource.originalFilename
-        self.name = name
-        self.size = size
-        self.modificationDate = modificationDate
-        self.asset = asset
-        self.resource = resource
-        self.localFileURL = nil
-    }
-
-    init(localFileURL: URL, size: Int64, modificationDate: Date) {
-        self.id = localFileURL.lastPathComponent
-        self.name = localFileURL.lastPathComponent
-        self.size = size
-        self.modificationDate = modificationDate
-        self.asset = nil
-        self.resource = nil
-        self.localFileURL = localFileURL
-    }
+    case failed(message: String)
+    case aborted
 }
 
 struct MediaFileView: View {
-    @State private var thumbnail: UIImage?
-    @ObservedObject var file: MediaFile
+    let file: SourceFile
+    let status: FileStatus?
     let isSelected: Bool
+    let loadThumbnail: () async -> UIImage?
 
-    private var uploadStateText: String {
-        switch file.uploadState {
-        case .none: return ""
+    @State private var thumbnail: UIImage?
+
+    private var statusText: String {
+        guard let status else { return "" }
+        switch status {
         case .checking: return "Scanning"
         case .new: return "New"
-        case .exists: return ""
         case .waiting: return "Waiting"
         case .sending: return "Sending"
-        case .sentWaitingCommit: return "Processing"
+        case .sentWaitingCommit, .committing: return "Processing"
         case .done: return "Done"
+        case .failed: return "Failed"
+        case .aborted: return "Aborted"
+        case .exists, .none: return ""
         }
     }
 
-    private var uploadStateColor: Color {
-        switch file.uploadState {
-        case .none: return .clear
-        case .checking: return .secondary
-        case .new: return .blue
-        case .exists: return .green
-        case .waiting: return .secondary
-        case .sending: return .blue
-        case .sentWaitingCommit: return .secondary
-        case .done: return .green
+    private var statusColor: Color {
+        guard let status else { return .clear }
+        switch status {
+        case .new, .sending: return .blue
+        case .exists, .done: return .green
+        case .failed: return .red
+        case .aborted: return .orange
+        default: return .secondary
         }
     }
 
     var body: some View {
         HStack {
-            if let thumbnail = thumbnail {
+            if let thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -104,58 +73,39 @@ struct MediaFileView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    if !uploadStateText.isEmpty {
+                    if !statusText.isEmpty {
                         Text("•")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text(uploadStateText)
+                        Text(statusText)
                             .font(.caption)
-                            .foregroundColor(uploadStateColor)
+                            .foregroundColor(statusColor)
                     }
                 }
             }
             Spacer()
-            switch file.uploadState {
-            case .checking, .sending, .sentWaitingCommit:
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle())
-            case .done, .exists:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            default:
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-            }
+            statusIcon
         }
         .contentShape(Rectangle())
-        .onAppear {
-            loadThumbnail()
+        .task {
+            if thumbnail == nil {
+                thumbnail = await loadThumbnail()
+            }
         }
     }
 
-    private func loadThumbnail() {
-        guard let asset = file.asset else {
-            return
-        }
-        let manager = PHImageManager.default()
-        let options = PHImageRequestOptions()
-        options.isSynchronous = false
-        options.deliveryMode = .opportunistic
-        options.isNetworkAccessAllowed = true
-        options.resizeMode = .fast
-
-        manager.requestImage(
-            for: asset,
-            targetSize: CGSize(width: 120, height: 120),
-            contentMode: .aspectFill,
-            options: options
-        ) { image, info in
-            if let error = info?[PHImageErrorKey] as? Error {
-                print("Image request failed with error: \(error)")
-            }
-            if let image = image {
-                self.thumbnail = image
-            }
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch status {
+        case .checking, .sending, .sentWaitingCommit, .committing:
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle())
+        case .done, .exists:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        default:
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(isSelected ? .accentColor : .secondary)
         }
     }
 }

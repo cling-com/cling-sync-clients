@@ -18,6 +18,9 @@ final class S3CredentialsPromptController: ObservableObject {
 
     func prompt(hostURL: String) async throws -> S3CredentialsResult {
         try await withCheckedThrowingContinuation { continuation in
+            // Resume any prior pending prompt before overwriting it, or its awaiting
+            // task leaks forever.
+            self.continuation?.resume(throwing: CancellationError())
             self.request = S3CredentialsRequest(hostURL: hostURL)
             self.continuation = continuation
         }
