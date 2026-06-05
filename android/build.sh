@@ -17,7 +17,7 @@ if [ $# -eq 0 ]; then
     echo "      Available targets:"
     echo "        go      - build the Go shared library"
     echo "        apk     - build the debug Android APK"
-    echo "        release - build the Go library and an unsigned release APK"
+    echo "        release - build the Go library and a (debug-signed) release APK"
     echo "        all     - build both Go library and debug APK (default)"
     echo
     echo "  tools"
@@ -216,16 +216,16 @@ build_apk() {
     cp app/build/outputs/apk/debug/app-debug.apk "$repo_build/clingsync-debug.apk"
 }
 
-# Build the release APK. No signing config is set up, so the output is unsigned and
-# must be signed before it can be installed or published.
+# Build the release APK. It is debug-signed (see app/build.gradle.kts) so it can be
+# installed on a device; switch to a real keystore before publishing.
 build_apk_release() {
     echo ">>> Building Android release APK"
     set_local_path
     ./gradlew assembleRelease -q
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
-    echo ">>> Copying APK to $repo_build/clingsync-release-unsigned.apk"
-    cp app/build/outputs/apk/release/app-release-unsigned.apk "$repo_build/clingsync-release-unsigned.apk"
+    echo ">>> Copying APK to $repo_build/clingsync-release.apk"
+    cp app/build/outputs/apk/release/app-release.apk "$repo_build/clingsync-release.apk"
 }
 
 build_all() {

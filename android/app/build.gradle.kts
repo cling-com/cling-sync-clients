@@ -25,6 +25,9 @@ android {
             buildConfigField("boolean", "REMINDER_TEST_CONTROLS", "true")
         }
         release {
+            // Debug-signed so the release APK installs on a device for testing. Swap
+            // in a real release keystore before publishing.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
