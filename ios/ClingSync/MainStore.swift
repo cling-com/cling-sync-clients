@@ -138,26 +138,12 @@ final class MainStore: ObservableObject {
         }
         dispatch(.connectStarted)
         do {
-            let status = await repository.isAlreadyOpen(hostURL: configuration.hostURL)
-            if status.open {
-                connectSucceeded()
-                return
-            }
-            guard let access = try await requestPassphrase(configuration, promptIfNeeded: promptIfNeeded) else {
-                declineConnect()
-                return
-            }
-            try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
-            _ = try await repository.open(
-                hostURL: configuration.hostURL,
-                passphrase: access.passphrase,
-                askS3: { try await self.s3Controller.prompt(hostURL: configuration.hostURL) })
-            if access.mode.savesInKeychain {
-                try PassphraseStore.shared.save(
-                    passphrase: access.passphrase, for: configuration.repositoryID, mode: access.mode)
-            }
-            settings.save(passphraseMode: access.mode)
+            try await runConnect(
+                configuration, promptIfNeeded: promptIfNeeded,
+                passphrase: passphraseController, s3: s3Controller)
             connectSucceeded()
+        } catch is ConnectDeclined {
+            declineConnect()
         } catch let error as PassphraseStoreError where error.cancelled {
             declineConnect()
         } catch is CancellationError {
@@ -173,7 +159,7 @@ final class MainStore: ObservableObject {
 
     // The success/failure of a connect that has been superseded (its task cancelled)
     // must not fold stale state in; the bridge calls don't observe cancellation, so
-    // these terminal points guard explicitly. `reflectConnected` is not in a
+    // these terminal points guard explicitly. `testConnection` is not in a
     // cancellable task, so its `connectSucceeded()` is unaffected.
     private func failConnect(_ message: String) {
         guard !Task.isCancelled else { return }
@@ -201,9 +187,41 @@ final class MainStore: ObservableObject {
         }
     }
 
+    // The connect pipeline, parameterized by the prompt controllers so the prompts
+    // present in the caller's sheet context (the main screen vs the Settings sheet).
+    // Opens the repository (a no-op if already open); throws on failure, and
+    // ConnectDeclined when no passphrase is available without prompting.
+    private func runConnect(
+        _ configuration: RepositoryConfiguration,
+        promptIfNeeded: Bool,
+        passphrase: PassphrasePromptController,
+        s3 s3Controller: S3CredentialsPromptController
+    ) async throws {
+        if await repository.isAlreadyOpen(hostURL: configuration.hostURL).open {
+            return
+        }
+        guard
+            let access = try await requestPassphrase(
+                configuration, promptIfNeeded: promptIfNeeded, controller: passphrase)
+        else {
+            throw ConnectDeclined()
+        }
+        try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
+        _ = try await repository.open(
+            hostURL: configuration.hostURL,
+            passphrase: access.passphrase,
+            askS3: { try await s3Controller.prompt(hostURL: configuration.hostURL) })
+        if access.mode.savesInKeychain {
+            try PassphraseStore.shared.save(
+                passphrase: access.passphrase, for: configuration.repositoryID, mode: access.mode)
+        }
+        settings.save(passphraseMode: access.mode)
+    }
+
     private func requestPassphrase(
         _ configuration: RepositoryConfiguration,
-        promptIfNeeded: Bool
+        promptIfNeeded: Bool,
+        controller: PassphrasePromptController
     ) async throws -> (passphrase: String, mode: PassphraseStorageMode)? {
         let mode = settings.passphraseMode()
         if let stored = try PassphraseStore.shared.loadIfAvailable(
@@ -212,7 +230,7 @@ final class MainStore: ObservableObject {
             return (stored, mode)
         }
         guard promptIfNeeded else { return nil }
-        let result = try await passphraseController.prompt(
+        let result = try await controller.prompt(
             PassphrasePromptRequest(
                 title: "Repository Passphrase",
                 message: "Enter the repository passphrase to connect.",
@@ -343,15 +361,25 @@ final class MainStore: ObservableObject {
         dispatch(.settingsSaved(configuration))
     }
 
-    // A successful Settings test connection opened the (process-global) repository
-    // for `configuration`; reflect that here so the main screen scans the files and
-    // enables uploading. Mirrors the launch-connect success path.
-    func reflectConnected(_ configuration: RepositoryConfiguration) {
+    // Settings "Test Connection": opens the repository using the Settings sheet's
+    // own prompt controllers (so the prompts present over the sheet), then reflects
+    // the connection so the main screen scans and enables uploading. Throws for the
+    // dialog to surface; returning normally means connected.
+    func testConnection(
+        _ configuration: RepositoryConfiguration,
+        passphrase: PassphrasePromptController,
+        s3 s3Controller: S3CredentialsPromptController
+    ) async throws {
+        try await runConnect(configuration, promptIfNeeded: true, passphrase: passphrase, s3: s3Controller)
         state.configuration = configuration
         uploadOutcome = nil
         connectSucceeded()
     }
 }
+
+// Thrown by the connect pipeline when no passphrase is available and prompting is
+// disabled: a graceful decline, not a failure.
+private struct ConnectDeclined: Error {}
 
 // swiftlint:enable type_body_length
 

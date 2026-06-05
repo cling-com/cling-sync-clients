@@ -34,12 +34,7 @@ struct ContentView: View {
         }
         .task { store.onStart() }
         .sheet(isPresented: showSettings) {
-            SettingsView(
-                isPresented: showSettings,
-                onSave: { store.handleSettingsSaved($0) },
-                onConnected: { store.reflectConnected($0) },
-                currentSource: store.sourceSelection,
-                onSelectSource: { store.selectSource($0) })
+            SettingsView(store: store, isPresented: showSettings)
         }
         .sheet(item: $passphraseController.request) { request in
             PassphrasePromptView(controller: passphraseController, request: request)

@@ -105,16 +105,6 @@ enum MainReducer {
         case .settingsSaved(let configuration):
             return settingsSaved(state, configuration: configuration)
 
-        case .settingsTestConnection(let configuration):
-            if let urlError = validateHostURL(configuration.hostURL) {
-                var next = state
-                next.overlay = .error(title: "Invalid Host URL", message: urlError)
-                return .only(next)
-            }
-            var next = state
-            next.configuration = configuration
-            return Reduction(state: next, effects: [.connect])
-
         case .connectClicked:
             return Reduction(state: state, effects: [.connect])
 

@@ -1,10 +1,5 @@
 import SwiftUI
 
-struct ResolvedPassphrase {
-    let passphrase: String
-    let mode: PassphraseStorageMode
-}
-
 struct PassphrasePromptRequest: Identifiable {
     let id = UUID()
     let title: String
@@ -50,34 +45,6 @@ final class PassphrasePromptController: ObservableObject {
             throwing: PassphraseStoreError(message: "Authentication was cancelled.", cancelled: true))
         continuation = nil
         request = nil
-    }
-
-    func resolvePassphrase(
-        repositoryID: String,
-        currentMode: PassphraseStorageMode,
-        promptIfNeeded: Bool,
-        allowsKeychainSave: Bool,
-        promptMessage: String
-    ) async throws -> ResolvedPassphrase? {
-        if let passphrase = try PassphraseStore.shared.loadIfAvailable(
-            for: repositoryID,
-            mode: currentMode,
-            prompt: "Unlock the repository passphrase."
-        ) {
-            return ResolvedPassphrase(passphrase: passphrase, mode: currentMode)
-        }
-        guard promptIfNeeded else {
-            return nil
-        }
-        let result = try await prompt(
-            PassphrasePromptRequest(
-                title: "Repository Passphrase",
-                message: promptMessage,
-                allowsKeychainSave: allowsKeychainSave,
-                suggestedMode: currentMode
-            ))
-        let mode: PassphraseStorageMode = result.saveToKeychain ? .keychain : .session
-        return ResolvedPassphrase(passphrase: result.passphrase, mode: mode)
     }
 }
 

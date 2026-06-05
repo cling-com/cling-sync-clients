@@ -8,14 +8,10 @@ struct SettingsView: View {
         .session.rawValue
     @AppStorage(AppStorageKey.repoPathPrefix) private var storedRepoPathPrefix = ""
 
+    @ObservedObject var store: MainStore
     @Binding var isPresented: Bool
-    let onSave: (RepositoryConfiguration) -> Void
-    let onConnected: (RepositoryConfiguration) -> Void
-    let currentSource: SourceSelection
-    let onSelectSource: (SourceSelection) -> Void
     @StateObject private var passphrasePromptController = PassphrasePromptController()
     @StateObject private var s3CredentialsPromptController = S3CredentialsPromptController()
-    private let repositoryGateway = RepositoryGateway()
     @State private var author = ""
     @State private var errorMessage = ""
     @State private var hostURL = ""
@@ -94,7 +90,7 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button("Use Photo Library") {
-                        onSelectSource(.photoLibrary)
+                        store.selectSource(.photoLibrary)
                         isPresented = false
                     }
                     Button("Choose Folder…") {
@@ -170,13 +166,10 @@ struct SettingsView: View {
             show(urlError)
             return
         }
-        storedHostURL = hostURL
-        storedRepoPathPrefix = repoPathPrefix
-        storedAuthor = author
         isPresented = false
         let configuration = configuration
         DispatchQueue.main.async {
-            onSave(configuration)
+            store.handleSettingsSaved(configuration)
         }
     }
 
@@ -190,13 +183,10 @@ struct SettingsView: View {
 
         Task {
             do {
-                let resolved = try await verifyConnection()
-                if resolved.mode.savesInKeychain {
-                    storedPassphraseStorageMode = resolved.mode.rawValue
-                }
+                try await store.testConnection(
+                    configuration, passphrase: passphrasePromptController, s3: s3CredentialsPromptController)
                 isTesting = false
                 showSuccess = true
-                onConnected(configuration)
             } catch let error as BridgeError {
                 show(error.message)
             } catch is CancellationError {
@@ -207,33 +197,6 @@ struct SettingsView: View {
                 show(error.localizedDescription)
             }
         }
-    }
-
-    private func verifyConnection() async throws -> ResolvedPassphrase {
-        guard
-            let resolved = try await passphrasePromptController.resolvePassphrase(
-                repositoryID: configuration.repositoryID,
-                currentMode: storedPassphraseMode,
-                promptIfNeeded: true,
-                allowsKeychainSave: true,
-                promptMessage: "Enter the passphrase for \(hostURL)."
-            )
-        else {
-            throw PassphraseStoreError(message: "Authentication was cancelled.")
-        }
-        let currentConfiguration = configuration
-        try await Bridge.triggerNetworkPermissionIfNeeded(url: currentConfiguration.hostURL)
-        _ = try await repositoryGateway.open(
-            hostURL: currentConfiguration.hostURL,
-            passphrase: resolved.passphrase,
-            askS3: { try await self.s3CredentialsPromptController.prompt(hostURL: currentConfiguration.hostURL) }
-        )
-
-        if resolved.mode.savesInKeychain {
-            try PassphraseStore.shared.save(
-                passphrase: resolved.passphrase, for: configuration.repositoryID, mode: resolved.mode)
-        }
-        return resolved
     }
 
     private func forgetStoredPassphrase() {
@@ -248,7 +211,7 @@ struct SettingsView: View {
     }
 
     private var sourceLabel: String {
-        switch currentSource {
+        switch store.sourceSelection {
         case .photoLibrary: return "Backing up from your photo library."
         case .folder: return "Backing up from a selected folder."
         }
@@ -262,7 +225,7 @@ struct SettingsView: View {
             show("Could not access the selected folder.")
             return
         }
-        onSelectSource(.folder(bookmark: bookmark))
+        store.selectSource(.folder(bookmark: bookmark))
         isPresented = false
     }
 
@@ -274,10 +237,5 @@ struct SettingsView: View {
 }
 
 #Preview {
-    SettingsView(
-        isPresented: .constant(true),
-        onSave: { _ in },
-        onConnected: { _ in },
-        currentSource: .photoLibrary,
-        onSelectSource: { _ in })
+    SettingsView(store: MainStore(), isPresented: .constant(true))
 }

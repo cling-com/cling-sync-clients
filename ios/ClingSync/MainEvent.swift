@@ -34,7 +34,6 @@ enum MainEvent {
     case settingsClicked
     case settingsDismissed
     case settingsSaved(RepositoryConfiguration)
-    case settingsTestConnection(RepositoryConfiguration)
 
     // --- Connection (dispatched as the gateway flow progresses) ---
     case connectClicked
