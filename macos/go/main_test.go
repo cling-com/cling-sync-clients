@@ -396,10 +396,12 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 	if err != nil {
 		t.Fatalf("create xcodebuild log file: %v", err)
 	}
+	resultBundle := xcresultBundle(t, "testCreateNewRepositoryFromMissingPath")
 	t.Cleanup(func() {
 		_ = logFile.Close()
 		if !t.Failed() {
 			_ = os.Remove(logPath)
+			_ = os.RemoveAll(resultBundle)
 		}
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
@@ -413,6 +415,7 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 		"-test-timeouts-enabled", "YES",
 		"-default-test-execution-time-allowance", "30",
 		"-maximum-test-execution-time-allowance", "90",
+		"-resultBundlePath", resultBundle,
 		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/testCreateNewRepositoryFromMissingPath",
 		"CODE_SIGN_IDENTITY=-",
 		"CODE_SIGNING_REQUIRED=NO",
@@ -511,15 +514,17 @@ func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 	if err != nil {
 		t.Fatalf("create xcodebuild log file: %v", err)
 	}
+	resultBundle := xcresultBundle(t, onlyTest)
 	t.Cleanup(func() {
 		_ = logFile.Close()
 		if !t.Failed() {
 			_ = os.Remove(logPath)
+			_ = os.RemoveAll(resultBundle)
 		}
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext( //nolint:gosec
+	cmd := exec.CommandContext(
 		ctx,
 		"xcodebuild",
 		"-project", xcodeProjectPath,
@@ -528,6 +533,7 @@ func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 		"-test-timeouts-enabled", "YES",
 		"-default-test-execution-time-allowance", "60",
 		"-maximum-test-execution-time-allowance", "180",
+		"-resultBundlePath", resultBundle,
 		"-only-testing:ClingSyncMacUITests/ClingSyncMacUITests/"+onlyTest,
 		"CODE_SIGN_IDENTITY=-",
 		"CODE_SIGNING_REQUIRED=NO",
@@ -549,6 +555,17 @@ func runXCUITest(t *testing.T, cfg uiTestConfig, onlyTest string) {
 		t.Fatalf("xcode ui test failed: %v\nlog: %s\n%s", err, logPath, readLogTail(t, logPath))
 	}
 	t.Logf("xcode ui test passed: %s", onlyTest)
+}
+
+func xcresultBundle(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join("..", "build", "results")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("create xcresult dir: %v", err)
+	}
+	bundle := filepath.Join(dir, name+".xcresult")
+	_ = os.RemoveAll(bundle)
+	return bundle
 }
 
 func readLogTail(t *testing.T, path string) string {

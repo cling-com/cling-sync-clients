@@ -410,12 +410,16 @@ unit_xcode() {
     ensure_simulator "ClingSync-UnitTest"
     build_go --simulator
     echo ">>> Running ClingSyncTests on simulator: $simulator_device_id"
+    local result_bundle="$root/build/results/ClingSyncTests.xcresult"
+    rm -rf "$result_bundle"
+    mkdir -p "$(dirname "$result_bundle")"
     run_xcodebuild xcodebuild-unit.log \
         test \
         -project ClingSync.xcodeproj \
         -scheme ClingSync \
         -destination "id=$simulator_device_id" \
         -parallel-testing-enabled NO \
+        -resultBundlePath "$result_bundle" \
         -only-testing:ClingSyncTests
 }
 
@@ -432,29 +436,21 @@ integration_test_swiftui() {
     
     # Run the UI test.
     echo ">>> Running UI test on simulator: $simulator_device_id"
-    local attempt=1
-    while true; do
-        if run_xcodebuild xcodebuild-test.log \
-            test \
-            -project ClingSync.xcodeproj \
-            -scheme ClingSync \
-            -destination "id=$simulator_device_id" \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 120 \
-            -maximum-test-execution-time-allowance 240 \
-            -only-testing:ClingSyncUITests
-        then
-            break
-        fi
-        if ! grep -q "Failed to clone device" "$logs_dir/xcodebuild-test.log" || [ "$attempt" -ge 3 ]; then
-            echo "UI test failed"
-            return 1
-        fi
-        attempt=$((attempt + 1))
-        echo ">>> Retrying after simulator clone failure (attempt $attempt)"
-        sleep 2
-    done
+    local result_bundle="$root/build/results/ClingSyncUITests.xcresult"
+    # xcodebuild refuses to write to an existing result bundle, so clear any stale one.
+    rm -rf "$result_bundle"
+    mkdir -p "$(dirname "$result_bundle")"
+    run_xcodebuild xcodebuild-test.log \
+        test \
+        -project ClingSync.xcodeproj \
+        -scheme ClingSync \
+        -destination "id=$simulator_device_id" \
+        -parallel-testing-enabled NO \
+        -test-timeouts-enabled YES \
+        -default-test-execution-time-allowance 120 \
+        -maximum-test-execution-time-allowance 240 \
+        -resultBundlePath "$result_bundle" \
+        -only-testing:ClingSyncUITests
 }
 
 clean() {
