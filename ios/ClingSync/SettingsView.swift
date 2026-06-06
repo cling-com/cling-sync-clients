@@ -51,107 +51,114 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                Section("Repository") {
-                    TextField("Host URL", text: $hostURL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-
-                    TextField("Destination path", text: $repoPathPrefix)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-
-                    TextField("Author", text: $author)
-                        .textContentType(.name)
-                }
-
-                Section("Repository Access") {
-                    Text(storedPassphraseLabel)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    Button("Test Connection") {
-                        if !isTesting {
-                            testConnection()
+            content
+                .navigationTitle("Repository Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") {
+                            isPresented = false
                         }
                     }
-                    .disabled(!configuration.isConfigured || isTesting)
-
-                    if hasStoredPassphrase {
-                        Button("Forget Stored Passphrase", role: .destructive) {
-                            forgetStoredPassphrase()
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Save") {
+                            saveSettings()
                         }
+                        .disabled(!canSave)
                     }
                 }
+                .alert("Settings Error", isPresented: $showError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(errorMessage)
+                }
+                .alert("Connection Succeeded", isPresented: $showSuccess) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("The repository is reachable and the passphrase worked.")
+                }
+                .overlay {
+                    if isTesting {
+                        ConnectionTestingOverlay()
+                    }
+                }
+                .sheet(item: $passphrasePromptController.request) { request in
+                    PassphrasePromptView(controller: passphrasePromptController, request: request)
+                }
+                .sheet(item: $s3CredentialsPromptController.request) { request in
+                    S3CredentialsPromptView(controller: s3CredentialsPromptController, request: request)
+                }
+                .onAppear(perform: loadStoredValues)
+        }
+    }
 
-                Section("Backup Source") {
-                    Text(sourceLabel)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Button("Use Photo Library") {
-                        store.selectSource(.photoLibrary)
-                        isPresented = false
+    // The settings sheet is split into tabs so the debug reminder controls live on
+    // their own tab instead of lengthening the form. Release builds have only the
+    // form, so the tab bar is omitted there.
+    @ViewBuilder
+    private var content: some View {
+        #if DEBUG
+            TabView {
+                settingsForm
+                    .tabItem { Label("Settings", systemImage: "gearshape") }
+                ReminderTestTab()
+                    .tabItem { Label("Reminders", systemImage: "bell.badge") }
+            }
+        #else
+            settingsForm
+        #endif
+    }
+
+    private var settingsForm: some View {
+        Form {
+            Section("Repository") {
+                TextField("Host URL", text: $hostURL)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+
+                TextField("Destination path", text: $repoPathPrefix)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+
+                TextField("Author", text: $author)
+                    .textContentType(.name)
+            }
+
+            Section("Repository Access") {
+                Text(storedPassphraseLabel)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Button("Test Connection") {
+                    if !isTesting {
+                        testConnection()
                     }
-                    Button("Choose Folder…") {
-                        showFolderPicker = true
+                }
+                .disabled(!configuration.isConfigured || isTesting)
+
+                if hasStoredPassphrase {
+                    Button("Forget Stored Passphrase", role: .destructive) {
+                        forgetStoredPassphrase()
                     }
                 }
             }
-            .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
-                handleFolderPick(result)
-            }
-            .navigationTitle("Repository Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
+
+            Section("Backup Source") {
+                Text(sourceLabel)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Use Photo Library") {
+                    store.selectSource(.photoLibrary)
+                    isPresented = false
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveSettings()
-                    }
-                    .disabled(!canSave)
+                Button("Choose Folder…") {
+                    showFolderPicker = true
                 }
             }
-            .alert("Settings Error", isPresented: $showError) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage)
-            }
-            .alert("Connection Succeeded", isPresented: $showSuccess) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("The repository is reachable and the passphrase worked.")
-            }
-            .overlay {
-                if isTesting {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                        .overlay {
-                            VStack(spacing: 16) {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(1.5)
-                                Text("Testing connection...")
-                                    .font(.headline)
-                            }
-                            .padding(24)
-                            .background(Color(.systemBackground))
-                            .cornerRadius(12)
-                            .shadow(radius: 4)
-                        }
-                }
-            }
-            .sheet(item: $passphrasePromptController.request) { request in
-                PassphrasePromptView(controller: passphrasePromptController, request: request)
-            }
-            .sheet(item: $s3CredentialsPromptController.request) { request in
-                S3CredentialsPromptView(controller: s3CredentialsPromptController, request: request)
-            }
-            .onAppear(perform: loadStoredValues)
+        }
+        .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
+            handleFolderPick(result)
         }
     }
 
@@ -235,6 +242,62 @@ struct SettingsView: View {
         showError = true
     }
 }
+
+// Dimming spinner shown while a connection test runs.
+private struct ConnectionTestingOverlay: View {
+    var body: some View {
+        Color.black.opacity(0.3)
+            .ignoresSafeArea()
+            .overlay {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle())
+                        .scaleEffect(1.5)
+                    Text("Testing connection...")
+                        .font(.headline)
+                }
+                .padding(24)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .shadow(radius: 4)
+            }
+    }
+}
+
+#if DEBUG
+    // Debug-only controls that fire the backup reminder in a few seconds, forced
+    // onto the daily or weekly path, so the notification flow can be exercised by
+    // hand. Mirrors the Android REMINDER_TEST_CONTROLS buttons.
+    private struct ReminderTestTab: View {
+        @State private var message: String?
+
+        var body: some View {
+            Form {
+                Section {
+                    Button("Test Daily Reminder") { trigger(weekly: false) }
+                    Button("Test Weekly Reminder") { trigger(weekly: true) }
+                } header: {
+                    Text("Reminder Test")
+                } footer: {
+                    Text(message ?? defaultFooter)
+                }
+            }
+        }
+
+        private var defaultFooter: String {
+            "Fires the backup reminder in a few seconds, forced onto the daily or weekly path. "
+                + "Background the app to see the notification."
+        }
+
+        private func trigger(weekly: Bool) {
+            MergeReminderScheduler.scheduleTest(weekly: weekly)
+            let kind = weekly ? "Weekly" : "Daily"
+            message =
+                "\(kind) reminder will appear in about "
+                + "\(Int(MergeReminderScheduler.testDelaySeconds)) seconds. Background the app now."
+        }
+    }
+#endif
 
 #Preview {
     SettingsView(store: MainStore(), isPresented: .constant(true))

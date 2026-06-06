@@ -29,6 +29,15 @@ final class SHA256Cache {
         }
     }
 
+    // Returns the cached hash for `id` regardless of the file's current size or
+    // modification date. The daily reminder uses this cheap lookup (no re-hashing);
+    // detecting staleness is the weekly full scan's job.
+    func peek(id: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries[id]?.sha256
+    }
+
     func lookup(id: String, size: Int64, modificationDate: Date) -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -53,4 +62,15 @@ final class SHA256Cache {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }
+
+    #if DEBUG
+        // Test-only: drops all entries and the backing file so each bridge test
+        // starts from an empty cache.
+        func resetForTesting() {
+            lock.lock()
+            entries = [:]
+            lock.unlock()
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    #endif
 }

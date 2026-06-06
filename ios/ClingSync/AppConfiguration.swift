@@ -6,6 +6,7 @@ enum AppStorageKey {
     static let passphraseStorageMode = "passphraseStorageMode"
     static let repoPathPrefix = "repoPathPrefix"
     static let sourceBookmark = "sourceBookmark"
+    static let mergeReminderLastWeeklyScan = "mergeReminderLastWeeklyScan"
 }
 
 enum PassphraseStorageMode: String {
