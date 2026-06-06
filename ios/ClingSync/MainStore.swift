@@ -274,6 +274,8 @@ final class MainStore: ObservableObject {
     // MARK: - Upload
 
     private func startUpload(ids: [String], author: String) {
+        // A live scan shares the unsynchronized bridge globals and would clobber upload statuses, so stop it.
+        scanTask?.cancel()
         uploadOutcome = nil
         beginUploadBackgroundTask()
         let files = state.files.filter { ids.contains($0.id) }
@@ -309,8 +311,8 @@ final class MainStore: ObservableObject {
     private func beginUploadBackgroundTask() {
         endUploadBackgroundTask()
         uploadBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "ClingSyncUpload") { [weak self] in
-            // Grace expired. Cancelling is safe: the bridge resumes from already-transferred blocks next time.
-            MainActor.assumeIsolated {
+            // Grace expired. UIKit may call this off the main thread, so hop. Cancelling is safe and resumes later.
+            Task { @MainActor in
                 self?.uploadTask?.cancel()
                 self?.endUploadBackgroundTask()
             }
