@@ -1,20 +1,18 @@
 import Photos
 import SwiftUI
+import UIKit
 
-// The single impure orchestrator: holds the immutable AppState, applies pure
-// reductions, and runs the effects (connect, load, scan, upload, persist) as
-// async pipelines that re-enter as events. Views are a projection of `state` and
-// call `dispatch`. The heavy bridge work runs on the nonisolated gateways/services
-// (off the main actor); their results hop back here to fold into the state.
-// The terminal banner shown after an upload finishes, until the user dismisses it.
-// A failed upload surfaces through `state.overlay` instead.
+// Terminal banner after an upload finishes. A failed upload surfaces through `state.overlay` instead.
 enum UploadOutcome: Equatable {
     case succeeded(fileCount: Int, bytes: Int64)
     case aborted
 }
 
-// The single impure orchestrator; its body is intentionally large and cohesive.
 // swiftlint:disable type_body_length
+
+// The one stateful, impure layer of the MVI loop: it holds the immutable AppState, runs events
+// through the pure reducers, and executes the resulting effects (connect, load, scan, upload, persist)
+// as async pipelines whose results fold back into the state. Heavy bridge work stays off the main actor.
 @MainActor
 final class MainStore: ObservableObject {
     @Published private(set) var state: AppState
@@ -33,6 +31,8 @@ final class MainStore: ObservableObject {
     private var connectTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
     private var uploadTask: Task<Void, Never>?
+    // A brief background grace window. An interrupted transfer resumes from already-transferred blocks next time.
+    private var uploadBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     init(
         settings: SettingsGateway = UserDefaultsSettingsGateway(),
@@ -123,8 +123,7 @@ final class MainStore: ObservableObject {
 
     private func connect(promptIfNeeded: Bool) {
         connectTask?.cancel()
-        // Resume any prompt the superseded connect was awaiting, so its task can't
-        // leak (e.g. an S3 prompt the new connect won't reach to resume itself).
+        // Resume any prompt the superseded connect was awaiting, so its task can't leak.
         passphraseController.cancel()
         s3Controller.cancel()
         connectTask = Task { await self.connectFlow(promptIfNeeded: promptIfNeeded) }
@@ -157,19 +156,13 @@ final class MainStore: ObservableObject {
         }
     }
 
-    // The success/failure of a connect that has been superseded (its task cancelled)
-    // must not fold stale state in; the bridge calls don't observe cancellation, so
-    // these terminal points guard explicitly. `testConnection` is not in a
-    // cancellable task, so its `connectSucceeded()` is unaffected.
+    // Bridge calls don't observe cancellation, so a superseded connect must guard here against folding stale state in.
     private func failConnect(_ message: String) {
         guard !Task.isCancelled else { return }
         dispatch(.connectFailed(message))
     }
 
-    // A declined prompt (cancel) is not a failure: return to the ready screen,
-    // disconnected, rather than the full-screen connection-failed state. A
-    // superseded connect's prompt resolves with a cancellation after its task was
-    // cancelled; that stale flow must not clobber the new connect's state.
+    // A declined prompt is not a failure: return to ready, disconnected, not the connection-failed state.
     private func declineConnect() {
         guard !Task.isCancelled else { return }
         state.isConnecting = false
@@ -187,10 +180,8 @@ final class MainStore: ObservableObject {
         }
     }
 
-    // The connect pipeline, parameterized by the prompt controllers so the prompts
-    // present in the caller's sheet context (the main screen vs the Settings sheet).
-    // Opens the repository (a no-op if already open); throws on failure, and
-    // ConnectDeclined when no passphrase is available without prompting.
+    // The shared connect pipeline: opens the repository (a no-op if already open), prompting for the passphrase
+    // and S3 credentials through the given controllers. Throws ConnectDeclined if no passphrase is available.
     private func runConnect(
         _ configuration: RepositoryConfiguration,
         promptIfNeeded: Bool,
@@ -242,16 +233,13 @@ final class MainStore: ObservableObject {
     // MARK: - Files & scanning
 
     private func loadFiles() {
-        // A reload (e.g. a repository switch) must abandon an in-flight scan so it
-        // can't write the old repository's membership into the new file list.
+        // A reload cancels the in-flight scan, or it writes the old repo's membership into the new list.
         scanTask?.cancel()
         dispatch(.loadingStarted)
         Task {
             let files = await self.source.loadFiles()
             self.dispatch(.filesLoaded(files))
-            // A folder source that resolves to nothing usually means the bookmark
-            // could not be accessed (revoked/moved); surface that instead of a
-            // silently empty list the user can't explain.
+            // An empty folder source usually means the bookmark was revoked or moved, so surface it.
             if files.isEmpty, case .folder = self.settings.loadSourceSelection(), self.state.overlay == .none {
                 self.state.overlay = .error(
                     title: "No Files Found",
@@ -287,6 +275,7 @@ final class MainStore: ObservableObject {
 
     private func startUpload(ids: [String], author: String) {
         uploadOutcome = nil
+        beginUploadBackgroundTask()
         let files = state.files.filter { ids.contains($0.id) }
         let prefix = state.configuration.repoPathPrefix
         let deviceName = UIDevice.current.name
@@ -306,11 +295,32 @@ final class MainStore: ObservableObject {
         switch update {
         case .succeeded:
             uploadOutcome = .succeeded(fileCount: priorCount, bytes: priorBytes)
+            endUploadBackgroundTask()
         case .cancelled:
             uploadOutcome = .aborted
-        default:
+            endUploadBackgroundTask()
+        case .failed:
+            endUploadBackgroundTask()
+        case .enqueued, .running:
             break
         }
+    }
+
+    private func beginUploadBackgroundTask() {
+        endUploadBackgroundTask()
+        uploadBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "ClingSyncUpload") { [weak self] in
+            // Grace expired. Cancelling is safe: the bridge resumes from already-transferred blocks next time.
+            MainActor.assumeIsolated {
+                self?.uploadTask?.cancel()
+                self?.endUploadBackgroundTask()
+            }
+        }
+    }
+
+    private func endUploadBackgroundTask() {
+        guard uploadBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(uploadBackgroundTask)
+        uploadBackgroundTask = .invalid
     }
 
     func dismissUploadOutcome() {
@@ -326,8 +336,7 @@ final class MainStore: ObservableObject {
     var sourceSelection: SourceSelection { settings.loadSourceSelection() }
 
     func selectSource(_ selection: SourceSelection) {
-        // Never swap the source out from under an in-flight upload, whose task
-        // captured the old coordinator/source.
+        // Never swap the source out from under an in-flight upload, whose task captured the old coordinator.
         guard !state.isBusy else { return }
         settings.save(sourceSelection: selection)
         applySource(selection)
@@ -351,9 +360,7 @@ final class MainStore: ObservableObject {
         }
     }
 
-    // The Settings dialog opens the repository itself (its own prompt sheets) and
-    // persists on save; here we run the reducer's persist/invalidate/reload. A
-    // stale upload result from a repository we are leaving is cleared.
+    // Applies saved settings through the reducer. Moving to a different repository clears any stale upload result.
     func handleSettingsSaved(_ configuration: RepositoryConfiguration) {
         if state.configuration.repositoryID != configuration.repositoryID {
             uploadOutcome = nil
@@ -361,10 +368,8 @@ final class MainStore: ObservableObject {
         dispatch(.settingsSaved(configuration))
     }
 
-    // Settings "Test Connection": opens the repository using the Settings sheet's
-    // own prompt controllers (so the prompts present over the sheet), then reflects
-    // the connection so the main screen scans and enables uploading. Throws for the
-    // dialog to surface; returning normally means connected.
+    // Runs the connect pipeline with prompting always on, then folds a successful connection into state.
+    // It throws on failure rather than moving to an error phase, so the outcome reaches the caller.
     func testConnection(
         _ configuration: RepositoryConfiguration,
         passphrase: PassphrasePromptController,
@@ -377,13 +382,12 @@ final class MainStore: ObservableObject {
     }
 }
 
-// Thrown by the connect pipeline when no passphrase is available and prompting is
-// disabled: a graceful decline, not a failure.
+// A graceful decline, not a failure: no passphrase available and prompting was disabled.
 private struct ConnectDeclined: Error {}
 
 // swiftlint:enable type_body_length
 
-// A file with no scan status yet (or reset to New) still needs checking.
+// A file with no scan status yet, or reset to New, still needs checking.
 private func isUnscanned(_ status: FileStatus?) -> Bool {
     switch status {
     case .none, .new:
