@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 final class ClingSyncMacUITests: XCTestCase {
@@ -6,6 +7,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let serverUrl: String
         let secondServerUrl: String?
         let syncTargetUrl: String?
+        let controlUrl: String?
         let s3AccessKeyId: String?
         let s3AccessKey: String?
         let passphrase: String
@@ -216,6 +218,129 @@ final class ClingSyncMacUITests: XCTestCase {
         closeMergeProgressWindow(in: app)
     }
 
+    // Drives a background auto-merge against a repository whose S3 server rejects
+    // writes, asserts the menu surfaces "Merge (failed)" without recording a
+    // success, then clears the fault and asserts the next auto-merge recovers.
+    func testAutoMergeErrorThenRecovers() throws {
+        let config = loadConfig()
+        guard let controlURL = config.controlUrl, !controlURL.isEmpty else {
+            XCTFail("controlUrl missing from UI test config")
+            return
+        }
+        let app = launchApp(defaultsSuiteSuffix: "automergeerror")
+
+        // Configure a workspace pointing at the fault-injecting repository. The
+        // URL already embeds the credentials, so only the passphrase is prompted;
+        // saving it to the keychain lets the background auto-merges run unattended.
+        let localFolderField = app.textFields["localFolderField"]
+        XCTAssertTrue(localFolderField.waitToAppear(timeout: 5))
+        replaceText(in: localFolderField, with: config.localDir)
+        replaceText(in: app.textFields["authorField"], with: config.author)
+        replaceText(in: app.textFields["serverURLField"], with: config.serverUrl)
+
+        let testButton = app.buttons["testWorkspaceButton"]
+        XCTAssertTrue(testButton.isEnabled)
+        testButton.tap()
+        enterPassphraseIfNeeded(in: app, saveToKeychain: true)
+        assertNoS3Prompt(in: app)
+        assertNoPreferencesError(in: app, context: "after test (auto-merge error)")
+
+        let saveButton = app.buttons["saveWorkspaceButton"]
+        XCTAssertTrue(saveButton.waitToAppear(timeout: 5))
+        waitForButtonToEnable(saveButton)
+        saveButton.tap()
+        waitForElementToDisappear(saveButton)
+
+        // Fault on: the scheduled auto-merge's push fails, so the menu surfaces
+        // "Merge (failed)". Auto-merge failures route to a notification
+        // (suppressed in test mode), not a modal alert, so the menu is the signal.
+        injectFault(controlURL: controlURL, "fail-writes?on=true")
+        triggerAutoMerge(app)
+        XCTAssertTrue(
+            pollTrayMenu(app, timeout: 40) {
+                mergeItemText(for: config.localDir, in: app) == "Merge (failed)"
+            },
+            "auto-merge did not reach the failed state")
+        XCTAssertEqual(
+            lastMergeText(for: config.localDir, in: app), "Last Merge: never",
+            "a failed merge must not record a successful merge")
+        dismissMenuBarMenu(in: app)
+
+        // Recover: clear the fault and let the next auto-merge succeed, which
+        // records a real "Last Merge" age and clears the failed state.
+        injectFault(controlURL: controlURL, "reset")
+        triggerAutoMerge(app)
+        XCTAssertTrue(
+            pollTrayMenu(app, timeout: 40) {
+                let last = lastMergeText(for: config.localDir, in: app)
+                return last != nil && last != "Last Merge: never"
+            },
+            "auto-merge did not recover and record a successful merge")
+        XCTAssertNotEqual(
+            mergeItemText(for: config.localDir, in: app), "Merge (failed)",
+            "merge item stayed failed after recovery")
+        dismissMenuBarMenu(in: app)
+    }
+
+    // A running operation must disable the workspace's other operations so they
+    // cannot overlap, and they must re-enable once it finishes.
+    func testRunningMergeDisablesSiblings() throws {
+        let config = loadConfig()
+        guard let controlURL = config.controlUrl, !controlURL.isEmpty else {
+            XCTFail("controlUrl missing from UI test config")
+            return
+        }
+        let app = launchApp(defaultsSuiteSuffix: "mutualexclusion")
+
+        let localFolderField = app.textFields["localFolderField"]
+        XCTAssertTrue(localFolderField.waitToAppear(timeout: 5))
+        replaceText(in: localFolderField, with: config.localDir)
+        replaceText(in: app.textFields["authorField"], with: config.author)
+        replaceText(in: app.textFields["serverURLField"], with: config.serverUrl)
+
+        let testButton = app.buttons["testWorkspaceButton"]
+        XCTAssertTrue(testButton.isEnabled)
+        testButton.tap()
+        enterPassphraseIfNeeded(in: app, saveToKeychain: true)
+        assertNoS3Prompt(in: app)
+        assertNoPreferencesError(in: app, context: "after test (mutual exclusion)")
+
+        let saveButton = app.buttons["saveWorkspaceButton"]
+        XCTAssertTrue(saveButton.waitToAppear(timeout: 5))
+        waitForButtonToEnable(saveButton)
+        saveButton.tap()
+        waitForElementToDisappear(saveButton)
+
+        // Slow the repository so the background merge stays running while we
+        // inspect the menu, then kick off an auto-merge (no progress window to
+        // contend with the menu host button).
+        injectFault(controlURL: controlURL, "latency?ms=4000")
+        triggerAutoMerge(app)
+
+        let statusIdentifier = "workspace.status.\(config.localDir)"
+        XCTAssertTrue(
+            pollTrayMenu(app, timeout: 40) {
+                mergeItemText(for: config.localDir, in: app) == "Merge (in progress)"
+            },
+            "merge did not reach the in-progress state")
+        let statusItem = app.menuItems[statusIdentifier].firstMatch
+        XCTAssertTrue(statusItem.waitToAppear(timeout: 5))
+        XCTAssertFalse(statusItem.isEnabled, "Status must be disabled while a merge runs")
+        dismissMenuBarMenu(in: app)
+
+        // Let the merge finish and confirm the siblings re-enable.
+        injectFault(controlURL: controlURL, "reset")
+        XCTAssertTrue(
+            pollTrayMenu(app, timeout: 40) {
+                mergeItemText(for: config.localDir, in: app) == "Merge"
+            },
+            "merge did not return to idle after finishing")
+        let statusAfter = app.menuItems[statusIdentifier].firstMatch
+        XCTAssertTrue(statusAfter.waitToAppear(timeout: 5))
+        XCTAssertTrue(statusAfter.isEnabled, "Status must re-enable after the merge finishes")
+        dismissMenuBarMenu(in: app)
+    }
+
     private func launchApp(defaultsSuiteSuffix: String) -> XCUIApplication {
         let config = tryLoadConfig()
         let app = XCUIApplication()
@@ -310,13 +435,79 @@ final class ClingSyncMacUITests: XCTestCase {
     // A menu item exposes its display text as the accessibility title, not the
     // label (which is empty once an identifier is set).
     private func menuItemTitle(_ element: XCUIElement) -> String {
-        if !element.title.isEmpty {
-            return element.title
+        guard let snapshot = try? element.snapshot() else { return "" }
+        if !snapshot.title.isEmpty {
+            return snapshot.title
         }
-        if let value = element.value as? String, !value.isEmpty {
+        if let value = snapshot.value as? String, !value.isEmpty {
             return value
         }
-        return element.label
+        return snapshot.label
+    }
+
+    // Triggers a background auto-merge for every folder via the Options debug
+    // button (the 5s "Schedule auto merge" timer), leaving the menu closed.
+    private func triggerAutoMerge(_ app: XCUIApplication) {
+        openTrayMenu(app, expecting: "Settings")
+        app.menuItems["Settings"].firstMatch.click()
+        selectSettingsTab("Options", in: app)
+        let scheduleButton = app.buttons["scheduleAutoMergeButton"]
+        XCTAssertTrue(scheduleButton.waitToAppear(timeout: 5), "schedule auto merge button not found")
+        scheduleButton.tap()
+        // Restore the default tab so later steps find the workspace editor.
+        selectSettingsTab("Workspaces", in: app)
+        closeSettingsWindow(in: app)
+    }
+
+    // Opens the tray menu and evaluates `check` with it open, polling until it
+    // returns true (menu left OPEN for follow-up reads, caller dismisses) or the
+    // timeout elapses (menu dismissed). Mirrors the loop in exerciseAutoMerge.
+    private func pollTrayMenu(_ app: XCUIApplication, timeout: TimeInterval, check: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            openTrayMenu(app, expecting: "Settings")
+            if check() {
+                return true
+            }
+            dismissMenuBarMenu(in: app)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        return false
+    }
+
+    // Toggles fault injection on the repository's S3 server (e.g.
+    // "fail-writes?on=true", "reset") via a raw socket. App Transport Security
+    // blocks a URLSession cleartext request to localhost from the test runner.
+    private func injectFault(controlURL: String, _ query: String) {
+        guard let url = URL(string: controlURL), let host = url.host, let port = url.port else {
+            XCTFail("invalid controlURL: \(controlURL)")
+            return
+        }
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            XCTFail("socket() failed")
+            return
+        }
+        defer { close(descriptor) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(port).bigEndian
+        addr.sin_addr.s_addr = inet_addr(host)
+        let connected = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else {
+            XCTFail("connect() to \(controlURL) failed")
+            return
+        }
+        let request =
+            "POST /__test/\(query) HTTP/1.1\r\nHost: \(host):\(port)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        _ = request.withCString { send(descriptor, $0, strlen($0), 0) }
+        // Drain the response so the toggle is applied before we return.
+        var buffer = [UInt8](repeating: 0, count: 256)
+        _ = recv(descriptor, &buffer, buffer.count, 0)
     }
 
     private func selectSettingsTab(_ name: String, in app: XCUIApplication) {
@@ -370,26 +561,19 @@ final class ClingSyncMacUITests: XCTestCase {
         let status = app.staticTexts["testStatusLabel"]
         XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
-        let successPredicate = NSPredicate(
-            format: "value CONTAINS[c] %@ OR label CONTAINS[c] %@",
-            "synced",
-            "synced",
-        )
         let errorLabel = app.staticTexts["syncErrorMessage"]
         let result = waitForFirstMatch(
-            success: successPredicate,
-            successObject: status,
-            failure: terminalErrorPredicate(),
-            failureObject: errorLabel,
+            success: { statusContains(status, ["synced"]) },
+            failure: { terminalError(errorLabel) },
             timeout: 30,
         )
         switch result {
         case .success:
             return
         case .failure:
-            XCTFail("sync failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+            XCTFail("sync failed with error: \(elementText(errorLabel))")
         case .timeout:
-            XCTFail("sync did not finish in time; last status: \(status.value as? String ?? status.label)")
+            XCTFail("sync did not finish in time; last status: \(elementText(status))")
         }
     }
 
@@ -403,30 +587,21 @@ final class ClingSyncMacUITests: XCTestCase {
         let status = app.staticTexts["testStatusLabel"]
         XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
-        // Race the success predicate against the error label so a failure
-        // surfaces with the actual error text instead of timing out.
-        let successPredicate = NSPredicate(
-            format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
-            "added",
-            "No changes",
-            "added",
-            "No changes",
-        )
+        // Race the success check against the error label so a failure surfaces
+        // with the actual error text instead of timing out.
         let errorLabel = app.staticTexts["statusErrorMessage"]
         let result = waitForFirstMatch(
-            success: successPredicate,
-            successObject: status,
-            failure: terminalErrorPredicate(),
-            failureObject: errorLabel,
+            success: { statusContains(status, ["added", "No changes"]) },
+            failure: { terminalError(errorLabel) },
             timeout: 30,
         )
         switch result {
         case .success:
             return
         case .failure:
-            XCTFail("status failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+            XCTFail("status failed with error: \(elementText(errorLabel))")
         case .timeout:
-            XCTFail("status did not finish in time; last status: \(status.value as? String ?? status.label)")
+            XCTFail("status did not finish in time; last status: \(elementText(status))")
         }
     }
 
@@ -440,28 +615,19 @@ final class ClingSyncMacUITests: XCTestCase {
         let status = app.staticTexts["testStatusLabel"]
         XCTAssertTrue(status.waitToAppear(timeout: 5), "testStatusLabel not found")
 
-        let successPredicate = NSPredicate(
-            format: "value CONTAINS[c] %@ OR value CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
-            "merged",
-            "up to date",
-            "merged",
-            "up to date",
-        )
         let errorLabel = app.staticTexts["mergeErrorMessage"]
         let result = waitForFirstMatch(
-            success: successPredicate,
-            successObject: status,
-            failure: terminalErrorPredicate(),
-            failureObject: errorLabel,
+            success: { statusContains(status, ["merged", "up to date"]) },
+            failure: { terminalError(errorLabel) },
             timeout: 30,
         )
         switch result {
         case .success:
             return
         case .failure:
-            XCTFail("merge failed with error: \(errorLabel.value as? String ?? errorLabel.label)")
+            XCTFail("merge failed with error: \(elementText(errorLabel))")
         case .timeout:
-            XCTFail("merge did not finish in time; last status: \(status.value as? String ?? status.label)")
+            XCTFail("merge did not finish in time; last status: \(elementText(status))")
         }
     }
 
@@ -540,15 +706,14 @@ final class ClingSyncMacUITests: XCTestCase {
         let errorLabel = app.staticTexts["preferencesErrorMessage"]
         // Give SwiftUI a brief moment to bind the error message before asserting.
         if errorLabel.waitToAppear(timeout: 2) {
-            let message = (errorLabel.value as? String) ?? errorLabel.label
-            XCTFail("preferences error \(context): \(message)")
+            XCTFail("preferences error \(context): \(elementText(errorLabel))")
         }
     }
 
     private func assertPreferencesError(in app: XCUIApplication, contains needle: String) {
         let errorLabel = app.staticTexts["preferencesErrorMessage"]
         XCTAssertTrue(errorLabel.waitToAppear(timeout: 5), "expected preferencesErrorMessage to appear")
-        let message = (errorLabel.value as? String) ?? errorLabel.label
+        let message = elementText(errorLabel)
         XCTAssertTrue(
             message.localizedCaseInsensitiveContains(needle),
             "expected error to contain \"\(needle)\", got: \(message)")
@@ -560,46 +725,74 @@ final class ClingSyncMacUITests: XCTestCase {
         case timeout
     }
 
-    // Polls both predicates roughly every 200ms and returns on the first hit.
-    // XCTWaiter has no native race; it only completes when ALL expectations
-    // are fulfilled, which would mask an error path entirely.
+    // Polls both checks roughly every 200ms and returns on the first hit.
+    // XCTWaiter has no native race; it only completes when ALL expectations are
+    // fulfilled, which would mask an error path entirely. The checks read element
+    // state directly instead of via NSPredicate.evaluate(with: anXCUIElement):
+    // evaluating a predicate forces attribute resolution that throws "Failed to
+    // get matching snapshot" when the accessibility tree is momentarily empty
+    // mid-transition, aborting the test instead of retrying. A guarded .exists
+    // read returns false in that window rather than throwing.
     private func waitForFirstMatch(
-        success: NSPredicate,
-        successObject: Any,
-        failure: NSPredicate,
-        failureObject: Any,
+        success: () -> Bool,
+        failure: () -> Bool,
         timeout: TimeInterval,
     ) -> WaitOutcome {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if success.evaluate(with: successObject) {
+            if success() {
                 return .success
             }
-            if failure.evaluate(with: failureObject) {
+            if failure() {
                 return .failure
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
-        return success.evaluate(with: successObject)
-            ? .success
-            : (failure.evaluate(with: failureObject) ? .failure : .timeout)
+        if success() {
+            return .success
+        }
+        return failure() ? .failure : .timeout
     }
 
-    private func terminalErrorPredicate() -> NSPredicate {
-        // A "passphrase required" error is transient here: the test answers the
-        // prompt and the operation re-runs, clearing it a beat later (after the
-        // optional keychain store). Don't latch onto it as a terminal failure.
-        NSPredicate(
-            format: "exists == true AND NOT (value CONTAINS[c] %@ OR label CONTAINS[c] %@)",
-            "passphrase",
-            "passphrase"
-        )
+    // The visible text of an element. Reads from a throwing snapshot() rather than
+    // the element's properties directly: a bare `.value`/`.label` access raises
+    // "Failed to get matching snapshot" when the accessibility tree is momentarily
+    // empty mid-transition (even right after `.exists` returned true), which aborts
+    // the test (continueAfterFailure=false). snapshot() surfaces that as a Swift
+    // throw we swallow, so a transient failure returns "" and the polling caller
+    // simply retries on the next pass.
+    private func elementText(_ element: XCUIElement) -> String {
+        guard let snapshot = try? element.snapshot() else { return "" }
+        if let value = snapshot.value as? String, !value.isEmpty {
+            return value
+        }
+        if !snapshot.label.isEmpty {
+            return snapshot.label
+        }
+        return snapshot.title
+    }
+
+    private func statusContains(_ status: XCUIElement, _ needles: [String]) -> Bool {
+        let text = elementText(status).lowercased()
+        return needles.contains { text.contains($0.lowercased()) }
+    }
+
+    // A real status/merge/sync error always carries non-empty text. The error
+    // label can briefly exist with empty text while SwiftUI inserts or removes it
+    // (e.g. as the transient passphrase-required error clears), so an empty label
+    // is a transition artifact, not a terminal failure. The "passphrase required"
+    // error itself is also transient: the test answers the prompt and the
+    // operation re-runs. Treat only a non-empty, non-passphrase error as terminal.
+    private func terminalError(_ errorLabel: XCUIElement) -> Bool {
+        let text = elementText(errorLabel)
+        guard !text.isEmpty else { return false }
+        return !text.lowercased().contains("passphrase")
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {
         XCTAssertTrue(element.waitToAppear(timeout: 5))
         element.click()
-        let current = (element.value as? String) ?? ""
+        let current = elementText(element)
         if !current.isEmpty {
             element.typeKey(XCUIKeyboardKey.end, modifierFlags: [])
             for _ in 0..<current.count {

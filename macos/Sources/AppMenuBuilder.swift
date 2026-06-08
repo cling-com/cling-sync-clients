@@ -1,192 +1,150 @@
 import AppKit
 
-@MainActor
-struct AppMenuBuilder {
-    unowned let controller: AppController
-
-    private enum MenuItemID {
-        static func workspace(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.menu.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func status(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.status.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func merge(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.merge.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func sync(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.sync.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func progress(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.progress.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func last(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.last.\(workspace.normalizedLocalDirectory)")
-        }
-
-        static func openFolder(_ workspace: WorkspaceConfig) -> NSUserInterfaceItemIdentifier {
-            NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.normalizedLocalDirectory)")
-        }
-
-    }
-
-    func buildRootMenu() -> NSMenu {
+// Builds the tray NSMenu purely from a MenuSnapshot. All item identifiers and
+// titles are part of the frozen XCUITest contract; do not rename them.
+enum AppMenuBuilder {
+    static func build(_ snapshot: MenuSnapshot, actions: MenuActions) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        if controller.workspaceConfigs.isEmpty {
-            let emptyItem = NSMenuItem(title: "No folders configured", action: nil, keyEquivalent: "")
-            emptyItem.isEnabled = false
-            menu.addItem(emptyItem)
+        if snapshot.isEmpty {
+            let empty = NSMenuItem(title: "No folders configured", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
         } else {
-            let runningWorkspaces = controller.workspaceConfigs
-                .filter { controller.isBusy($0) }
-                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-
-            for workspace in runningWorkspaces {
-                let label = controller.activeOperationLabel(for: workspace) ?? "In progress"
-                let progressItem = NSMenuItem(
-                    title: "\(workspace.displayName) - \(label)",
-                    action: #selector(AppController.handleOpenActiveProgress(_:)),
-                    keyEquivalent: "",
-                )
-                progressItem.target = controller
-                progressItem.representedObject = workspace.id.uuidString
-                progressItem.identifier = MenuItemID.progress(workspace)
-                progressItem.image = NSImage(
+            for row in snapshot.running {
+                let item = NSMenuItem(
+                    title: row.title, action: #selector(MenuActions.openActiveProgress(_:)), keyEquivalent: "")
+                item.target = actions
+                item.representedObject = row.id.uuidString
+                item.identifier = NSUserInterfaceItemIdentifier("workspace.progress.\(row.localPath)")
+                item.image = NSImage(
                     systemSymbolName: "arrow.trianglehead.2.clockwise.circle.fill",
-                    accessibilityDescription: "Operation in progress",
-                )
-                menu.addItem(progressItem)
+                    accessibilityDescription: "Operation in progress")
+                menu.addItem(item)
             }
+            if !snapshot.running.isEmpty { menu.addItem(.separator()) }
 
-            if !runningWorkspaces.isEmpty {
-                menu.addItem(.separator())
-            }
-
-            let workspaces = controller.workspaceConfigs.sorted(by: {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-            })
-            if workspaces.count == 1, let workspace = workspaces.first {
-                appendWorkspaceItems(for: workspace, to: menu)
+            if snapshot.isSingle, let workspace = snapshot.workspaces.first {
+                appendWorkspaceItems(workspace, to: menu, actions: actions)
                 menu.addItem(.separator())
             } else {
-                for workspace in workspaces {
-                    let item = NSMenuItem(
-                        title: workspace.displayName,
-                        action: nil,
-                        keyEquivalent: ""
-                    )
-                    item.identifier = MenuItemID.workspace(workspace)
-                    item.submenu = buildWorkspaceMenu(for: workspace)
+                for workspace in snapshot.workspaces {
+                    let item = NSMenuItem(title: workspace.displayName, action: nil, keyEquivalent: "")
+                    item.identifier = NSUserInterfaceItemIdentifier("workspace.menu.\(workspace.localPath)")
+                    let submenu = NSMenu(title: workspace.displayName)
+                    submenu.autoenablesItems = false
+                    appendWorkspaceItems(workspace, to: submenu, actions: actions)
+                    item.submenu = submenu
                     menu.addItem(item)
                 }
             }
-
         }
 
-        let manageItem = NSMenuItem(
-            title: "Settings",
-            action: #selector(AppController.handleOpenPreferences),
-            keyEquivalent: ",",
-        )
-        manageItem.target = controller
-        menu.addItem(manageItem)
-
+        let settings = NSMenuItem(
+            title: "Settings", action: #selector(MenuActions.openPreferences), keyEquivalent: ",")
+        settings.target = actions
+        menu.addItem(settings)
         menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(
-            title: "Quit Cling Sync",
-            action: #selector(AppController.handleQuit),
-            keyEquivalent: "q",
-        )
-        quitItem.target = controller
-        menu.addItem(quitItem)
-
+        let quit = NSMenuItem(title: "Quit Cling Sync", action: #selector(MenuActions.quit), keyEquivalent: "q")
+        quit.target = actions
+        menu.addItem(quit)
         return menu
     }
 
-    func buildWorkspaceMenu(for workspace: WorkspaceConfig) -> NSMenu {
-        let menu = NSMenu(title: workspace.displayName)
-        menu.autoenablesItems = false
-
-        appendWorkspaceItems(for: workspace, to: menu)
-        return menu
-    }
-
-    private func appendWorkspaceItems(for workspace: WorkspaceConfig, to menu: NSMenu) {
+    private static func appendWorkspaceItems(
+        _ workspace: MenuSnapshot.WorkspaceMenu, to menu: NSMenu, actions: MenuActions
+    ) {
         let pathItem = NSMenuItem(title: workspace.detailText, action: nil, keyEquivalent: "")
         pathItem.isEnabled = false
         menu.addItem(pathItem)
 
-        let lastDate = controller.lastSuccessfulMergeByPath[workspace.normalizedLocalDirectory]
-        let lastText =
-            lastDate.map { "Last Merge: \(AutoMergePolicy.coarseAge(Date().timeIntervalSince($0))) ago" }
-            ?? "Last Merge: never"
-        let lastItem = NSMenuItem(title: lastText, action: nil, keyEquivalent: "")
+        let lastItem = NSMenuItem(title: workspace.lastMergeText, action: nil, keyEquivalent: "")
         lastItem.isEnabled = false
-        lastItem.identifier = MenuItemID.last(workspace)
+        lastItem.identifier = NSUserInterfaceItemIdentifier("workspace.last.\(workspace.localPath)")
         menu.addItem(lastItem)
 
         menu.addItem(.separator())
 
-        // A running or failed item stays enabled to open its window. While any
-        // operation runs the others are disabled so they cannot overlap.
-        let mergeState = controller.mergeStatus(for: workspace)
-        let mergeRunning = mergeState.running
-        let mergeFailed = mergeState.completed && !mergeState.running && !mergeState.errorMessage.isEmpty
-        let statusRunning = controller.statusStatus(for: workspace).running
-        let syncRunning = controller.syncStatus(for: workspace).running
-        let idle = !controller.isBusy(workspace) && !controller.isSaving && !controller.isTesting
+        menu.addItem(
+            actionItem(
+                workspace.merge, id: workspace.id, identifier: "workspace.merge.\(workspace.localPath)",
+                selector: #selector(MenuActions.merge(_:)), actions: actions))
+        menu.addItem(
+            actionItem(
+                workspace.status, id: workspace.id, identifier: "workspace.status.\(workspace.localPath)",
+                selector: #selector(MenuActions.status(_:)), actions: actions))
+        menu.addItem(
+            actionItem(
+                workspace.sync, id: workspace.id, identifier: "workspace.sync.\(workspace.localPath)",
+                selector: #selector(MenuActions.sync(_:)), actions: actions))
 
-        let mergeTitle = mergeRunning ? "Merge (in progress)" : (mergeFailed ? "Merge (failed)" : "Merge")
-        let mergeItem = NSMenuItem(
-            title: mergeTitle,
-            action: #selector(AppController.handleMergeWorkspace(_:)),
-            keyEquivalent: "",
-        )
-        mergeItem.target = controller
-        mergeItem.representedObject = workspace.id.uuidString
-        mergeItem.isEnabled = mergeRunning || mergeFailed || idle
-        mergeItem.identifier = MenuItemID.merge(workspace)
-        menu.addItem(mergeItem)
+        let openItem = NSMenuItem(
+            title: "Open Local Folder", action: #selector(MenuActions.openFolder(_:)), keyEquivalent: "")
+        openItem.target = actions
+        openItem.representedObject = workspace.id.uuidString
+        openItem.identifier = NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.localPath)")
+        menu.addItem(openItem)
+    }
 
-        let statusItem = NSMenuItem(
-            title: statusRunning ? "Status (in progress)" : "Status",
-            action: #selector(AppController.handleStatusWorkspace(_:)),
-            keyEquivalent: "",
-        )
-        statusItem.target = controller
-        statusItem.representedObject = workspace.id.uuidString
-        statusItem.isEnabled = statusRunning || idle
-        statusItem.identifier = MenuItemID.status(workspace)
-        menu.addItem(statusItem)
+    private static func actionItem(
+        _ state: MenuSnapshot.ItemState, id: UUID, identifier: String, selector: Selector, actions: MenuActions
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: state.title, action: selector, keyEquivalent: "")
+        item.target = actions
+        item.representedObject = id.uuidString
+        item.isEnabled = state.enabled
+        item.identifier = NSUserInterfaceItemIdentifier(identifier)
+        return item
+    }
+}
 
-        let hasSyncTargets = !controller.syncTargets(for: workspace).isEmpty
-        let syncItem = NSMenuItem(
-            title: syncRunning ? "Sync Repository (in progress)" : "Sync Repository",
-            action: #selector(AppController.handleSyncWorkspace(_:)),
-            keyEquivalent: "",
-        )
-        syncItem.target = controller
-        syncItem.representedObject = workspace.id.uuidString
-        syncItem.isEnabled = syncRunning || (hasSyncTargets && idle)
-        syncItem.identifier = MenuItemID.sync(workspace)
-        menu.addItem(syncItem)
+// Routes menu clicks into the store. A running-summary or operation click opens the
+// window or starts the op (the reducer decides); the rest map straight to events.
+@MainActor
+@objc
+final class MenuActions: NSObject {
+    private unowned let store: AppStore
 
-        let openFolderItem = NSMenuItem(
-            title: "Open Local Folder",
-            action: #selector(AppController.handleOpenWorkspaceFolder(_:)),
-            keyEquivalent: "",
-        )
-        openFolderItem.target = controller
-        openFolderItem.representedObject = workspace.id.uuidString
-        openFolderItem.identifier = MenuItemID.openFolder(workspace)
-        menu.addItem(openFolderItem)
+    init(store: AppStore) {
+        self.store = store
+        super.init()
+    }
+
+    private func workspaceID(_ sender: NSMenuItem) -> UUID? {
+        (sender.representedObject as? String).flatMap(UUID.init)
+    }
+
+    @objc func openActiveProgress(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender), let kind = store.state.workspace(id)?.runningKind else { return }
+        store.dispatch(.operationClicked(id: id, kind: kind))
+    }
+
+    @objc func merge(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender) else { return }
+        store.dispatch(.operationClicked(id: id, kind: .merge))
+    }
+
+    @objc func status(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender) else { return }
+        store.dispatch(.operationClicked(id: id, kind: .status))
+    }
+
+    @objc func sync(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender) else { return }
+        store.dispatch(.operationClicked(id: id, kind: .sync))
+    }
+
+    @objc func openFolder(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender) else { return }
+        store.dispatch(.openLocalFolderClicked(id: id))
+    }
+
+    @objc func openPreferences() {
+        store.dispatch(.openPreferencesClicked)
+    }
+
+    @objc func quit() {
+        store.dispatch(.quitClicked)
     }
 }

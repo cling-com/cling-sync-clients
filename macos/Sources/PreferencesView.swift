@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct PreferencesView: View {
-    @ObservedObject var controller: AppController
+    @ObservedObject var store: AppStore
 
     var body: some View {
-        TabView(selection: $controller.selectedSettingsTab) {
+        TabView(selection: tabBinding) {
             workspacesTab
                 .tabItem { Label("Workspaces", systemImage: "folder") }
                 .tag(0)
@@ -13,16 +13,12 @@ struct PreferencesView: View {
                 .tag(1)
         }
         .frame(minWidth: 820, minHeight: 480)
-        .onChange(of: controller.draftConfig.hostURL) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.localDirectory) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.repoPathPrefix) { _ in controller.handleDraftAccessChange() }
-        .onChange(of: controller.draftConfig.author) { _ in controller.handleDraftMetadataChange() }
     }
 
     private var workspacesTab: some View {
         HSplitView {
             workspaceListPane
-            if controller.selectedWorkspaceID != nil {
+            if store.state.selectedWorkspaceID != nil {
                 workspaceEditorPane
             }
         }
@@ -32,9 +28,8 @@ struct PreferencesView: View {
         Form {
             Section("Sync") {
                 LabeledContent("Sync workers") {
-                    Stepper(value: $controller.syncWorkers, in: 1...64) {
-                        Text("\(controller.syncWorkers)")
-                            .monospacedDigit()
+                    Stepper(value: syncWorkersBinding, in: 1...64) {
+                        Text("\(store.state.syncWorkers)").monospacedDigit()
                     }
                     .fixedSize()
                     .accessibilityIdentifier("syncWorkersStepper")
@@ -43,21 +38,18 @@ struct PreferencesView: View {
                     "Number of blocks copied in parallel when syncing a repository to a backup target. "
                         + "Higher values can speed up large syncs over a fast connection."
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Automatic Merge") {
                 LabeledContent("Automatically merge") {
-                    Picker("Automatically merge", selection: $controller.autoMergeIntervalHours) {
+                    Picker("Automatically merge", selection: autoMergeIntervalBinding) {
                         Text("Off").tag(0)
-                        ForEach(controller.autoMergeChoices, id: \.self) { hours in
-                            Text(controller.autoMergeIntervalLabel(hours)).tag(hours)
+                        ForEach(AutoMergePolicy.intervalChoices, id: \.self) { hours in
+                            Text(AutoMergePolicy.intervalLabel(hours)).tag(hours)
                         }
                     }
-                    .labelsHidden()
-                    .fixedSize()
+                    .labelsHidden().fixedSize()
                     .accessibilityIdentifier("autoMergeIntervalPicker")
                 }
                 Text(
@@ -67,55 +59,47 @@ struct PreferencesView: View {
                         + "merge window. A connection problem is retried more often without alerts, and the "
                         + "menu shows \"Merge (failed)\" so you can open the error."
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
-                Button("Schedule auto merge in 5s") {
-                    controller.scheduleAutoMergeSoon()
-                }
-                .accessibilityIdentifier("scheduleAutoMergeButton")
+                Button("Schedule auto merge in 5s") { store.scheduleAutoMergeSoon() }
+                    .accessibilityIdentifier("scheduleAutoMergeButton")
                 Text("Runs an automatic merge for every folder after a few seconds, to try it out on demand.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Health") {
                 LabeledContent("Warn if no merge for") {
-                    Picker("Warn if no merge for", selection: $controller.notifyStaleDays) {
+                    Picker("Warn if no merge for", selection: notifyStaleDaysBinding) {
                         Text("Off").tag(0)
-                        ForEach(controller.notifyStaleDayChoices, id: \.self) { days in
-                            Text(controller.staleDaysLabel(days)).tag(days)
+                        ForEach(AutoMergePolicy.staleDayChoices, id: \.self) { days in
+                            Text(AutoMergePolicy.staleDaysLabel(days)).tag(days)
                         }
                     }
-                    .labelsHidden()
-                    .fixedSize()
+                    .labelsHidden().fixedSize()
                     .accessibilityIdentifier("notifyStaleDaysPicker")
                 }
                 Text(
                     "Sends a notification when a folder has not merged successfully for this long, "
                         + "so a folder that silently stops working does not go unnoticed for days."
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
+                Button("Test reminder in 5s") { store.scheduleReminderSoon() }
+                    .accessibilityIdentifier("testReminderButton")
+                Text("Forces a reminder notification for every configured folder after a few seconds, to test it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
     }
 
     private var workspaceListPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Folders")
-                .font(.headline)
-                .padding(.bottom, 8)
+            Text("Folders").font(.headline).padding(.bottom, 8)
 
             List(selection: selectedWorkspaceBinding) {
-                ForEach(controller.workspaceConfigs) { workspace in
-                    WorkspaceRow(workspace: workspace)
-                        .tag(workspace.id)
+                ForEach(store.state.workspaces) { workspace in
+                    WorkspaceRow(config: workspace.config).tag(workspace.id)
                 }
             }
             .accessibilityIdentifier("workspaceList")
@@ -125,78 +109,72 @@ struct PreferencesView: View {
 
             HStack(spacing: 0) {
                 Button {
-                    controller.addWorkspace()
+                    store.dispatch(.addWorkspaceClicked)
                 } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "plus").frame(width: 24, height: 24)
                 }
                 .accessibilityIdentifier("addFolderButton")
                 .buttonStyle(.borderless)
 
                 Button {
-                    controller.removeSelectedWorkspace()
+                    if let id = store.state.selectedWorkspaceID { store.dispatch(.removeWorkspaceClicked(id: id)) }
                 } label: {
-                    Image(systemName: "minus")
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "minus").frame(width: 24, height: 24)
                 }
                 .accessibilityIdentifier("removeFolderButton")
                 .buttonStyle(.borderless)
-                .disabled(controller.selectedWorkspaceID == nil)
+                .disabled(store.state.selectedWorkspaceID == nil)
 
                 Spacer()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 8).padding(.vertical, 4)
         }
         .padding(18)
     }
 
     private var workspaceEditorPane: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Workspace")
-                .font(.headline)
+            Text("Workspace").font(.headline)
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow {
                     Text("Local Folder")
                     HStack {
-                        TextField("Local folder", text: $controller.draftConfig.localDirectory)
+                        TextField("Local folder", text: accessBinding(\.localDirectory))
                             .textFieldStyle(.roundedBorder)
                             .accessibilityIdentifier("localFolderField")
-                        Button("Browse...") {
-                            controller.chooseLocalDirectory()
-                        }
-                        .accessibilityIdentifier("browseFolderButton")
+                        Button("Browse...") { store.dispatch(.chooseLocalDirectoryClicked) }
+                            .accessibilityIdentifier("browseFolderButton")
                     }
                 }
                 GridRow {
                     Text("Repository")
-                    TextField("Repository URL or path", text: $controller.draftConfig.hostURL)
+                    TextField("Repository URL or path", text: accessBinding(\.hostURL))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("serverURLField")
                 }
                 GridRow {
                     Text("Remote Path")
-                    TextField("Remote path prefix", text: $controller.draftConfig.repoPathPrefix)
+                    TextField("Remote path prefix", text: accessBinding(\.repoPathPrefix))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("remotePathField")
                 }
                 GridRow {
                     Text("Author")
-                    TextField("Commit author", text: $controller.draftConfig.author)
+                    TextField("Commit author", text: authorBinding)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("authorField")
                 }
             }
 
-            if !controller.errorMessage.isEmpty {
-                Text(controller.errorMessage)
+            if !store.state.errorMessage.isEmpty {
+                Text(store.state.errorMessage)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("preferencesErrorMessage")
             }
 
-            if let workspace = controller.selectedSavedWorkspace, controller.isWorkspaceConfigured(workspace) {
+            if let workspace = store.state.selectedSavedWorkspace, workspace.isConfigured {
                 Divider()
                 syncTargetsSection(for: workspace)
             }
@@ -205,55 +183,38 @@ struct PreferencesView: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    controller.closePreferences()
-                }
-                Button(controller.isTesting ? "Testing..." : "Test") {
-                    controller.testDraft()
-                }
-                .accessibilityIdentifier("testWorkspaceButton")
-                .buttonStyle(.borderedProminent)
-                .tint(controller.draftNeedsTest ? .blue : .gray)
-                .disabled(!controller.canTestDraft)
-                Button(controller.isSaving ? "Saving..." : "Save") {
-                    controller.saveDraft()
-                }
-                .accessibilityIdentifier("saveWorkspaceButton")
-                .keyboardShortcut(.defaultAction)
-                .disabled(!controller.canSaveDraft)
+                Button("Cancel") { store.dispatch(.closePreferencesClicked) }
+                Button(store.state.isTesting ? "Testing..." : "Test") { store.dispatch(.testDraftClicked) }
+                    .accessibilityIdentifier("testWorkspaceButton")
+                    .buttonStyle(.borderedProminent)
+                    .tint(store.state.draftNeedsTest ? .blue : .gray)
+                    .disabled(!store.state.canTestDraft)
+                Button("Save") { store.dispatch(.saveDraftClicked(now: Date())) }
+                    .accessibilityIdentifier("saveWorkspaceButton")
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!store.state.canSaveDraft)
             }
         }
         .padding(18)
         .frame(minWidth: 560)
     }
 
-    private var selectedWorkspaceBinding: Binding<UUID?> {
-        Binding(get: { controller.selectedWorkspaceID }, set: { controller.selectWorkspace($0) })
-    }
-
-    private func syncTargetsSection(for workspace: WorkspaceConfig) -> some View {
+    private func syncTargetsSection(for workspace: WorkspaceState) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sync Targets")
-                .font(.headline)
+            Text("Sync Targets").font(.headline)
 
             Text(
                 "Mirror this workspace's repository to one or more backup repositories. "
                     + "Use \"Sync Repository\" from the menu bar to copy it to every target. "
                     + "A target can be a local folder or an s3+https URL that includes its encrypted credentials."
             )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
-            let targets = controller.syncTargets(for: workspace)
             List(selection: selectedSyncTargetBinding) {
-                ForEach(targets) { target in
+                ForEach(workspace.syncTargets ?? []) { target in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(target.name)
-                        Text(target.displayURI)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        Text(target.displayURI).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .tag(target.name)
                 }
@@ -263,56 +224,92 @@ struct PreferencesView: View {
 
             HStack(spacing: 0) {
                 Button {
-                    controller.beginAddSyncTarget()
+                    store.dispatch(.addSyncTargetClicked)
                 } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "plus").frame(width: 24, height: 24)
                 }
                 .accessibilityIdentifier("addSyncTargetButton")
                 .buttonStyle(.borderless)
 
                 Button {
-                    controller.removeSelectedSyncTarget()
+                    store.dispatch(.removeSyncTargetClicked)
                 } label: {
-                    Image(systemName: "minus")
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "minus").frame(width: 24, height: 24)
                 }
                 .accessibilityIdentifier("removeSyncTargetButton")
                 .buttonStyle(.borderless)
-                .disabled(controller.selectedSyncTargetName == nil)
+                .disabled(store.state.selectedSyncTargetName == nil)
 
                 Spacer()
             }
         }
     }
 
-    private var selectedSyncTargetBinding: Binding<String?> {
-        Binding(
-            get: { controller.selectedSyncTargetName },
-            set: { controller.selectedSyncTargetName = $0 }
-        )
+    // MARK: - Bindings
+
+    private var tabBinding: Binding<Int> {
+        Binding(get: { store.state.selectedSettingsTab }, set: { store.dispatch(.settingsTabSelected($0)) })
     }
 
+    private var selectedWorkspaceBinding: Binding<UUID?> {
+        Binding(get: { store.state.selectedWorkspaceID }, set: { store.dispatch(.workspaceSelected(id: $0)) })
+    }
+
+    private var selectedSyncTargetBinding: Binding<String?> {
+        Binding(get: { store.state.selectedSyncTargetName }, set: { store.dispatch(.syncTargetSelected(name: $0)) })
+    }
+
+    private var syncWorkersBinding: Binding<Int> {
+        Binding(get: { store.state.syncWorkers }, set: { store.dispatch(.syncWorkersChanged($0)) })
+    }
+
+    private var autoMergeIntervalBinding: Binding<Int> {
+        Binding(get: { store.state.autoMergeIntervalHours }, set: { store.dispatch(.autoMergeIntervalChanged($0)) })
+    }
+
+    private var notifyStaleDaysBinding: Binding<Int> {
+        Binding(get: { store.state.notifyStaleDays }, set: { store.dispatch(.notifyStaleDaysChanged($0)) })
+    }
+
+    // Host/folder/prefix edits invalidate a prior test; author edits do too but via
+    // a different event (matching the old handleDraftAccessChange/MetadataChange split).
+    private func accessBinding(_ keyPath: WritableKeyPath<WorkspaceConfig, String>) -> Binding<String> {
+        Binding(
+            get: { store.state.draftConfig[keyPath: keyPath] },
+            set: {
+                var draft = store.state.draftConfig
+                draft[keyPath: keyPath] = $0
+                store.dispatch(.draftAccessEdited(draft, now: Date()))
+            })
+    }
+
+    private var authorBinding: Binding<String> {
+        Binding(
+            get: { store.state.draftConfig.author },
+            set: {
+                var draft = store.state.draftConfig
+                draft.author = $0
+                store.dispatch(.draftMetadataEdited(draft, now: Date()))
+            })
+    }
 }
 
 private struct WorkspaceRow: View {
-    let workspace: WorkspaceConfig
+    let config: WorkspaceConfig
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(workspace.displayName)
-                if !workspace.isComplete {
-                    Text("Invalid")
-                        .foregroundStyle(.red)
-                } else if !workspace.isAccessVerified {
-                    Text("Needs Test")
-                        .foregroundStyle(.orange)
+                Text(config.displayName)
+                if !config.isComplete {
+                    Text("Invalid").foregroundStyle(.red)
+                } else if !config.isAccessVerified {
+                    Text("Needs Test").foregroundStyle(.orange)
                 }
             }
-            Text(workspace.detailText)
+            Text(config.detailText)
                 .font(.caption)
-                .foregroundColor(workspace.isComplete ? .secondary : .red)
+                .foregroundColor(config.isComplete ? .secondary : .red)
                 .lineLimit(1)
         }
     }

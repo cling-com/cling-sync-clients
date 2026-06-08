@@ -162,12 +162,4 @@ struct WorkspaceConfig: Codable, Identifiable, Equatable {
         let path = normalizedLocalDirectory
         return path.isEmpty ? normalizedHostURL : path
     }
-
-    var lastMergeDate: Date? {
-        let path = (normalizedLocalDirectory as NSString).appendingPathComponent(".cling/repository/refs/head")
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
-            return nil
-        }
-        return attrs[.modificationDate] as? Date
-    }
 }

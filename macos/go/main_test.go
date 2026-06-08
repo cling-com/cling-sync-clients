@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -319,6 +321,7 @@ func TestMacOSXCUITest(t *testing.T) { //nolint:paralleltest
 			hostURL:        hostURL,
 			secondHostURL:  embeddedURL,
 			syncTargetURL:  syncTargetURL,
+			controlURL:     "",
 			passphrase:     repo.Passphrase,
 			localDir:       localDir,
 			secondLocalDir: secondLocalDir,
@@ -379,6 +382,7 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 		hostURL:        "http://unused.invalid",
 		secondHostURL:  "",
 		syncTargetURL:  "",
+		controlURL:     "",
 		passphrase:     "testpassphrase",
 		localDir:       localDir,
 		secondLocalDir: filepath.Join(parentDir, "workspace-second-unused"),
@@ -455,6 +459,112 @@ func TestMacOSXCUITestCreateNewRepository(t *testing.T) { //nolint:paralleltest
 	}, repo.RevisionSnapshotFileInfos(head, nil))
 }
 
+// TestMacOSXCUITestAutoMergeError drives a background auto-merge against a
+// repository whose S3 server rejects writes, asserts the menu surfaces
+// "Merge (failed)" without recording a success, then clears the fault and
+// asserts the next auto-merge recovers and commits the seeded local file.
+func TestMacOSXCUITestAutoMergeError(t *testing.T) { //nolint:paralleltest
+	assert := lib.NewAssert(t)
+	repoFS := td.NewRealFS(t)
+	repo := td.NewTestRepository(t, repoFS)
+	commitFileToRepository(t, repo.Repository, "remote.txt", "hello from remote", "remote author", "seed remote file")
+	initialHead := repo.Head()
+
+	hostURL, controlURL, shutdown := serveFaultRepository(t, repo.Storage)
+	defer shutdown()
+	defaultsSuite := "com.cling.ClingSyncMac.ui.automergeerror." + time.Now().Format("20060102150405.000000000")
+	defer cleanupDefaultsSuite(t, defaultsSuite)
+
+	// Embed the credentials so the UI skips the S3 prompt and the test focuses on
+	// the merge error/recovery path.
+	embeddedURL := embedS3Credentials(t, hostURL, repo.Passphrase)
+
+	// A short /tmp dir keeps the workspace.merge.<path> XCUIElement identifier
+	// under the 128-char cap (the default t.TempDir() prefix is too long).
+	parentDir, err := os.MkdirTemp("/tmp", "ame-") //nolint:usetesting
+	assert.NoError(err)
+	t.Cleanup(func() { _ = os.RemoveAll(parentDir) })
+	localDir := filepath.Join(parentDir, "ws")
+	assert.NoError(os.MkdirAll(localDir, 0o750))
+	// Seed a local change so the merge must push to the write-failing repository.
+	const localFile = "local-err.txt"
+	const localContent = "local change"
+	assert.NoError(os.WriteFile(filepath.Join(localDir, localFile), []byte(localContent), 0o600))
+
+	runXCUITest(
+		t,
+		uiTestConfig{
+			defaultsSuite:  defaultsSuite,
+			hostURL:        embeddedURL,
+			secondHostURL:  "",
+			syncTargetURL:  "",
+			controlURL:     controlURL,
+			passphrase:     repo.Passphrase,
+			localDir:       localDir,
+			secondLocalDir: filepath.Join(parentDir, "unused-second"),
+			author:         "Mac UI Test User",
+			s3AccessKeyID:  "",
+			s3SecretAccess: "",
+			newRepoPath:    "",
+		},
+		"testAutoMergeErrorThenRecovers",
+	)
+
+	// The recovery auto-merge committed the seeded local file alongside the
+	// pre-existing remote file.
+	newHead := repo.Head()
+	assert.NotEqual(initialHead, newHead)
+	assert.Equal([]lib.TestFileInfo{
+		{Path: localFile, Mode: 0o600, Size: len(localContent), Content: localContent},
+		{Path: "remote.txt", Mode: 0o600, Size: len("hello from remote"), Content: "hello from remote"},
+	}, repo.RevisionSnapshotFileInfos(newHead, nil))
+}
+
+// TestMacOSXCUITestMutualExclusion runs a slow (latency-injected) background
+// merge and asserts that while it runs the workspace's other operations are
+// disabled in the menu, then re-enable once it finishes.
+func TestMacOSXCUITestMutualExclusion(t *testing.T) { //nolint:paralleltest
+	assert := lib.NewAssert(t)
+	repoFS := td.NewRealFS(t)
+	repo := td.NewTestRepository(t, repoFS)
+	commitFileToRepository(t, repo.Repository, "remote.txt", "hello from remote", "remote author", "seed remote file")
+
+	hostURL, controlURL, shutdown := serveFaultRepository(t, repo.Storage)
+	defer shutdown()
+	defaultsSuite := "com.cling.ClingSyncMac.ui.mutualexclusion." + time.Now().Format("20060102150405.000000000")
+	defer cleanupDefaultsSuite(t, defaultsSuite)
+
+	embeddedURL := embedS3Credentials(t, hostURL, repo.Passphrase)
+
+	parentDir, err := os.MkdirTemp("/tmp", "mex-") //nolint:usetesting
+	assert.NoError(err)
+	t.Cleanup(func() { _ = os.RemoveAll(parentDir) })
+	localDir := filepath.Join(parentDir, "ws")
+	assert.NoError(os.MkdirAll(localDir, 0o750))
+	// A local change makes the merge push (latency-delayed) so it stays running
+	// long enough to inspect the menu.
+	assert.NoError(os.WriteFile(filepath.Join(localDir, "local-mex.txt"), []byte("local change"), 0o600))
+
+	runXCUITest(
+		t,
+		uiTestConfig{
+			defaultsSuite:  defaultsSuite,
+			hostURL:        embeddedURL,
+			secondHostURL:  "",
+			syncTargetURL:  "",
+			controlURL:     controlURL,
+			passphrase:     repo.Passphrase,
+			localDir:       localDir,
+			secondLocalDir: filepath.Join(parentDir, "unused-second"),
+			author:         "Mac UI Test User",
+			s3AccessKeyID:  "",
+			s3SecretAccess: "",
+			newRepoPath:    "",
+		},
+		"testRunningMergeDisablesSiblings",
+	)
+}
+
 func serveRepository(t *testing.T, storage *lib.FileStorage) (string, func()) {
 	t.Helper()
 	s3Server := clingsynchttp.NewS3StorageServer(storage, testS3Region, testS3AccessKeyID, testS3SecretAccessKey)
@@ -488,11 +598,85 @@ func serveBackupRepository(t *testing.T, srcStorage *lib.FileStorage) (string, *
 	return hostURL, backupStorage, shutdown
 }
 
+// serveFaultRepository serves a repository over an S3 server that can inject
+// write failures or latency, toggled at runtime over /__test/{reset,
+// fail-writes?on=,latency?ms=} on the returned control URL (same port, plain
+// http). It returns the s3+http repository URL and the http control URL.
+func serveFaultRepository(t *testing.T, storage *lib.FileStorage) (string, string, func()) {
+	t.Helper()
+	s3Server := clingsynchttp.NewS3StorageServer(storage, testS3Region, testS3AccessKeyID, testS3SecretAccessKey)
+	mux := http.NewServeMux()
+	s3Server.RegisterRoutes(mux)
+	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := &http.Server{Handler: (&faultControl{}).wrap(mux)} //nolint:gosec,exhaustruct
+	go server.Serve(listener)                                    //nolint:errcheck
+	base := listener.Addr().String()
+	return "s3+http://" + base, "http://" + base, func() {
+		_ = server.Close()
+	}
+}
+
+// faultControl injects write failures / latency into an S3 server, toggled at
+// runtime over its /__test/... control endpoints. The XCUITest reaches these via
+// a raw socket because App Transport Security blocks cleartext-to-localhost.
+type faultControl struct {
+	mu         sync.Mutex
+	failWrites bool
+	latency    time.Duration
+}
+
+func (c *faultControl) read() (bool, time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failWrites, c.latency
+}
+
+func (c *faultControl) handleControl(w http.ResponseWriter, r *http.Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch r.URL.Path {
+	case "/__test/reset":
+		c.failWrites = false
+		c.latency = 0
+	case "/__test/fail-writes":
+		c.failWrites = r.URL.Query().Get("on") == "true"
+	case "/__test/latency":
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		c.latency = time.Duration(ms) * time.Millisecond
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (c *faultControl) wrap(inner http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/__test/") {
+			c.handleControl(w, r)
+			return
+		}
+		failWrites, latency := c.read()
+		if latency > 0 {
+			time.Sleep(latency)
+		}
+		if failWrites && (r.Method == http.MethodPut || r.Method == http.MethodPost) {
+			http.Error(w, "injected write failure", http.StatusInternalServerError)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+}
+
 type uiTestConfig struct {
 	defaultsSuite  string
 	hostURL        string
 	secondHostURL  string
 	syncTargetURL  string
+	controlURL     string
 	passphrase     string
 	localDir       string
 	secondLocalDir string
@@ -593,6 +777,7 @@ func writeXCUITestConfig(t *testing.T, cfg uiTestConfig) {
 		ServerURL       string `json:"serverUrl"`
 		SecondServerURL string `json:"secondServerUrl,omitempty"`
 		SyncTargetURL   string `json:"syncTargetUrl,omitempty"`
+		ControlURL      string `json:"controlUrl,omitempty"`
 		S3AccessKeyID   string `json:"s3AccessKeyId,omitempty"`
 		S3AccessKey     string `json:"s3AccessKey,omitempty"`
 		Passphrase      string `json:"passphrase"`
@@ -605,6 +790,7 @@ func writeXCUITestConfig(t *testing.T, cfg uiTestConfig) {
 		ServerURL:       cfg.hostURL,
 		SecondServerURL: cfg.secondHostURL,
 		SyncTargetURL:   cfg.syncTargetURL,
+		ControlURL:      cfg.controlURL,
 		S3AccessKeyID:   cfg.s3AccessKeyID,
 		S3AccessKey:     cfg.s3SecretAccess,
 		Passphrase:      cfg.passphrase,

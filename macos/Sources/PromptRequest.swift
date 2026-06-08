@@ -1,0 +1,241 @@
+import AppKit
+
+struct PassphrasePromptResult: Equatable {
+    let passphrase: String
+    let rememberInKeychain: Bool
+}
+
+struct S3CredentialsResult: Equatable {
+    let accessKeyId: String
+    let accessKey: String
+}
+
+struct SyncTargetResult: Equatable {
+    let name: String
+    let uri: String
+}
+
+// The modal-prompt seam. Keeping prompts behind a protocol (rather than on the
+// event bus) lets the store await an answer inline while staying testable: a
+// ScriptedPrompter answers without UI.
+@MainActor
+protocol Prompter {
+    func passphrase(workspaceName: String) async -> PassphrasePromptResult?
+    func newRepositoryPassphrase(at path: String) async -> String?
+    func confirmCreateRepository(at path: String) async -> Bool
+    func s3Credentials(hostURL: String) async -> S3CredentialsResult?
+    func syncTarget() async -> SyncTargetResult?
+    func alert(title: String, message: String) async
+}
+
+// The real prompts: synchronous NSAlert.runModal wrapped as async. Every
+// accessibility identifier and button title is preserved verbatim because the
+// XCUITests drive these.
+@MainActor
+final class AppKitPrompter: Prompter {
+    func passphrase(workspaceName: String) async -> PassphrasePromptResult? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Enter Passphrase"
+            alert.informativeText = "Cling Sync needs the repository passphrase for \(workspaceName)."
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 56))
+            let stack = NSStackView(frame: container.bounds)
+            stack.orientation = .vertical
+            stack.spacing = 8
+            stack.alignment = .leading
+            stack.autoresizingMask = [.width, .height]
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            field.placeholderString = "Passphrase"
+            field.setAccessibilityIdentifier("passphrasePromptField")
+            let checkbox = NSButton(checkboxWithTitle: "Save access in macOS Keychain", target: nil, action: nil)
+            checkbox.setAccessibilityIdentifier("passphrasePromptRemember")
+            stack.addArrangedSubview(field)
+            stack.addArrangedSubview(checkbox)
+            container.addSubview(stack)
+            alert.accessoryView = container
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = field
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(field)
+                field.selectText(nil)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let passphrase = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !passphrase.isEmpty {
+                return PassphrasePromptResult(passphrase: passphrase, rememberInKeychain: checkbox.state == .on)
+            }
+        }
+    }
+
+    func newRepositoryPassphrase(at path: String) async -> String? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Set Repository Passphrase"
+            alert.informativeText =
+                "Choose a passphrase to protect the new repository at \(path). "
+                + "This passphrase cannot be recovered if lost."
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            field.placeholderString = "Passphrase"
+            field.setAccessibilityIdentifier("newRepositoryPassphraseField")
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Create")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = field
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(field)
+                field.selectText(nil)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let passphrase = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !passphrase.isEmpty {
+                return passphrase
+            }
+        }
+    }
+
+    func confirmCreateRepository(at path: String) async -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Create New Repository?"
+        alert.informativeText = "No repository was found at \(path). Do you want to create a new repository there?"
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func s3Credentials(hostURL: String) async -> S3CredentialsResult? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "S3 Credentials"
+            alert.informativeText =
+                "Enter the S3 access key for \(hostURL). "
+                + "The credentials are encrypted with your repository passphrase before being stored."
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 60))
+            let stack = NSStackView(frame: container.bounds)
+            stack.orientation = .vertical
+            stack.spacing = 8
+            stack.alignment = .leading
+            stack.autoresizingMask = [.width, .height]
+            let keyIdField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            keyIdField.placeholderString = "S3 Key ID"
+            keyIdField.setAccessibilityIdentifier("s3KeyIdField")
+            let accessKeyField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            accessKeyField.placeholderString = "S3 Access Key"
+            accessKeyField.setAccessibilityIdentifier("s3AccessKeyField")
+            stack.addArrangedSubview(keyIdField)
+            stack.addArrangedSubview(accessKeyField)
+            container.addSubview(stack)
+            alert.accessoryView = container
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = keyIdField
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(keyIdField)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let accessKeyId = keyIdField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let accessKey = accessKeyField.stringValue
+            if !accessKeyId.isEmpty && !accessKey.isEmpty {
+                return S3CredentialsResult(accessKeyId: accessKeyId, accessKey: accessKey)
+            }
+        }
+    }
+
+    func syncTarget() async -> SyncTargetResult? {
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Add Sync Target"
+            alert.informativeText =
+                "Enter a name and the repository to mirror to. The repository can be a local folder "
+                + "path or an s3+http(s) URL that includes its encrypted credentials."
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 56))
+            let stack = NSStackView(frame: container.bounds)
+            stack.orientation = .vertical
+            stack.spacing = 8
+            stack.alignment = .leading
+            stack.autoresizingMask = [.width, .height]
+            let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+            nameField.placeholderString = "Name (letters, digits, '-')"
+            nameField.setAccessibilityIdentifier("syncTargetNameField")
+            let repoField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+            repoField.placeholderString = "Folder path or s3+https://... URL"
+            repoField.setAccessibilityIdentifier("syncTargetRepositoryField")
+            stack.addArrangedSubview(nameField)
+            stack.addArrangedSubview(repoField)
+            container.addSubview(stack)
+            alert.accessoryView = container
+            alert.addButton(withTitle: "Add")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.window.initialFirstResponder = nameField
+            DispatchQueue.main.async {
+                alert.window.makeFirstResponder(nameField)
+            }
+            if alert.runModal() != .alertFirstButtonReturn {
+                return nil
+            }
+            let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let uri = repoField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty && !uri.isEmpty {
+                return SyncTargetResult(name: name, uri: uri)
+            }
+        }
+    }
+
+    func alert(title: String, message: String) async {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
+// A test double that answers from queued results and records alerts.
+@MainActor
+final class ScriptedPrompter: Prompter {
+    var passphraseResults: [PassphrasePromptResult?] = []
+    var newRepositoryPassphraseResults: [String?] = []
+    var confirmCreateResults: [Bool] = []
+    var s3CredentialsResults: [S3CredentialsResult?] = []
+    var syncTargetResults: [SyncTargetResult?] = []
+
+    private(set) var passphraseRequestCount = 0
+    private(set) var recordedAlerts: [String] = []
+
+    func passphrase(workspaceName: String) async -> PassphrasePromptResult? {
+        passphraseRequestCount += 1
+        return passphraseResults.isEmpty ? nil : passphraseResults.removeFirst()
+    }
+
+    func newRepositoryPassphrase(at path: String) async -> String? {
+        newRepositoryPassphraseResults.isEmpty ? nil : newRepositoryPassphraseResults.removeFirst()
+    }
+
+    func confirmCreateRepository(at path: String) async -> Bool {
+        confirmCreateResults.isEmpty ? false : confirmCreateResults.removeFirst()
+    }
+
+    func s3Credentials(hostURL: String) async -> S3CredentialsResult? {
+        s3CredentialsResults.isEmpty ? nil : s3CredentialsResults.removeFirst()
+    }
+
+    func syncTarget() async -> SyncTargetResult? {
+        syncTargetResults.isEmpty ? nil : syncTargetResults.removeFirst()
+    }
+
+    func alert(title: String, message: String) async {
+        recordedAlerts.append("\(title): \(message)")
+    }
+}

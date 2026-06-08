@@ -228,13 +228,18 @@ lint() {
 
 unit_test() {
     echo ">>> Running Swift unit tests"
-    out=$(mktemp -d)
-    swiftc -O \
-        "$root/Sources/AutoMergePolicy.swift" \
-        "$root/UnitTests/AutoMergePolicyTests.swift" \
-        -o "$out/unittests"
-    "$out/unittests"
-    rm -rf "$out"
+    run_xcodebuild xcodebuild-unit.log \
+        -project "$xcode_project" \
+        -scheme "$xcode_scheme" \
+        -configuration Debug \
+        -destination 'platform=macOS' \
+        -derivedDataPath "$derived_data_path" \
+        -only-testing:ClingSyncMacTests \
+        CODE_SIGNING_ALLOWED=NO \
+        CODE_SIGN_IDENTITY=- \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGN_ENTITLEMENTS= \
+        test
 }
 
 integration_test() {
@@ -474,10 +479,11 @@ case "$cmd" in
                 --remote) run_remote=1 ;;
             esac
         done
-        unit_test
         if [ -n "$run_remote" ]; then
+            # The runner runs both unit and integration via ./build.sh macos test.
             remote_integration_test
         else
+            unit_test
             integration_test
         fi
         ;;
@@ -488,13 +494,14 @@ case "$cmd" in
         build_tools
         fmt
         lint
-        unit_test
         load_env
         if [ -z "${REMOTE_RUNNER_HOST:-}" ]; then
-            echo ">>> REMOTE_RUNNER_HOST not set, running integration tests locally"
+            echo ">>> REMOTE_RUNNER_HOST not set, running tests locally"
+            unit_test
             integration_test
         elif ! ping -c 1 -t 2 "$REMOTE_RUNNER_HOST" >/dev/null 2>&1; then
-            echo ">>> Remote runner $REMOTE_RUNNER_HOST is not reachable, running integration tests locally"
+            echo ">>> Remote runner $REMOTE_RUNNER_HOST is not reachable, running tests locally"
+            unit_test
             integration_test
         else
             remote_integration_test

@@ -33,6 +33,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A10000362F70000100000001"
+               BuildableName = "ClingSyncMacTests.xctest"
+               BlueprintName = "ClingSyncMacTests"
+               ReferencedContainer = "container:ClingSyncMac.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "A100000E2F70000100000001"
                BuildableName = "ClingSyncMacUITests.xctest"
                BlueprintName = "ClingSyncMacUITests"

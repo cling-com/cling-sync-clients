@@ -28,4 +28,20 @@ enum AutoMergePolicy {
         }
         return now.timeIntervalSince(lastSuccessOrStart) >= Double(days) * secondsPerDay
     }
+
+    // Picker choices + labels for the Options tab.
+    static let intervalChoices = [1, 2, 3, 4, 6, 8, 12, 24]
+    static let staleDayChoices = [1, 2, 3, 7, 14, 30]
+
+    static func intervalLabel(_ hours: Int) -> String {
+        switch hours {
+        case 0: return "Off"
+        case 1: return "Every hour"
+        default: return "Every \(hours) hours"
+        }
+    }
+
+    static func staleDaysLabel(_ days: Int) -> String {
+        days == 1 ? "1 day" : "\(days) days"
+    }
 }

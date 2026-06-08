@@ -7,7 +7,7 @@ enum Main {
         try? Bridge.initialize(cacheDir: cacheDir.path)
 
         let app = NSApplication.shared
-        let delegate = AppController()
+        let delegate = AppDelegate()
         app.delegate = delegate
         app.run()
     }
