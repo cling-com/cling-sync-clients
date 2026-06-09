@@ -102,6 +102,11 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 			return errorResponse("Failed to marshal response: " + err.Error())
 		}
 		return string(jsonBytes)
+	case "ensureFileHashesAtHead":
+		if err := EnsureFileHashesAtHead(); err != nil {
+			return errorResponseFor(err)
+		}
+		return successResponse()
 	case "uploadFile":
 		var params struct {
 			LocalFilePath string `json:"localFilePath"`

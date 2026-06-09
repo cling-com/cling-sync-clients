@@ -72,8 +72,10 @@ object UploadReducer {
     ): MainUiState =
         idle(state).copy(
             fileStatus = markUnfinished(state, FileStatus.Failed("Error")),
+            // The share surfaces a failure through its own outcome dialog (which returns
+            // to the main app), so it must not also raise the error overlay.
             overlay =
-                if (state.overlay is Overlay.None) {
+                if (!state.shareMode && state.overlay is Overlay.None) {
                     Overlay.Error("Upload Failed", update.error)
                 } else {
                     state.overlay

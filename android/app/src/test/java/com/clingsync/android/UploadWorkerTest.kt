@@ -93,6 +93,8 @@ class UploadWorkerTest {
         author: String = "Tester",
         includeFilePaths: Boolean = true,
         includeAuthor: Boolean = true,
+        repoPathPrefix: String? = null,
+        sourceDir: String? = null,
     ): ListenableWorker.Result {
         val data = mutableMapOf<String, Any>()
         if (includeFilePaths) {
@@ -101,6 +103,8 @@ class UploadWorkerTest {
             data[UploadWorker.KEY_FILE_PATHS_FILE] = pathsFile.absolutePath
         }
         if (includeAuthor) data[UploadWorker.KEY_AUTHOR] = author
+        if (repoPathPrefix != null) data[UploadWorker.KEY_REPO_PATH_PREFIX] = repoPathPrefix
+        if (sourceDir != null) data[UploadWorker.KEY_SOURCE_DIR] = sourceDir
         val worker =
             TestListenableWorkerBuilder<UploadWorker>(context)
                 .setInputData(workDataOf(*data.map { it.key to it.value }.toTypedArray()))
@@ -174,6 +178,31 @@ class UploadWorkerTest {
         assertTrue(result is ListenableWorker.Result.Success)
         // No new revision entries -> the worker reports an empty revision id.
         assertEquals("", (result as ListenableWorker.Result.Success).outputData.getString(UploadWorker.KEY_REVISION_ID))
+    }
+
+    // The share flow stages files in a flat directory and overrides the prefix +
+    // source dir so each lands at `<target>/<name>`, independent of the saved
+    // camera-backup settings (whose prefix is "/phone/" here).
+    @Test
+    fun shareOverrideUploadsToTargetDirectory() {
+        val stagingDir = File(context.cacheDir, "staging-${System.nanoTime()}")
+
+        fun stage(): File {
+            stagingDir.mkdirs()
+            return File(stagingDir, "note.txt").apply { writeText("shared payload") }
+        }
+        val shared = stage()
+        val sha = sha256(shared)
+
+        val result = runWorker(listOf(shared), repoPathPrefix = "shared/inbox", sourceDir = stagingDir.absolutePath)
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertEquals(listOf(true), bridge.checkFiles(listOf(sha)))
+        // The worker reclaims its cache staging dir, so re-stage; the same content at
+        // the overridden path is then skipped, proving it uploaded to `shared/inbox/note.txt`.
+        val reshared = stage()
+        val rerun = runWorker(listOf(reshared), repoPathPrefix = "shared/inbox", sourceDir = stagingDir.absolutePath)
+        assertEquals("skipped", resultStatuses(rerun)[reshared.absolutePath])
     }
 
     @Test

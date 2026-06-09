@@ -71,11 +71,11 @@ enum UploadReducer {
     }
 
     private static func failed(_ state: AppState, error: String) -> AppState {
+        // The failure surfaces as a bottom-bar UploadOutcome (set by MainStore), not the
+        // error overlay, so success/failure/abort share one prompt and the share can
+        // uniformly return to the main app when it is dismissed.
         var next = idle(state)
         next.fileStatus = markUnfinished(state, status: .failed(message: "Error"))
-        if state.overlay == .none {
-            next.overlay = .error(title: "Upload Failed", message: error)
-        }
         return next
     }
 

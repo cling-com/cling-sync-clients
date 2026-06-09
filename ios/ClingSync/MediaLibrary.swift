@@ -21,6 +21,17 @@ func loadUITestFiles() -> [(file: SourceFile, url: URL)] {
     }
 }
 
+// Fixture files routed through the share flow under `--share-test-mode`, so the
+// share screen + upload can be exercised end to end without the system share sheet.
+func shareTestFixtureURLs() -> [URL] {
+    let manager = FileManager.default
+    let directory = manager.temporaryDirectory.appendingPathComponent("ClingSyncShareFixtures", isDirectory: true)
+    try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent("shared-note.txt")
+    try? Data("shared from ios\n".utf8).write(to: url)
+    return [url]
+}
+
 func primaryResource(for asset: PHAsset) -> PHAssetResource? {
     let resources = PHAssetResource.assetResources(for: asset)
     let preferredTypes: [PHAssetResourceType] = [.photo, .video, .fullSizePhoto, .fullSizeVideo, .pairedVideo]

@@ -30,6 +30,11 @@ class FileChecker(
     ): Result<FileCheckResult> =
         withContext(dispatcher) {
             try {
+                // Refresh the membership index against the repository's current HEAD
+                // before checking; a stale index (remote merge, missed rebuild) would
+                // otherwise misreport files. The merge reminder skips this (it can't
+                // open the repository) and uses the index as-is.
+                goBridge.ensureFileHashesAtHead()
                 Log.d("FileChecker", "Starting to check ${filePaths.size} files")
 
                 val fileStatuses = mutableMapOf<String, FileStatus>()

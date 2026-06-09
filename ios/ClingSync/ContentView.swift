@@ -32,7 +32,16 @@ struct ContentView: View {
                 readyView
             }
         }
-        .task { store.onStart() }
+        .task {
+            store.onStart()
+            if ProcessInfo.processInfo.arguments.contains("--share-test-mode") {
+                store.receiveSharedURLs(shareTestFixtureURLs())
+            }
+        }
+        .onOpenURL { url in store.receiveSharedURLs([url]) }
+        .fullScreenCover(item: $store.pendingShare) { share in
+            ShareScreen(staged: share.staged, uploadGuard: store, onFinished: { store.dismissShare() })
+        }
         .sheet(isPresented: showSettings) {
             SettingsView(store: store, isPresented: showSettings)
         }
@@ -51,95 +60,18 @@ struct ContentView: View {
 
     private var readyView: some View {
         NavigationView {
-            ZStack {
-                VStack(spacing: 0) {
-                    if !store.state.isConnected, store.state.configuration.isConfigured {
-                        RepositoryAccessBanner { store.dispatch(.connectClicked) }
+            MediaSelectionList(store: store, onUpload: { store.dispatch(.uploadClicked) })
+                .navigationTitle("Cling Sync")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        SelectAllButton(store: store)
                     }
-
-                    List {
-                        ForEach(store.state.displayedFiles) { file in
-                            Button {
-                                store.dispatch(
-                                    .fileSelectionChanged(
-                                        id: file.id, selected: !store.state.selectedIds.contains(file.id)))
-                            } label: {
-                                MediaFileView(
-                                    file: file,
-                                    status: store.state.fileStatus[file.id],
-                                    isSelected: store.state.selectedIds.contains(file.id),
-                                    loadThumbnail: { await store.thumbnail(for: file) })
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!isSelectable(store.state.fileStatus[file.id]))
-                        }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Settings") { store.dispatch(.settingsClicked) }
+                            .disabled(store.state.isBusy)
                     }
                 }
-                .opacity(store.state.isLoadingFiles ? 0 : 1)
-
-                if store.state.isLoadingFiles {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle())
-                        .scaleEffect(1.5)
-                }
-            }
-            .navigationTitle("Cling Sync")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if allSelectableSelected {
-                        Button("Deselect All") { store.dispatch(.deselectAllClicked) }
-                    } else {
-                        Button("Select All") { store.dispatch(.selectAllClicked) }
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Settings") { store.dispatch(.settingsClicked) }
-                        .disabled(store.state.isBusy)
-                }
-            }
-            .safeAreaInset(edge: .bottom) { bottomBar }
-            .animation(.easeInOut(duration: 0.25), value: store.state.selectedIds.isEmpty)
         }
-    }
-
-    @ViewBuilder
-    private var bottomBar: some View {
-        if store.state.isUploading || store.state.isUploadInitiated || store.uploadOutcome != nil {
-            UploadProgress(
-                currentFile: store.state.uploadInfo?.currentFile,
-                uploadedBytes: store.state.uploadedBytes,
-                totalBytes: uploadTotalBytes,
-                outcome: store.uploadOutcome,
-                onAbort: { store.dispatch(.abortClicked) },
-                onDismiss: { store.dismissUploadOutcome() })
-        } else if !store.state.selectedFiles.isEmpty {
-            let selected = store.state.selectedFiles
-            let selectedSize = selected.reduce(Int64(0)) { $0 + $1.size }
-            HStack {
-                Text("\(selected.count) selected (\(fileSizeFormatter.string(fromByteCount: selectedSize)))")
-                    .font(.subheadline)
-                Spacer()
-                Button("Upload") { store.dispatch(.uploadClicked) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        !store.state.isConnected
-                            || selected.contains { store.state.fileStatus[$0.id] == .checking })
-            }
-            .padding()
-            .background(.regularMaterial)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-
-    private var allSelectableSelected: Bool {
-        let targets = store.state.selectAllTargets
-        return !targets.isEmpty && targets.isSubset(of: store.state.selectedIds)
-    }
-
-    private var uploadTotalBytes: Int64 {
-        store.state.files
-            .filter { store.state.currentUploadIds.contains($0.id) }
-            .reduce(Int64(0)) { $0 + $1.size }
     }
 
     private var showSettings: Binding<Bool> {

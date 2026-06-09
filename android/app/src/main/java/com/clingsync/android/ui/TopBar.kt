@@ -37,6 +37,7 @@ fun TopBar(
     onAbortClick: () -> Unit,
     modifier: Modifier = Modifier,
     uploadedBytes: Long = 0L,
+    canSelectAll: Boolean = true,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().height(80.dp),
@@ -156,9 +157,11 @@ fun TopBar(
                     }
                 }
                 else -> {
+                    // Nothing selectable once a scan settles: there is nothing new to back up.
+                    val noNewFiles = !isScanning && !canSelectAll
                     Button(
                         onClick = onSelectAllClick,
-                        enabled = !isScanning,
+                        enabled = !isScanning && canSelectAll,
                         modifier =
                             Modifier
                                 .height(40.dp)
@@ -169,7 +172,12 @@ fun TopBar(
                             ),
                     ) {
                         Text(
-                            text = if (isScanning) "Scanning..." else "Select All",
+                            text =
+                                when {
+                                    isScanning -> "Scanning..."
+                                    noNewFiles -> "No new files"
+                                    else -> "Select All"
+                                },
                             fontWeight = FontWeight.Medium,
                         )
                     }

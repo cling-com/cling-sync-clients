@@ -15,4 +15,7 @@ sealed interface ViewAction {
     data object RequestPermissions : ViewAction
 
     data object OpenStorageSettings : ViewAction
+
+    // Finish the share Activity, returning to the main app. Emitted only in share mode.
+    data object Finish : ViewAction
 }

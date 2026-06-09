@@ -14,8 +14,9 @@ import (
 var td = lib.TestData{} //nolint:gochecknoglobals
 
 // snapshotFromEntries commits the given entries into a throwaway repository and
-// returns a snapshot of its HEAD, the shape RepositoryFileHashes.Write consumes.
-func snapshotFromEntries(t *testing.T, entries ...*lib.RevisionEntry) *lib.Temp[*lib.RevisionEntry] {
+// returns a snapshot of its HEAD plus that HEAD revision, the shape
+// RepositoryFileHashes.Write consumes.
+func snapshotFromEntries(t *testing.T, entries ...*lib.RevisionEntry) (*lib.Temp[*lib.RevisionEntry], lib.RevisionId) {
 	t.Helper()
 	assert := lib.NewAssert(t)
 	repo := td.NewTestRepository(t, td.NewFS(t))
@@ -28,7 +29,7 @@ func snapshotFromEntries(t *testing.T, entries ...*lib.RevisionEntry) *lib.Temp[
 	assert.NoError(err)
 	snapshot, err := lib.NewRevisionSnapshot(context.Background(), repo.Repository, repo.Head(), td.NewFS(t))
 	assert.NoError(err)
-	return snapshot
+	return snapshot, repo.Head()
 }
 
 func fileEntry(path, content string) *lib.RevisionEntry {
@@ -55,32 +56,34 @@ func TestRepositoryFileHashes(t *testing.T) {
 		assert.Equal(filepath.Join("/some/cache", "repository_file_hashes.bin"), r.path)
 	})
 
-	t.Run("Write, contains, and reload from disk", func(t *testing.T) {
+	t.Run("Write, contains, head, and reload from disk", func(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
 		cacheDir := t.TempDir()
-		snapshot := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"), fileEntry("b.jpg", "beta"))
+		snapshot, head := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"), fileEntry("b.jpg", "beta"))
 
 		r := NewRepositoryFileHashes(cacheDir)
-		assert.NoError(r.Write(snapshot))
+		assert.NoError(r.Write(snapshot, head))
 		assert.Equal(true, r.Contains(td.SHA256("alpha")))
 		assert.Equal(true, r.Contains(td.SHA256("beta")))
 		assert.Equal(false, r.Contains(td.SHA256("gamma")))
+		assert.Equal(head, r.Head())
 
-		// A fresh instance over the same dir reads the persisted index, the case the
-		// headless reminder relies on (no Write, cold process).
+		// A fresh instance over the same dir reads the persisted index AND the head it
+		// was built for, the case the headless reminder relies on (no Write, cold process).
 		reloaded := NewRepositoryFileHashes(cacheDir)
 		assert.Equal(true, reloaded.Contains(td.SHA256("alpha")))
 		assert.Equal(false, reloaded.Contains(td.SHA256("gamma")))
+		assert.Equal(head, reloaded.Head())
 	})
 
-	t.Run("Index is sorted, deduplicated, and skips directories", func(t *testing.T) {
+	t.Run("Index records its head, is sorted, deduplicated, and skips directories", func(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
 		cacheDir := t.TempDir()
 		// Two files share content (one hash after dedup); one lives in a subdir,
 		// whose directory entry carries a zero hash and must be skipped.
-		snapshot := snapshotFromEntries(
+		snapshot, head := snapshotFromEntries(
 			t,
 			fileEntry("a.jpg", "same"),
 			fileEntry("b.jpg", "same"),
@@ -88,24 +91,28 @@ func TestRepositoryFileHashes(t *testing.T) {
 		)
 
 		r := NewRepositoryFileHashes(cacheDir)
-		assert.NoError(r.Write(snapshot))
+		assert.NoError(r.Write(snapshot, head))
 
 		data, err := os.ReadFile(r.path)
 		assert.NoError(err)
-		assert.Equal(2*sha256.Size, len(data))
-		for i := sha256.Size; i < len(data); i += sha256.Size {
-			assert.Equal(true, bytes.Compare(data[i-sha256.Size:i], data[i:i+sha256.Size]) < 0)
+		// The 32-byte head revision precedes the two de-duplicated content hashes.
+		assert.Equal(len(head)+2*sha256.Size, len(data))
+		assert.Equal(true, bytes.Equal(data[:len(head)], head[:]))
+		hashes := data[len(head):]
+		for i := sha256.Size; i < len(hashes); i += sha256.Size {
+			assert.Equal(true, bytes.Compare(hashes[i-sha256.Size:i], hashes[i:i+sha256.Size]) < 0)
 		}
 		assert.Equal(true, r.Contains(td.SHA256("same")))
 		assert.Equal(true, r.Contains(td.SHA256("other")))
 		assert.Equal(false, r.Contains(lib.Sha256{}))
 	})
 
-	t.Run("Clear drops memory and file", func(t *testing.T) {
+	t.Run("Clear drops memory, head, and file", func(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
+		snapshot, head := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"))
 		r := NewRepositoryFileHashes(t.TempDir())
-		assert.NoError(r.Write(snapshotFromEntries(t, fileEntry("a.jpg", "alpha"))))
+		assert.NoError(r.Write(snapshot, head))
 		assert.Equal(true, r.Contains(td.SHA256("alpha")))
 
 		r.Clear()
@@ -113,6 +120,7 @@ func TestRepositoryFileHashes(t *testing.T) {
 		_, statErr := os.Stat(r.path)
 		assert.Equal(true, os.IsNotExist(statErr))
 		assert.Equal(false, r.Contains(td.SHA256("alpha")))
+		assert.Equal(lib.RevisionId{}, r.Head())
 	})
 
 	t.Run("Contains is false without an index", func(t *testing.T) {
@@ -166,6 +174,78 @@ func TestRepository(t *testing.T) { //nolint:paralleltest
 		_, uploaded, err = UploadFile(source, "phone/hello.jpg")
 		assert.NoError(err)
 		assert.Equal(false, uploaded)
+	})
+
+	t.Run("Rebuilds a cleared hash index even when HEAD looks unchanged", func(t *testing.T) { //nolint:paralleltest
+		setupRepositoryGlobals(t)
+		assert := lib.NewAssert(t)
+
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		assert.NoError(InitNewFileRepository(repoDir, "testpassphrase"))
+		assert.NoError(OpenRepository(repoDir, "testpassphrase"))
+		source := filepath.Join(t.TempDir(), "a.jpg")
+		assert.NoError(os.WriteFile(source, []byte("alpha"), 0o600))
+		entry, _, err := UploadFile(source, "a.jpg")
+		assert.NoError(err)
+		_, err = CommitEntries([]*lib.RevisionEntry{entry}, "Tester", "backup")
+		assert.NoError(err)
+
+		// CommitEntries clears the hash index before committing, so it MUST be rebuilt
+		// afterwards. A backend whose HEAD read lags the just-committed write makes the
+		// refresh see an unchanged HEAD; rebuilding from the known revision (not by
+		// re-reading HEAD) must still repopulate the index, otherwise every file scans
+		// as new and is re-uploaded forever.
+		repositoryFileHashes.Clear()
+		found, err := CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+		assert.NoError(err)
+		assert.Equal([]bool{false}, found)
+
+		assert.NoError(rebuildSnapshot(head))
+		found, err = CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+		assert.NoError(err)
+		assert.Equal([]bool{true}, found)
+	})
+
+	t.Run( //nolint:paralleltest
+		"EnsureFileHashesAtHead rebuilds a stale index and no-ops a current one",
+		func(t *testing.T) {
+			setupRepositoryGlobals(t)
+			assert := lib.NewAssert(t)
+
+			repoDir := filepath.Join(t.TempDir(), "repo")
+			assert.NoError(InitNewFileRepository(repoDir, "testpassphrase"))
+			assert.NoError(OpenRepository(repoDir, "testpassphrase"))
+			source := filepath.Join(t.TempDir(), "a.jpg")
+			assert.NoError(os.WriteFile(source, []byte("alpha"), 0o600))
+			entry, _, err := UploadFile(source, "a.jpg")
+			assert.NoError(err)
+			_, err = CommitEntries([]*lib.RevisionEntry{entry}, "Tester", "backup")
+			assert.NoError(err)
+
+			// The index is tagged with the committed HEAD, so a verify is a no-op and keeps
+			// the content.
+			assert.Equal(GetRepositoryHeadRevisionID(), repositoryFileHashes.Head().String())
+			assert.NoError(EnsureFileHashesAtHead())
+			found, err := CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+			assert.NoError(err)
+			assert.Equal([]bool{true}, found)
+
+			// A stale index (a remote merge, a reminder-era index, a missed post-commit
+			// rebuild): its head no longer matches HEAD, so the interactive scan's verify
+			// must rebuild it. The headless reminder, by contrast, would just use it as-is.
+			repositoryFileHashes.Clear()
+			assert.NoError(EnsureFileHashesAtHead())
+			assert.Equal(GetRepositoryHeadRevisionID(), repositoryFileHashes.Head().String())
+			found, err = CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+			assert.NoError(err)
+			assert.Equal([]bool{true}, found)
+		},
+	)
+
+	t.Run("EnsureFileHashesAtHead errors when the repository is not open", func(t *testing.T) { //nolint:paralleltest
+		setupRepositoryGlobals(t)
+		assert := lib.NewAssert(t)
+		assert.Error(EnsureFileHashesAtHead(), "repository not opened")
 	})
 
 	t.Run("Close discards everything, including a loaded index", func(t *testing.T) { //nolint:paralleltest

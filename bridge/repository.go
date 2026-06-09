@@ -130,28 +130,60 @@ func OpenRepository(hostURL, password string) error {
 }
 
 func refreshSnapshot() error {
-	ctx := context.Background()
-	currentHead, err := repository.Head(ctx)
+	currentHead, err := repository.Head(context.Background())
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to get HEAD revision")
 	}
 	if currentHead == head && snapshot != nil {
 		return nil
 	}
-	head = currentHead
+	return rebuildSnapshot(currentHead)
+}
+
+// rebuildSnapshot rebuilds the snapshot, revision cache and file-hash index for the
+// given revision unconditionally. CommitEntries calls it with the revision it just
+// wrote rather than re-reading HEAD: the hash index is cleared before a commit, so
+// it MUST be rebuilt afterwards, but a caching/eventually-consistent backend can
+// still report the old HEAD right after the write, which would otherwise skip the
+// rebuild via the refreshSnapshot early-return and leave the index empty (so every
+// already-uploaded file scans as new and is uploaded again).
+func rebuildSnapshot(revision lib.RevisionId) error {
+	ctx := context.Background()
+	head = revision
 	tmpFs := lib.NewMemoryFS(500_000_000)
-	snapshot, err = lib.NewRevisionSnapshot(ctx, repository, head, tmpFs)
+	newSnapshot, err := lib.NewRevisionSnapshot(ctx, repository, revision, tmpFs)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision snapshot")
 	}
+	snapshot = newSnapshot
 	snapshotCache, err = lib.NewRevisionEntryTempCache(snapshot, 10)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision cache")
 	}
-	if err := repositoryFileHashes.Write(snapshot); err != nil {
+	if err := repositoryFileHashes.Write(snapshot, revision); err != nil {
 		return lib.WrapErrorf(err, "failed to write repository file hash index")
 	}
 	return nil
+}
+
+// EnsureFileHashesAtHead makes the persisted hash index reflect the repository's
+// current HEAD, rebuilding it when it was written for a different revision (a remote
+// merge, a stale prior-session index, an eventually-consistent commit). The
+// interactive scan/share call this before checking membership, since the repository
+// is open. The headless merge reminder does NOT: it cannot open the repository and
+// answers from whatever index the last foreground session left.
+func EnsureFileHashesAtHead() error {
+	if repository == nil {
+		return lib.Errorf("repository not opened - call 'OpenRepository' first")
+	}
+	currentHead, err := repository.Head(context.Background())
+	if err != nil {
+		return lib.WrapErrorf(err, "failed to get HEAD revision")
+	}
+	if repositoryFileHashes.Head() == currentHead {
+		return nil
+	}
+	return rebuildSnapshot(currentHead)
 }
 
 func closeRepository() {
@@ -168,6 +200,7 @@ func closeRepository() {
 // answered without the repository open.
 type RepositoryFileHashes struct {
 	path   string
+	head   lib.RevisionId
 	hashes []lib.Sha256
 }
 
@@ -176,13 +209,16 @@ const repositoryFileHashesFileName = "repository_file_hashes.bin"
 func NewRepositoryFileHashes(cacheDir string) *RepositoryFileHashes {
 	return &RepositoryFileHashes{
 		path:   filepath.Join(cacheDir, repositoryFileHashesFileName),
+		head:   lib.RevisionId{},
 		hashes: nil,
 	}
 }
 
 // Write captures every file content hash in the snapshot as a sorted index, in
-// memory and (when a cache dir is set) on disk.
-func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry]) error {
+// memory and on disk, tagged with the revision it was built for. The on-disk layout
+// is the 32-byte head revision id followed by the sorted, de-duplicated hashes, so a
+// later session (or the headless reminder) can tell which revision the index covers.
+func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry], head lib.RevisionId) error {
 	reader := snapshot.Reader(nil)
 	buf := lib.NewBlockBuf()
 	hashes := make([]lib.Sha256, 0)
@@ -201,6 +237,7 @@ func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry]) err
 		hashes = append(hashes, entry.Metadata.FileHash)
 	}
 	sort.Slice(hashes, func(i, j int) bool { return bytes.Compare(hashes[i][:], hashes[j][:]) < 0 })
+	r.head = head
 	r.hashes = hashes
 
 	// Write the file.
@@ -210,6 +247,10 @@ func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry]) err
 		return lib.WrapErrorf(err, "failed to create %s", tmp)
 	}
 	writer := bufio.NewWriter(file)
+	if _, err := writer.Write(head[:]); err != nil {
+		_ = file.Close()
+		return lib.WrapErrorf(err, "failed to write %s", tmp)
+	}
 	for i := range r.hashes {
 		if i > 0 && r.hashes[i] == r.hashes[i-1] {
 			continue
@@ -240,9 +281,17 @@ func (r *RepositoryFileHashes) Contains(hash lib.Sha256) bool {
 	return i < len(hashes) && hashes[i] == hash
 }
 
+// Head returns the revision the persisted index was built for, loading it from disk
+// on first use. A missing or unreadable index reads as the root (zero) revision.
+func (r *RepositoryFileHashes) Head() lib.RevisionId {
+	r.get()
+	return r.head
+}
+
 // Clear drops the index in memory and on disk. Called before a commit, which moves
-// HEAD and so invalidates it; refreshSnapshot rewrites it afterwards.
+// HEAD and so invalidates it; rebuildSnapshot rewrites it afterwards.
 func (r *RepositoryFileHashes) Clear() {
+	r.head = lib.RevisionId{}
 	r.hashes = nil
 	_ = os.Remove(r.path)
 }
@@ -257,23 +306,30 @@ func (r *RepositoryFileHashes) get() []lib.Sha256 {
 	}
 	defer file.Close() //nolint:errcheck
 	info, err := file.Stat()
-	if err != nil {
+	if err != nil || int(info.Size()) < len(r.head) {
 		return nil
 	}
-	r.hashes = make([]lib.Sha256, int(info.Size())/sha256.Size)
 	reader := bufio.NewReader(file)
-	for i := range r.hashes {
-		if _, err := io.ReadFull(reader, r.hashes[i][:]); err != nil {
-			return r.hashes[:i]
+	var head lib.RevisionId
+	if _, err := io.ReadFull(reader, head[:]); err != nil {
+		return nil
+	}
+	hashes := make([]lib.Sha256, (int(info.Size())-len(head))/sha256.Size)
+	for i := range hashes {
+		if _, err := io.ReadFull(reader, hashes[i][:]); err != nil {
+			r.head, r.hashes = head, hashes[:i]
+			return r.hashes
 		}
 	}
+	r.head, r.hashes = head, hashes
 	return r.hashes
 }
 
-// CheckFiles reports, for each given SHA-256, whether its content is present in
-// the repository's HEAD. It answers from the persisted index rather than the live
-// snapshot, so it does not require the repository open: a background process can
-// call it against the index written during the last foreground session.
+// CheckFiles reports, for each given SHA-256, whether its content is present in the
+// persisted hash index. It answers from the index alone, WITHOUT verifying the index
+// is current, so it does not require the repository open: the headless merge reminder
+// relies on this against the index the last foreground session left. Interactive
+// callers (scan/share) call EnsureFileHashesAtHead first to refresh a stale index.
 func CheckFiles(sha256s []lib.Sha256) ([]bool, error) {
 	if repositoryFileHashes == nil {
 		panic("Init() must be called first")
@@ -363,7 +419,7 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 		return "", lib.Errorf("repository not opened - call 'OpenRepository' first")
 	}
 	// The commit moves HEAD, invalidating the hash index; drop it up front so a
-	// failure here can't leave a stale index. refreshSnapshot rewrites it below.
+	// failure here can't leave a stale index. rebuildSnapshot rewrites it below.
 	repositoryFileHashes.Clear()
 	ctx := context.Background()
 	tempFS := lib.NewMemoryFS(500_000_000)
@@ -391,7 +447,7 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to commit")
 	}
-	if err := refreshSnapshot(); err != nil {
+	if err := rebuildSnapshot(revisionId); err != nil {
 		return "", lib.WrapErrorf(err, "failed to refresh snapshot after commit")
 	}
 	return hex.EncodeToString(revisionId[:]), nil

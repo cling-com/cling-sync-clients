@@ -16,10 +16,12 @@ import com.clingsync.android.FileChecker
 import com.clingsync.android.FileStatus
 import com.clingsync.android.GoBridgeProvider
 import com.clingsync.android.PassphraseStore
+import com.clingsync.android.RecentTargets
 import com.clingsync.android.RepositoryUriStore
 import com.clingsync.android.S3CredentialsResult
 import com.clingsync.android.SHA256Cache
 import com.clingsync.android.SettingsManager
+import com.clingsync.android.ShareTargetOptions
 import com.clingsync.android.UploadWorker
 import com.clingsync.android.data.UploadProgressIo
 import com.clingsync.android.effect.RepositoryGateway
@@ -51,8 +53,28 @@ class MainViewModel(
     private val fileChecker: FileChecker,
     private val workManager: WorkManager,
     private val ioDispatcher: CoroutineDispatcher,
+    // The share flow reuses this ViewModel over a fixed staged-files directory and a
+    // chosen target prefix instead of the camera source + settings prefix.
+    private val sourceDirOverride: String? = null,
+    private val shareMode: Boolean = false,
 ) : AndroidViewModel(application) {
-    private val _state = MutableStateFlow(MainUiState.initial(settingsManager.getSettings()))
+    private val _state =
+        MutableStateFlow(
+            if (shareMode) {
+                val settings = settingsManager.getSettings()
+                val options = ShareTargetOptions.from(settings.repoPathPrefix, RecentTargets.load(application))
+                MainUiState(
+                    settings = settings.copy(repoPathPrefix = options.default),
+                    // Staged files need no permission; show the loading state until they are staged + loaded.
+                    hasPermission = true,
+                    isLoadingFiles = true,
+                    shareMode = true,
+                    shareTargetOptions = options.options,
+                )
+            } else {
+                MainUiState.initial(settingsManager.getSettings())
+            },
+        )
     val state: StateFlow<MainUiState> = _state.asStateFlow()
 
     private val _actions = Channel<ViewAction>(Channel.BUFFERED)
@@ -102,7 +124,17 @@ class MainViewModel(
             is Effect.EnqueueUpload -> {
                 scanJob?.cancel()
                 scanJob = null
-                val id = UploadWorker.enqueueUpload(getApplication(), effect.paths, effect.author)
+                if (shareMode) {
+                    RecentTargets.record(getApplication(), _state.value.settings.repoPathPrefix)
+                }
+                val id =
+                    UploadWorker.enqueueUpload(
+                        getApplication(),
+                        effect.paths,
+                        effect.author,
+                        repoPathPrefix = _state.value.settings.repoPathPrefix,
+                        sourceDir = sourceDirOverride,
+                    )
                 dispatchWork(WorkUpdate.Enqueued(id))
             }
             Effect.CancelUpload -> workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
@@ -114,6 +146,7 @@ class MainViewModel(
             Effect.LoadFiles -> loadFiles()
             Effect.Connect -> connect()
             Effect.OpenStorageSettings -> emit(ViewAction.OpenStorageSettings)
+            Effect.FinishShare -> emit(ViewAction.Finish)
         }
     }
 
@@ -127,14 +160,20 @@ class MainViewModel(
             if (settings.isValid()) {
                 if (gateway.isAlreadyOpen(settings)) {
                     dispatch(MainEvent.ConnectSucceeded)
-                } else if (passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
+                } else if (shareMode || passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
+                    // The share connects eagerly (prompting if needed) so it scans right away.
                     connect()
                 }
             }
-            val granted = requiredPermissions().all { hasPermission(it) }
-            dispatch(MainEvent.PermissionResult(granted))
-            if (!granted) {
-                emit(ViewAction.RequestPermissions)
+            if (shareMode) {
+                // Staged files live in the app cache, so no media permission is needed.
+                dispatch(MainEvent.PermissionResult(true))
+            } else {
+                val granted = requiredPermissions().all { hasPermission(it) }
+                dispatch(MainEvent.PermissionResult(granted))
+                if (!granted) {
+                    emit(ViewAction.RequestPermissions)
+                }
             }
         }
     }
@@ -196,10 +235,12 @@ class MainViewModel(
     private suspend fun loadAndScanFiles() {
         dispatch(MainEvent.LoadingStarted)
         val settings = _state.value.settings
-        val sourceDir = getSourceDirectory(settings)
-        val files = withContext(ioDispatcher) { getSourceFiles(sourceDir, settings.mediaOnly) }
+        val sourceDir = sourceDirOverride?.let(::File) ?: getSourceDirectory(settings)
+        val mediaOnly = !shareMode && settings.mediaOnly
+        val files = withContext(ioDispatcher) { getSourceFiles(sourceDir, mediaOnly) }
         val needsStoragePermission =
-            files.isEmpty() &&
+            !shareMode &&
+                files.isEmpty() &&
                 sourceDir.exists() &&
                 !settings.mediaOnly &&
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
@@ -230,7 +271,11 @@ class MainViewModel(
                 },
             )
         result.fold(
-            onSuccess = { dispatch(MainEvent.ScanCompleted(it.statuses)) },
+            onSuccess = {
+                dispatch(MainEvent.ScanCompleted(it.statuses))
+                // The share pre-selects every not-already-uploaded file.
+                if (shareMode) dispatch(MainEvent.SelectAllClicked)
+            },
             onFailure = { dispatch(MainEvent.ScanFailed(it.message ?: "unknown error", paths)) },
         )
     }
@@ -294,7 +339,19 @@ class MainViewModel(
                 WorkInfo.State.CANCELLED -> WorkUpdate.Cancelled
                 else -> return
             }
+        // Capture the upload size before dispatchWork resets the per-upload fields.
+        val uploadCount = _state.value.currentUploadPaths.size
         dispatchWork(update)
+        // A share returns to the main app after its outcome is acknowledged; an abort
+        // keeps the share open so the user can retry or cancel.
+        if (shareMode) {
+            _state.value =
+                when (update) {
+                    is WorkUpdate.Succeeded -> _state.value.copy(shareOutcome = ShareOutcome.Success(uploadCount))
+                    is WorkUpdate.Failed -> _state.value.copy(shareOutcome = ShareOutcome.Failure(update.error))
+                    else -> _state.value
+                }
+        }
     }
 
     private fun readProgress(file: File): Map<String, FileStatus> =
@@ -328,7 +385,11 @@ class MainViewModel(
 
     private object CancelledException : Exception("cancelled")
 
-    class Factory(private val application: Application) : ViewModelProvider.Factory {
+    class Factory(
+        private val application: Application,
+        private val sourceDirOverride: String? = null,
+        private val shareMode: Boolean = false,
+    ) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             val bridge = GoBridgeProvider.getInstance()
             val uriStore = RepositoryUriStore(application)
@@ -342,6 +403,8 @@ class MainViewModel(
                 fileChecker = FileChecker(SHA256Cache.getInstance(application), Dispatchers.IO),
                 workManager = WorkManager.getInstance(application),
                 ioDispatcher = Dispatchers.IO,
+                sourceDirOverride = sourceDirOverride,
+                shareMode = shareMode,
             ) as T
         }
     }

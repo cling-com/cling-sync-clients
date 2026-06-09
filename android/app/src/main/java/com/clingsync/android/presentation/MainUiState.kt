@@ -25,6 +25,14 @@ sealed interface Overlay {
     data class Error(val title: String, val message: String) : Overlay
 }
 
+// The terminal result of a share upload, shown as a dialog whose acknowledgement
+// returns to the main app. Set only in share mode.
+sealed interface ShareOutcome {
+    data class Success(val fileCount: Int) : ShareOutcome
+
+    data class Failure(val message: String) : ShareOutcome
+}
+
 // The entire screen state as one immutable value. Selection is keyed by path
 // (not File) so the state is value-comparable and trivially assertable.
 @Immutable
@@ -49,6 +57,11 @@ data class MainUiState(
     val uploadedBytes: Long = 0L,
     val showSettings: Boolean = false,
     val overlay: Overlay = Overlay.None,
+    // Set when the screen is hosting a share: it shows the target-directory picker
+    // and a Cancel-only top bar instead of search/refresh/settings.
+    val shareMode: Boolean = false,
+    val shareTargetOptions: List<String> = emptyList(),
+    val shareOutcome: ShareOutcome? = null,
 ) {
     // True while an upload is initiated or running; the top bar and refresh/
     // settings/search controls are disabled in this state.

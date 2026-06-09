@@ -8,6 +8,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
@@ -32,6 +33,12 @@ class UploadWorker(
         const val KEY_AUTHOR = "author"
         const val KEY_REVISION_ID = "revision_id"
 
+        // Optional overrides for the share flow. When absent, the worker derives the
+        // repo path prefix and source directory from the saved settings (the camera
+        // backup flow). A share uploads staged files to `<prefix>/<name>` instead.
+        const val KEY_REPO_PATH_PREFIX = "repo_path_prefix_override"
+        const val KEY_SOURCE_DIR = "source_dir_override"
+
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "upload_channel"
         private const val TEMP_FILE_NAME = "pending_upload_files.txt"
@@ -41,16 +48,22 @@ class UploadWorker(
             context: Context,
             filePaths: List<String>,
             author: String,
+            repoPathPrefix: String? = null,
+            sourceDir: String? = null,
         ): java.util.UUID {
             // Always write paths to a file to avoid size limits.
             val tempFile = File(context.cacheDir, TEMP_FILE_NAME)
             tempFile.writeText(filePaths.joinToString("\n"))
 
             val inputData =
-                workDataOf(
-                    KEY_FILE_PATHS_FILE to tempFile.absolutePath,
-                    KEY_AUTHOR to author,
-                )
+                Data.Builder()
+                    .putString(KEY_FILE_PATHS_FILE, tempFile.absolutePath)
+                    .putString(KEY_AUTHOR, author)
+                    .apply {
+                        if (repoPathPrefix != null) putString(KEY_REPO_PATH_PREFIX, repoPathPrefix)
+                        if (sourceDir != null) putString(KEY_SOURCE_DIR, sourceDir)
+                    }
+                    .build()
 
             val workRequest =
                 OneTimeWorkRequestBuilder<UploadWorker>()
@@ -116,9 +129,10 @@ class UploadWorker(
                 // List to collect revision entries.
                 val revisionEntries = mutableListOf<String>()
 
-                // Upload each file.
-                val sourceDir = getSourceDirectory(settings)
-                val prefix = settings.repoPathPrefix.trim('/')
+                // Upload each file. The share flow overrides the prefix + source
+                // directory so staged files land under the chosen target directory.
+                val sourceDir = inputData.getString(KEY_SOURCE_DIR)?.let(::File) ?: getSourceDirectory(settings)
+                val prefix = (inputData.getString(KEY_REPO_PATH_PREFIX) ?: settings.repoPathPrefix).trim('/')
                 filePaths.forEachIndexed { index, filePath ->
                     val fileSize = File(filePath).length()
                     Log.d("Worker", "Uploading file ${index + 1}/${filePaths.size}: $filePath")
@@ -209,6 +223,14 @@ class UploadWorker(
                 // enclosing withContext from ever completing.
                 progressJob.cancel()
                 updateProgressFile()
+                // A share upload stages its files in a cache subdir it owns; reclaim
+                // it here (tied to the worker, which outlives the share screen) rather
+                // than in the UI, so cancelling the screen mid-upload can't leak it.
+                inputData
+                    .getString(KEY_SOURCE_DIR)
+                    ?.let(::File)
+                    ?.takeIf { it.absolutePath.startsWith(applicationContext.cacheDir.absolutePath) }
+                    ?.deleteRecursively()
             }
         }
 

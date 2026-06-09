@@ -13,6 +13,10 @@ struct ScanService {
     // Calls `onBatch` after each batch with the cumulative processed count and that
     // batch's statuses. Throws if the bridge check fails or the task is cancelled.
     func scan(_ files: [SourceFile], onBatch: (Int, [String: FileStatus]) async -> Void) async throws {
+        // Refresh the membership index against the repository's current HEAD before
+        // checking; a stale index (remote merge, missed rebuild) would otherwise
+        // misreport files. The merge reminder skips this and uses the index as-is.
+        try Bridge.ensureFileHashesAtHead()
         // Persist computed hashes even if the scan is cancelled or throws partway.
         defer { SHA256Cache.shared.save() }
         var index = 0

@@ -19,6 +19,8 @@ final class ClingSyncUITests: XCTestCase {
         ProcessInfo.processInfo.environment["TEST_FAILURE_URL"] ?? ""
     static let failureControlURL =
         ProcessInfo.processInfo.environment["TEST_FAILURE_CONTROL_URL"] ?? ""
+    static let shareURL =
+        ProcessInfo.processInfo.environment["TEST_SHARE_URL"] ?? ""
     static let s3AccessKeyId =
         ProcessInfo.processInfo.environment["TEST_S3_ACCESS_KEY_ID"] ?? "minioadmin"
     static let s3AccessKey =
@@ -231,6 +233,44 @@ final class ClingSyncUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["IMG_0001.JPG"].waitToAppear(timeout: 10))
     }
 
+    // Sharing files shows the share screen, which reuses the main file list: the
+    // user connects, the shared file is scanned and offered, and uploading commits
+    // it to the chosen target directory (the Go side verifies the path).
+    @MainActor
+    func testShareUploadHappyPath() async throws {
+        guard !Self.shareURL.isEmpty else {
+            throw XCTSkip("TEST_SHARE_URL not set. Run via go test harness.")
+        }
+        launchApp(hostURL: Self.shareURL, shareMode: true)
+
+        XCTAssertTrue(app.navigationBars["Share with Cling Sync"].waitToAppear(timeout: 20))
+
+        // The share screen connects eagerly (reusing the main connect flow), so the
+        // passphrase + S3 prompts appear straight away.
+        enterPassphrase(saveToKeychain: false)
+        enterS3CredentialsIfPrompted()
+
+        // After connecting + scanning, the new file is auto-selected (no manual tap).
+        XCTAssertTrue(app.staticTexts["shared-note.txt"].waitToAppear(timeout: 20))
+
+        let targetField = app.textFields["Target directory"]
+        replaceText(in: targetField, with: "shared")
+
+        let selected = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS '1 selected'")
+        ).firstMatch
+        XCTAssertTrue(selected.waitToAppear(timeout: 15))
+
+        app.buttons["Upload"].tap()
+        let success = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'Success!'")
+        ).firstMatch
+        XCTAssertTrue(success.waitToAppear(timeout: 40), "the share upload should report success")
+        // Acknowledging the success banner returns to the main app (no manual Cancel).
+        app.buttons["OK"].tap()
+        XCTAssertTrue(app.navigationBars["Cling Sync"].waitToAppear(timeout: 15))
+    }
+
     // Select All picks both new files. Uploading them together marks both Done,
     // after which they are no longer selectable (dedup via the local index).
     @MainActor
@@ -256,14 +296,11 @@ final class ClingSyncUITests: XCTestCase {
         waitForUploadSuccess(fileCount: 2)
         app.buttons["OK"].tap()
 
-        // Both files are now Done, so Select All can select nothing.
+        // Both files are now Done, so there are no new files left to back up: the
+        // Select All button reads "No new files" and is disabled.
         XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitToAppear(timeout: 10))
-        app.navigationBars["Cling Sync"].buttons["Select All"].tap()
-        let anySelected = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS 'selected'")
-        ).firstMatch
-        XCTAssertFalse(
-            anySelected.waitToAppear(timeout: 3),
-            "Already-synced files must not be selectable")
+        let noNewFiles = app.navigationBars["Cling Sync"].buttons["No new files"]
+        XCTAssertTrue(noNewFiles.waitToAppear(timeout: 5), "Select All becomes No new files when nothing is selectable")
+        XCTAssertFalse(noNewFiles.isEnabled, "Already-synced files must not be selectable")
     }
 }

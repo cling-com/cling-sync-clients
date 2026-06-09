@@ -25,10 +25,17 @@ sealed interface MainEvent {
 
     data object RefreshClicked : MainEvent
 
+    // The share screen's target-directory picker. Changes the upload prefix in
+    // state only (not persisted, unlike SettingsSaved).
+    data class RepoPathPrefixChanged(val prefix: String) : MainEvent
+
     // --- Upload ---
     data object UploadClicked : MainEvent
 
     data object AbortClicked : MainEvent
+
+    // The share's success/failure dialog was acknowledged: return to the main app.
+    data object ShareOutcomeAcknowledged : MainEvent
 
     // --- Permissions & file loading ---
     data class PermissionResult(val granted: Boolean) : MainEvent

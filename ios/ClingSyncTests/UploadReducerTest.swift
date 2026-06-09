@@ -99,14 +99,16 @@ struct UploadReducerTest {
         #expect(next.selectedIds.isEmpty)
     }
 
-    @Test func failedMarksInflightFailedAndShowsDialog() {
+    @Test func failedMarksInflightFailedWithoutOverlay() {
         let state = uploading(["a", "b"], status: .sending)
         let next = UploadReducer.reduce(state, .failed(error: "boom"))
 
         #expect(next.fileStatus["a"] == .failed(message: "Error"))
         #expect(next.fileStatus["b"] == .failed(message: "Error"))
         #expect(!next.isUploading)
-        #expect(next.overlay == .error(title: "Upload Failed", message: "boom"))
+        // The failure surfaces as a bottom-bar UploadOutcome (set by MainStore), so the
+        // reducer leaves the error overlay untouched.
+        #expect(next.overlay == .none)
     }
 
     @Test func cancelledMarksInflightAbortedButKeepsCompletedFiles() {

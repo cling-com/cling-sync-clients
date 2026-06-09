@@ -136,6 +136,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	main := newUITestRepo(t)
 	switchTarget := newUITestRepo(t)
 	multi := newUITestRepo(t)
+	share := newUITestRepo(t)
 	abort := newFaultRepo(t)
 	failure := newFaultRepo(t)
 	assert.Equal("testpassphrase", main.repo.Passphrase)
@@ -152,6 +153,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 
 	mainHead := main.repo.Head()
 	multiHead := multi.repo.Head()
+	shareHead := share.repo.Head()
 
 	t.Log("Running iOS UI tests")
 	env := []string{
@@ -159,6 +161,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 		"TEST_HOST_URL_EMBEDDED=" + embeddedURL,
 		"TEST_SWITCH_URL=" + switchTarget.url,
 		"TEST_MULTI_URL=" + multi.url,
+		"TEST_SHARE_URL=" + share.url,
 		"TEST_ABORT_URL=" + abort.url,
 		"TEST_ABORT_CONTROL_URL=" + abort.controlURL,
 		"TEST_FAILURE_URL=" + failure.url,
@@ -179,6 +182,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 
 	t.Log("Verifying results")
 	verifyHappyPath(t, main, mainHead)
+	verifyShareUpload(t, share, shareHead)
 
 	// The multi-select scenario uploads both fixtures in a single commit.
 	assert.NotEqual(multiHead, multi.repo.Head(), "multi-select repository should have a new commit")
@@ -213,4 +217,25 @@ func verifyHappyPath(t *testing.T, repo *uiTestRepo, initialHead lib.RevisionId)
 		{"uitest", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
 		{"uitest/IMG_0001.JPG", lib.RevisionEntryKindAdd, 0o600, lib.Sha256(shaImg0001[:])},
 	}, r.RevisionInfos(revision.ParentRevisionId))
+}
+
+// verifyShareUpload asserts the share scenario committed the staged fixture to the
+// edited target directory: shared-note.txt -> shared/.
+func verifyShareUpload(t *testing.T, repo *uiTestRepo, initialHead lib.RevisionId) {
+	t.Helper()
+	assert := lib.NewAssert(t)
+	r := repo.repo
+	newHead := r.Head()
+	assert.NotEqual(initialHead, newHead, "share repository should have a new commit")
+
+	sha := sha256.Sum256([]byte("shared from ios\n"))
+	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"shared", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"shared/shared-note.txt", lib.RevisionEntryKindAdd, 0o600, lib.Sha256(sha[:])},
+	}, r.RevisionInfos(newHead))
+
+	revision, err := r.ReadRevision(t.Context(), newHead, lib.NewBlockBuf())
+	assert.NoError(err)
+	assert.Equal("Testinger", *revision.Author)
+	assert.Contains(*revision.Message, "Backup 1 file")
 }

@@ -2,8 +2,11 @@ import Darwin
 import XCTest
 
 extension ClingSyncUITests {
-    func launchApp(hostURL: String, repoPathPrefix: String = "/uitest") {
+    func launchApp(hostURL: String, repoPathPrefix: String = "/uitest", shareMode: Bool = false) {
         app.launchArguments = ["--reset", "--ui-test-mode"]
+        if shareMode {
+            app.launchArguments.append("--share-test-mode")
+        }
         app.launchEnvironment["CLING_SYNC_UI_TEST_MODE"] = "1"
         app.launchEnvironment["CLING_SYNC_UI_TEST_HOST_URL"] = hostURL
         app.launchEnvironment["CLING_SYNC_UI_TEST_REPO_PATH_PREFIX"] = repoPathPrefix

@@ -135,6 +135,17 @@ class UploadReducerTest {
     }
 
     @Test
+    fun shareModeFailureRoutesToTheDialogNotTheErrorOverlay() {
+        val state = uploading(listOf("/a"), FileStatus.Uploading).copy(shareMode = true)
+        val next = UploadReducer.reduce(state, WorkUpdate.Failed("boom"))
+
+        assertEquals(FileStatus.Failed("Error"), next.fileStatus["/a"])
+        // The share surfaces the failure via its own outcome dialog (set by the
+        // ViewModel), so the reducer must not also raise the error overlay.
+        assertEquals(Overlay.None, next.overlay)
+    }
+
+    @Test
     fun cancelledMarksInflightAbortedButKeepsCompletedFiles() {
         val state =
             uploading(listOf("/a", "/b"), FileStatus.Uploading)

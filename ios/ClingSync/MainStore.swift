@@ -2,9 +2,11 @@ import Photos
 import SwiftUI
 import UIKit
 
-// Terminal banner after an upload finishes. A failed upload surfaces through `state.overlay` instead.
+// Terminal banner after an upload finishes, shown in the bottom bar. The share screen
+// returns to the main app once a succeeded/failed banner is dismissed (not aborted).
 enum UploadOutcome: Equatable {
     case succeeded(fileCount: Int, bytes: Int64)
+    case failed(message: String)
     case aborted
 }
 
@@ -24,9 +26,19 @@ final class MainStore: ObservableObject {
     private let settings: SettingsGateway
     private var source: SourceGateway
     private let repository: RepositoryGateway
+    private let connector: RepositoryConnector
     private var scanner: ScanService
     private var uploader: UploadCoordinator
     private let isUITestMode: Bool
+    // Set by the share flow (which reuses MainStore over a fixed shared-files source):
+    // the upload goes to this target directory instead of the settings prefix.
+    var shareTarget: String?
+
+    // A share handed to the app is staged, then presented as a modal share screen.
+    // The staging buffer + coalescing live in ShareStaging.swift.
+    @Published var pendingShare: PendingShare?
+    var stagedShareFiles: [(file: SourceFile, url: URL)] = []
+    var shareCoalesceTask: Task<Void, Never>?
 
     private var connectTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
@@ -45,6 +57,7 @@ final class MainStore: ObservableObject {
         self.settings = settings
         self.source = source
         self.repository = repository
+        self.connector = RepositoryConnector(repository: repository, settings: settings)
         self.scanner = ScanService(source: source)
         self.uploader = UploadCoordinator(source: source)
         self.passphraseController = passphraseController ?? PassphrasePromptController()
@@ -79,6 +92,20 @@ final class MainStore: ObservableObject {
     }
 
     // MARK: - Launch
+
+    // Share startup: reuses the injected shared-files source (no stored photo/folder
+    // selection) and connects eagerly so the shared files are scanned right away.
+    // A cancelled prompt falls back to the connect banner for a retry.
+    func onStartShare() {
+        applyUITestConfiguration()
+        state.configuration = settings.load()
+        state.phase = .ready
+        if state.configuration.isConfigured {
+            connect(promptIfNeeded: true)
+        } else {
+            loadFiles()
+        }
+    }
 
     func onStart() {
         applyUITestConfiguration()
@@ -137,7 +164,7 @@ final class MainStore: ObservableObject {
         }
         dispatch(.connectStarted)
         do {
-            try await runConnect(
+            try await connector.connect(
                 configuration, promptIfNeeded: promptIfNeeded,
                 passphrase: passphraseController, s3: s3Controller)
             connectSucceeded()
@@ -180,56 +207,6 @@ final class MainStore: ObservableObject {
         }
     }
 
-    // The shared connect pipeline: opens the repository (a no-op if already open), prompting for the passphrase
-    // and S3 credentials through the given controllers. Throws ConnectDeclined if no passphrase is available.
-    private func runConnect(
-        _ configuration: RepositoryConfiguration,
-        promptIfNeeded: Bool,
-        passphrase: PassphrasePromptController,
-        s3 s3Controller: S3CredentialsPromptController
-    ) async throws {
-        if await repository.isAlreadyOpen(hostURL: configuration.hostURL).open {
-            return
-        }
-        guard
-            let access = try await requestPassphrase(
-                configuration, promptIfNeeded: promptIfNeeded, controller: passphrase)
-        else {
-            throw ConnectDeclined()
-        }
-        try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
-        _ = try await repository.open(
-            hostURL: configuration.hostURL,
-            passphrase: access.passphrase,
-            askS3: { try await s3Controller.prompt(hostURL: configuration.hostURL) })
-        if access.mode.savesInKeychain {
-            try PassphraseStore.shared.save(
-                passphrase: access.passphrase, for: configuration.repositoryID, mode: access.mode)
-        }
-        settings.save(passphraseMode: access.mode)
-    }
-
-    private func requestPassphrase(
-        _ configuration: RepositoryConfiguration,
-        promptIfNeeded: Bool,
-        controller: PassphrasePromptController
-    ) async throws -> (passphrase: String, mode: PassphraseStorageMode)? {
-        let mode = settings.passphraseMode()
-        if let stored = try PassphraseStore.shared.loadIfAvailable(
-            for: configuration.repositoryID, mode: mode, prompt: "Unlock the repository passphrase.")
-        {
-            return (stored, mode)
-        }
-        guard promptIfNeeded else { return nil }
-        let result = try await controller.prompt(
-            PassphrasePromptRequest(
-                title: "Repository Passphrase",
-                message: "Enter the repository passphrase to connect.",
-                allowsKeychainSave: true,
-                suggestedMode: mode))
-        return (result.passphrase, result.saveToKeychain ? .keychain : .session)
-    }
-
     // MARK: - Files & scanning
 
     private func loadFiles() {
@@ -264,6 +241,11 @@ final class MainStore: ObservableObject {
                     await self.dispatch(.scanProgress(processed: processed, total: ids.count, statuses: statuses))
                 }
                 self.dispatch(.scanCompleted(statuses: [:]))
+                // On the share screen, pre-select every not-already-uploaded file so
+                // the user can upload straight away (the main screen selects nothing).
+                if self.shareTarget != nil {
+                    self.dispatch(.selectAllClicked)
+                }
             } catch is CancellationError {
             } catch {
                 self.dispatch(.scanFailed(message: error.localizedDescription, ids: ids))
@@ -279,7 +261,7 @@ final class MainStore: ObservableObject {
         uploadOutcome = nil
         beginUploadBackgroundTask()
         let files = state.files.filter { ids.contains($0.id) }
-        let prefix = state.configuration.repoPathPrefix
+        let prefix = shareTarget ?? state.configuration.repoPathPrefix
         let deviceName = UIDevice.current.name
         uploadTask = Task {
             await self.uploader.upload(
@@ -301,7 +283,8 @@ final class MainStore: ObservableObject {
         case .cancelled:
             uploadOutcome = .aborted
             endUploadBackgroundTask()
-        case .failed:
+        case .failed(let error):
+            uploadOutcome = .failed(message: error)
             endUploadBackgroundTask()
         case .enqueued, .running:
             break
@@ -377,17 +360,25 @@ final class MainStore: ObservableObject {
         passphrase: PassphrasePromptController,
         s3 s3Controller: S3CredentialsPromptController
     ) async throws {
-        try await runConnect(configuration, promptIfNeeded: true, passphrase: passphrase, s3: s3Controller)
+        try await connector.connect(configuration, promptIfNeeded: true, passphrase: passphrase, s3: s3Controller)
         state.configuration = configuration
         uploadOutcome = nil
         connectSucceeded()
     }
 }
 
-// A graceful decline, not a failure: no passphrase available and prompting was disabled.
-private struct ConnectDeclined: Error {}
-
 // swiftlint:enable type_body_length
+
+// MainStore is the single owner of the active upload, so the share screen consults
+// it to honor the "abort the running upload first" rule.
+extension MainStore: ActiveUploadGuard {
+    var hasActiveUpload: Bool { state.isBusy }
+
+    func abortActiveUpload() async {
+        dispatch(.abortClicked)
+        await uploadTask?.value
+    }
+}
 
 // A file with no scan status yet, or reset to New, still needs checking.
 private func isUnscanned(_ status: FileStatus?) -> Bool {

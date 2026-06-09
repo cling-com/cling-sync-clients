@@ -21,6 +21,9 @@ sealed interface Effect {
     data object Connect : Effect
 
     data object OpenStorageSettings : Effect
+
+    // Return to the main app after a share upload's outcome is acknowledged.
+    data object FinishShare : Effect
 }
 
 data class Reduction(

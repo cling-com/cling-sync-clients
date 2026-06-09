@@ -1,1 +1,4 @@
 parent_config: ../.swiftlint.shared.yml
+
+excluded:
+  - build

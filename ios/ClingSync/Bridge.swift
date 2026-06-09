@@ -112,6 +112,14 @@ class Bridge {
         return results
     }
 
+    // Refreshes the persisted hash index if it was built for a different revision than
+    // the open repository's current HEAD. Interactive callers (scan/share) run this
+    // before checkFiles so membership is checked against the current HEAD; the merge
+    // reminder skips it (it can't open the repository).
+    static func ensureFileHashesAtHead() throws(BridgeError) {
+        _ = try execute(command: "ensureFileHashesAtHead", params: [:])
+    }
+
     static func triggerNetworkPermissionIfNeeded(url urlString: String) async throws {
         guard let url = URL(string: urlString) else {
             throw BridgeError(message: "Invalid URL")
@@ -147,6 +155,10 @@ class Bridge {
         }
     }
 
+    // The bridge keeps one global open repository, so concurrent calls (e.g. the
+    // share screen scanning while the main screen uploads) must be serialized.
+    private static let executeLock = NSLock()
+
     private static func execute(command: String, params: [String: Any]) throws(BridgeError) -> [String: Any] {
         guard let paramsData = try? JSONSerialization.data(withJSONObject: params),
             let paramsString = String(data: paramsData, encoding: .utf8)
@@ -161,12 +173,16 @@ class Bridge {
             free(paramsCString)
         }
 
-        guard let resultCString = GoBridge(commandCString, paramsCString) else {
-            throw BridgeError(message: "Bridge returned nil")
+        let resultString: String
+        do {
+            executeLock.lock()
+            defer { executeLock.unlock() }
+            guard let resultCString = GoBridge(commandCString, paramsCString) else {
+                throw BridgeError(message: "Bridge returned nil")
+            }
+            resultString = String(cString: resultCString)
+            free(resultCString)
         }
-
-        let resultString = String(cString: resultCString)
-        free(resultCString)
 
         guard let resultData = resultString.data(using: String.Encoding.utf8),
             let result = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]

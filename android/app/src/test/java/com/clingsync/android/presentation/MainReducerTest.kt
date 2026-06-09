@@ -4,6 +4,7 @@ import com.clingsync.android.AppSettings
 import com.clingsync.android.FileStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -218,5 +219,13 @@ class MainReducerTest {
         // Only files that were Scanning are reverted.
         assertEquals(FileStatus.Done, next.fileStatus[path("b.jpg")])
         assertFalse(next.isScanning)
+    }
+
+    @Test
+    fun shareOutcomeAcknowledgedClearsItAndFinishesTheShare() {
+        val state = stateWithFiles(emptyMap()).copy(shareOutcome = ShareOutcome.Success(2))
+        val reduction = MainReducer.reduce(state, MainEvent.ShareOutcomeAcknowledged)
+        assertNull(reduction.state.shareOutcome)
+        assertEquals(listOf(Effect.FinishShare), reduction.effects)
     }
 }

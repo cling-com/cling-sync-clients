@@ -105,6 +105,10 @@ open class GoBridge : IGoBridge {
         return List(resultsArray.length()) { i -> resultsArray.getBoolean(i) }
     }
 
+    override fun ensureFileHashesAtHead() {
+        executeInternal("ensureFileHashesAtHead", JSONObject())
+    }
+
     override fun uploadFile(
         localFilePath: String,
         repoFilePath: String,

@@ -2,8 +2,7 @@ import SwiftUI
 
 // The bottom-bar upload status, a pure projection of the store's upload state.
 // In progress: current file + linear progress + Abort (disabled while committing).
-// Finished: a success/aborted banner with OK. A failed upload surfaces as an alert
-// (the store's `overlay`), not here.
+// Finished: a success/failed/aborted banner with OK.
 struct UploadProgress: View {
     let currentFile: String?
     let uploadedBytes: Int64
@@ -35,6 +34,10 @@ struct UploadProgress: View {
                 let fileText = fileCount == 1 ? "file" : "files"
                 let sizeText = fileSizeFormatter.string(fromByteCount: bytes)
                 Text("Success! \(fileCount) \(fileText) uploaded (\(sizeText))")
+            case .failed(let message):
+                Text("Upload failed: \(message)")
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
             case .aborted:
                 Text("Aborted!")
             }

@@ -43,9 +43,15 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -75,6 +81,7 @@ import com.clingsync.android.presentation.MainEvent
 import com.clingsync.android.presentation.MainUiState
 import com.clingsync.android.presentation.MainViewModel
 import com.clingsync.android.presentation.Overlay
+import com.clingsync.android.presentation.ShareOutcome
 import com.clingsync.android.presentation.ViewAction
 import com.clingsync.android.ui.ScrollAwareTopBar
 import com.clingsync.android.ui.formatFileSize
@@ -154,6 +161,8 @@ fun MainRoot(
                     )
                 is ViewAction.SavePassphrase ->
                     passphraseStore.save(activity, action.passphrase, action.repositoryId) {}
+                // Only the share Activity finishes on this; the main app stays open.
+                ViewAction.Finish -> Unit
             }
         }
     }
@@ -175,12 +184,13 @@ fun MainScreen(
     state: MainUiState,
     onEvent: (MainEvent) -> Unit,
     onBrowseDirectory: (onResult: (String) -> Unit) -> Unit,
+    onCancel: (() -> Unit)? = null,
 ) {
     val lazyListState = rememberLazyListState()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar(state, onEvent) },
+        topBar = { AppTopBar(state, onEvent, onCancel) },
     ) { innerPadding ->
         Column(
             modifier =
@@ -188,6 +198,9 @@ fun MainScreen(
                     .fillMaxSize()
                     .padding(innerPadding),
         ) {
+            if (state.shareMode) {
+                ShareTargetPicker(state, onEvent)
+            }
             if (!state.hasPermission) {
                 PermissionRequiredScreen()
                 return@Column
@@ -238,12 +251,15 @@ fun MainScreen(
                         onSelectAllClick = { onEvent(MainEvent.SelectAllClicked) },
                         onAbortClick = { onEvent(MainEvent.AbortClicked) },
                         uploadedBytes = state.uploadedBytes,
+                        canSelectAll = state.selectAllTargets.isNotEmpty(),
                     )
                 }
             }
         }
 
         Dialogs(state, onEvent, onBrowseDirectory)
+
+        state.shareOutcome?.let { ShareOutcomeDialog(it, onEvent) }
 
         if (state.isConnecting) {
             ConnectingOverlay()
@@ -252,9 +268,33 @@ fun MainScreen(
 }
 
 @Composable
+private fun ShareOutcomeDialog(
+    outcome: ShareOutcome,
+    onEvent: (MainEvent) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { onEvent(MainEvent.ShareOutcomeAcknowledged) },
+        title = { Text(if (outcome is ShareOutcome.Success) "Upload complete" else "Upload failed") },
+        text = {
+            Text(
+                when (outcome) {
+                    is ShareOutcome.Success ->
+                        "Uploaded ${outcome.fileCount} file${if (outcome.fileCount == 1) "" else "s"}."
+                    is ShareOutcome.Failure -> outcome.message
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onEvent(MainEvent.ShareOutcomeAcknowledged) }) { Text("OK") }
+        },
+    )
+}
+
+@Composable
 private fun AppTopBar(
     state: MainUiState,
     onEvent: (MainEvent) -> Unit,
+    onCancel: (() -> Unit)?,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -271,36 +311,80 @@ private fun AppTopBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Cling Sync",
+                    text = if (state.shareMode) "Share with Cling Sync" else "Cling Sync",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
-                val disabled = state.isBusy
-                val iconTint =
-                    if (disabled) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                if (state.shareMode) {
+                    TextButton(onClick = { onCancel?.invoke() }) { Text("Cancel") }
+                } else {
+                    val disabled = state.isBusy
+                    val iconTint =
+                        if (disabled) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
 
-                Row {
-                    IconButton(onClick = { onEvent(MainEvent.SearchToggled) }, enabled = !disabled) {
-                        Icon(
-                            if (state.showSearch) Icons.Default.Close else Icons.Default.Search,
-                            if (state.showSearch) "Close search" else "Search",
-                            Modifier.size(24.dp),
-                            iconTint,
-                        )
-                    }
-                    IconButton(onClick = { onEvent(MainEvent.RefreshClicked) }, enabled = !disabled) {
-                        Icon(Icons.Default.Refresh, "Refresh", Modifier.size(24.dp), iconTint)
-                    }
-                    IconButton(onClick = { onEvent(MainEvent.SettingsClicked) }, enabled = !disabled) {
-                        Icon(Icons.Default.SettingsIcon, "Settings", Modifier.size(24.dp), iconTint)
+                    Row {
+                        IconButton(onClick = { onEvent(MainEvent.SearchToggled) }, enabled = !disabled) {
+                            Icon(
+                                if (state.showSearch) Icons.Default.Close else Icons.Default.Search,
+                                if (state.showSearch) "Close search" else "Search",
+                                Modifier.size(24.dp),
+                                iconTint,
+                            )
+                        }
+                        IconButton(onClick = { onEvent(MainEvent.RefreshClicked) }, enabled = !disabled) {
+                            Icon(Icons.Default.Refresh, "Refresh", Modifier.size(24.dp), iconTint)
+                        }
+                        IconButton(onClick = { onEvent(MainEvent.SettingsClicked) }, enabled = !disabled) {
+                            Icon(Icons.Default.SettingsIcon, "Settings", Modifier.size(24.dp), iconTint)
+                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ShareTargetPicker(
+    state: MainUiState,
+    onEvent: (MainEvent) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val enabled = !state.isBusy
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        OutlinedTextField(
+            value = state.settings.repoPathPrefix,
+            onValueChange = { onEvent(MainEvent.RepoPathPrefixChanged(it)) },
+            enabled = enabled,
+            singleLine = true,
+            label = { Text("Target directory") },
+            placeholder = { Text("Repository root") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryEditable),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            state.shareTargetOptions.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.ifBlank { "Repository root" }) },
+                    onClick = {
+                        onEvent(MainEvent.RepoPathPrefixChanged(option))
+                        expanded = false
+                    },
+                )
             }
         }
     }

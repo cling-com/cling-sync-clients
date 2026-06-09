@@ -27,6 +27,7 @@ fun ScrollAwareTopBar(
     onSelectAllClick: () -> Unit,
     onAbortClick: () -> Unit,
     uploadedBytes: Long = 0L,
+    canSelectAll: Boolean = true,
 ) {
     // Derive scroll state.
     val firstVisibleIndex by remember { derivedStateOf { lazyListState.firstVisibleItemIndex } }
@@ -78,6 +79,7 @@ fun ScrollAwareTopBar(
             onSelectAllClick = onSelectAllClick,
             onAbortClick = onAbortClick,
             uploadedBytes = uploadedBytes,
+            canSelectAll = canSelectAll,
         )
     }
 }

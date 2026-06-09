@@ -15,8 +15,14 @@ interface IGoBridge {
     )
 
     // Reports, per input hash, whether its content is present in the repository's
-    // HEAD. Backed by the persisted hash index, so it works without an open repo.
+    // HEAD. Backed by the persisted hash index, so it works without an open repo, but
+    // does NOT verify the index is current (the merge reminder relies on this).
     fun checkFiles(sha256s: List<String>): List<Boolean>
+
+    // Rebuilds the persisted hash index if it was built for a different revision than
+    // the open repository's current HEAD. Interactive callers (scan/share) run this
+    // before checkFiles; requires the repository open.
+    fun ensureFileHashesAtHead()
 
     fun uploadFile(
         localFilePath: String,

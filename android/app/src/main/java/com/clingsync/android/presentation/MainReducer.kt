@@ -45,10 +45,16 @@ object MainReducer {
 
             MainEvent.RefreshClicked -> Reduction(state, listOf(Effect.LoadFiles))
 
+            is MainEvent.RepoPathPrefixChanged ->
+                only(state.copy(settings = state.settings.copy(repoPathPrefix = event.prefix)))
+
             MainEvent.UploadClicked -> upload(state)
 
             MainEvent.AbortClicked ->
                 Reduction(state.copy(isUploadInitiated = false), listOf(Effect.CancelUpload))
+
+            MainEvent.ShareOutcomeAcknowledged ->
+                Reduction(state.copy(shareOutcome = null), listOf(Effect.FinishShare))
 
             is MainEvent.PermissionResult ->
                 if (event.granted) {
