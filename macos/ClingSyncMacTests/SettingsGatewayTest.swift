@@ -6,7 +6,7 @@ import Testing
 struct SettingsGatewayTests {
     private func freshGateway() -> UserDefaultsSettingsGateway {
         let defaults = UserDefaults(suiteName: "test.clingsyncmac.\(UUID().uuidString)")!
-        return UserDefaultsSettingsGateway(defaults: defaults)
+        return UserDefaultsSettingsGateway(defaults: defaults, credentials: InMemoryCredentialStore())
     }
 
     @Test func workspaceConfigsRoundTrip() {

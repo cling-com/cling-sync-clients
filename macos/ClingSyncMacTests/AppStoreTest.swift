@@ -122,7 +122,8 @@ struct AppStoreTests {
 
     private func makeStore(gateway: FakeWorkspaceGateway, prompter: ScriptedPrompter) -> AppStore {
         let settings = UserDefaultsSettingsGateway(
-            defaults: UserDefaults(suiteName: "test.store.\(UUID().uuidString)")!)
+            defaults: UserDefaults(suiteName: "test.store.\(UUID().uuidString)")!,
+            credentials: InMemoryCredentialStore())
         return AppStore(
             gateway: gateway, settings: settings, prompter: prompter, notifier: SilentNotifier(),
             clock: { Self.now }, isTestMode: true)

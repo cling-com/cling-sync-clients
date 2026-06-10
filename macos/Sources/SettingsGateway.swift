@@ -41,40 +41,73 @@ protocol SettingsGateway {
 
 final class UserDefaultsSettingsGateway: SettingsGateway {
     private let defaults: UserDefaults
+    private let credentials: CredentialStore
     private let workspaceConfigsKey = "workspaceConfigs"
     private let lastSuccessfulMergeKey = "lastSuccessfulMergeByPath"
     private let firstTrackedKey = "firstTrackedByPath"
     private let lastStaleNotifiedKey = "lastStaleNotifiedByPath"
 
-    // A test run isolates its state in a named suite passed via the environment;
-    // otherwise the app uses the standard defaults.
-    init(defaults: UserDefaults? = nil) {
+    // The credential store keeps the per-workspace repository URI (with the
+    // passphrase-encrypted S3 credentials) out of UserDefaults/Time Machine. It
+    // defaults to the real Keychain everywhere the real app runs, including the
+    // XCUITest-launched app (which isolates only UserDefaults via the env suite), so
+    // the Keychain relocation is exercised end to end. Unit tests pass an in-memory
+    // store explicitly to stay in-process.
+    init(defaults: UserDefaults? = nil, credentials: CredentialStore? = nil) {
         if let defaults {
             self.defaults = defaults
-            return
-        }
-        let suite = ProcessInfo.processInfo.environment["CLING_SYNC_TEST_DEFAULTS_SUITE"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let suite, !suite.isEmpty, let suiteDefaults = UserDefaults(suiteName: suite) {
-            self.defaults = suiteDefaults
         } else {
-            self.defaults = .standard
+            let suite = ProcessInfo.processInfo.environment["CLING_SYNC_TEST_DEFAULTS_SUITE"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let suite, !suite.isEmpty, let suiteDefaults = UserDefaults(suiteName: suite) {
+                self.defaults = suiteDefaults
+            } else {
+                self.defaults = .standard
+            }
         }
+        self.credentials = credentials ?? KeychainCredentialStore()
     }
 
     func loadWorkspaceConfigs() -> [WorkspaceConfig] {
+        var configs = decodeWorkspaceConfigs()
+        var needsMigration = false
+        for index in configs.indices {
+            if let uri = credentials.get(configs[index].id.uuidString) {
+                configs[index].repositoryURI = uri
+            } else if !configs[index].repositoryURI.isEmpty {
+                // The URI is still in the UserDefaults JSON from a pre-Keychain
+                // version; move it into the credential store and re-persist stripped.
+                needsMigration = true
+            }
+        }
+        if needsMigration {
+            saveWorkspaceConfigs(configs)
+        }
+        return configs
+    }
+
+    func saveWorkspaceConfigs(_ configs: [WorkspaceConfig]) {
+        let liveIds = Set(configs.map { $0.id.uuidString })
+        for stale in decodeWorkspaceConfigs() where !liveIds.contains(stale.id.uuidString) {
+            credentials.remove(stale.id.uuidString)
+        }
+        var stripped = configs
+        for index in stripped.indices {
+            credentials.set(stripped[index].id.uuidString, stripped[index].repositoryURI)
+            stripped[index].repositoryURI = ""
+        }
+        if let data = try? JSONEncoder().encode(stripped) {
+            defaults.set(data, forKey: workspaceConfigsKey)
+        }
+    }
+
+    private func decodeWorkspaceConfigs() -> [WorkspaceConfig] {
         guard let data = defaults.data(forKey: workspaceConfigsKey),
             let decoded = try? JSONDecoder().decode([WorkspaceConfig].self, from: data)
         else {
             return []
         }
         return decoded
-    }
-
-    func saveWorkspaceConfigs(_ configs: [WorkspaceConfig]) {
-        if let data = try? JSONEncoder().encode(configs) {
-            defaults.set(data, forKey: workspaceConfigsKey)
-        }
     }
 
     func loadAppSettings() -> AppSettings {

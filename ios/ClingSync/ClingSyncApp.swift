@@ -14,6 +14,7 @@ struct ClingSyncApp: App {
         if arguments.contains("--reset"), let bundleIdentifier = Bundle.main.bundleIdentifier {
             UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
             PassphraseStore.shared.resetAll()
+            RepositoryURIStore.resetAll()
         }
     }
 
