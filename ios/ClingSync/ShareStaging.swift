@@ -1,9 +1,12 @@
 import Foundation
 
-// A share staged and waiting to be presented as the share screen.
+// A share staged and waiting to be presented as the share screen. Carries the
+// screen's own MainStore so app-level lifecycle (the background grace close)
+// can see the share's connection and upload state.
 struct PendingShare: Identifiable {
     let id = UUID()
     let staged: [(file: SourceFile, url: URL)]
+    let store: MainStore
 }
 
 // The app-wide single active upload, consulted by the share screen so a share
@@ -38,9 +41,22 @@ extension MainStore {
         shareCoalesceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard let self, !Task.isCancelled, self.pendingShare == nil, !self.stagedShareFiles.isEmpty else { return }
-            self.pendingShare = PendingShare(staged: self.stagedShareFiles)
+            self.pendingShare = PendingShare(
+                staged: self.stagedShareFiles, store: self.makeShareStore(self.stagedShareFiles))
             self.stagedShareFiles = []
         }
+    }
+
+    // The share screen's own store over the staged files, with its own prompt
+    // controllers: they present above the share cover, where the main store's
+    // sheets cannot appear.
+    private func makeShareStore(_ staged: [(file: SourceFile, url: URL)]) -> MainStore {
+        let share = MainStore(
+            source: SharedFilesSource(staged: staged),
+            passphraseController: PassphrasePromptController(),
+            s3Controller: S3CredentialsPromptController())
+        share.backgroundCloseDelegate = self
+        return share
     }
 
     func dismissShare() {
@@ -51,6 +67,8 @@ extension MainStore {
         shareCoalesceTask?.cancel()
         if !stagedShareFiles.isEmpty {
             scheduleSharePresentation()
+            return
         }
+        reconnectAfterShareDismissed()
     }
 }

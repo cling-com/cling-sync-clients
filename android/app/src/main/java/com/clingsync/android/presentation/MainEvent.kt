@@ -81,6 +81,10 @@ sealed interface MainEvent {
 
     data class ConnectFailed(val message: String) : MainEvent
 
+    // The repository was deliberately closed (the background grace close). Not a
+    // failure: resets the connection flags without surfacing an error.
+    data object RepositoryClosed : MainEvent
+
     data class ShowPassphrasePrompt(val showKeychainOption: Boolean) : MainEvent
 
     data class PassphraseEntered(val result: PassphraseResult) : MainEvent

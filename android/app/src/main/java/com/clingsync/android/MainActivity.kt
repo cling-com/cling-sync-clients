@@ -91,6 +91,7 @@ import androidx.compose.material.icons.filled.Settings as SettingsIcon
 
 class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels { MainViewModel.Factory(application) }
+    private var resumedOnce = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -103,6 +104,17 @@ class MainActivity : FragmentActivity() {
                 MainRoot(activity = this, viewModel = viewModel)
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // First launch (and any recreate) is handled by onStart() from the composition.
+        // Later starts restore the connection in case the background grace close
+        // (RepositoryCloser) dropped the repository while the app was away.
+        if (resumedOnce) {
+            viewModel.onResumed()
+        }
+        resumedOnce = true
     }
 }
 

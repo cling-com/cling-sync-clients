@@ -128,14 +128,14 @@ class MainViewModelTest {
     }
 
     @Test
-    fun cancellingTheS3PromptSurfacesConnectionError() {
+    fun cancellingTheS3PromptDeclinesWithoutAnError() {
         viewModel.dispatch(MainEvent.ConnectClicked)
         viewModel.dispatch(MainEvent.PassphraseEntered(PassphraseResult(repo.passphrase, saveToKeychain = false)))
         assertEquals(Overlay.S3Credentials, viewModel.state.value.overlay)
 
         viewModel.dispatch(MainEvent.S3CredentialsDismissed)
 
-        assertTrue(viewModel.state.value.overlay is Overlay.Error)
+        assertFalse(viewModel.state.value.overlay is Overlay.Error)
         assertFalse(viewModel.state.value.isConnected)
         assertFalse(viewModel.state.value.isConnecting)
     }

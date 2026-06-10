@@ -32,22 +32,59 @@ import java.util.UUID
 // (de)selectable and uploaded exactly like the camera backup, with a target picker
 // on top. The upload worker reclaims the staging dir when it finishes.
 class ShareActivity : FragmentActivity() {
-    private val stagingDir by lazy { File(cacheDir, "shared_uploads/${UUID.randomUUID()}") }
+    // Stable across recreation (rotation): the surviving ViewModel and a possibly
+    // running upload keep using this directory, so a recreated Activity must not
+    // stage into a fresh one.
+    private lateinit var stagingDirName: String
+    private val stagingDir by lazy { File(cacheDir, "shared_uploads/$stagingDirName") }
     private val viewModel: MainViewModel by viewModels {
         MainViewModel.Factory(application, sourceDirOverride = stagingDir.absolutePath, shareMode = true)
     }
+    private var resumedOnce = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_ClingSync)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         GoBridgeProvider.initialize(applicationContext)
+        stagingDirName = savedInstanceState?.getString(STATE_STAGING_DIR) ?: UUID.randomUUID().toString()
         val uris = incomingUris()
         setContent {
             ClingSyncTheme {
                 ShareRoot(activity = this, viewModel = viewModel, uris = uris, stagingDir = stagingDir)
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_STAGING_DIR, stagingDirName)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // First launch is handled by onStart() from the composition (after staging).
+        // Later starts restore the connection in case the background grace close
+        // (RepositoryCloser) dropped the repository while the share was away.
+        if (resumedOnce) {
+            viewModel.onResumed()
+        }
+        resumedOnce = true
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // A successful upload's worker reclaims the staging dir itself; an abandoned
+        // share (cancelled, or dismissed after a failure) is reclaimed here. A running
+        // or queued upload still reads from the dir and keeps it.
+        val s = viewModel.state.value
+        if (isFinishing && !s.isUploading && !s.isUploadInitiated) {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    private companion object {
+        const val STATE_STAGING_DIR = "stagingDirName"
     }
 
     private fun incomingUris(): List<Uri> =
@@ -91,8 +128,17 @@ private fun ShareRoot(
 
     // Stage the shared files into the per-launch dir, then start the ViewModel (which
     // loads + scans them). Staging first keeps the worker's source directory complete.
+    // A recreated Activity (rotation) reuses the directory: the files are already
+    // there and an upload may be reading them right now, so never re-stage. The
+    // marker is a dot-file, which the source-file listing skips.
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) { stageInto(activity.contentResolver, uris, stagingDir) }
+        withContext(Dispatchers.IO) {
+            val staged = File(stagingDir, ".staged")
+            if (!staged.exists()) {
+                stageInto(activity.contentResolver, uris, stagingDir)
+                staged.createNewFile()
+            }
+        }
         viewModel.onStart()
     }
 

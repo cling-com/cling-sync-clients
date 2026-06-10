@@ -177,6 +177,11 @@ enum MainReducer {
         var base = state
         base.configuration = configuration
         base.showSettings = false
+        // First-run: only a successful connect sets `.ready` otherwise, so saving
+        // valid settings from the Welcome screen must move on by itself.
+        if configuration.isConfigured, base.phase == .needsSettings {
+            base.phase = .ready
+        }
         let persist = Effect.persistSettings(configuration)
         if repositoryChanged {
             base.fileStatus = [:]

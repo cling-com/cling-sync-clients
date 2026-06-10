@@ -5,6 +5,11 @@ interface IGoBridge {
     // before any other call.
     fun initialize(cacheDir: String)
 
+    // Closes the open repository, freeing the decrypted repository and its in-memory
+    // snapshot. The persisted file-hash index is kept so background reminder scans
+    // (checkFiles) keep working. The app calls this when it is sent to the background.
+    fun closeRepository()
+
     fun checkRepositoryOpen(repositoryUri: String): Boolean
 
     // Opens the repository. `repositoryUri` is a file path or an `s3+...` URI

@@ -27,6 +27,10 @@ struct RepositoryConnector {
         else {
             throw ConnectDeclined()
         }
+        // The open below runs detached and cannot be cancelled once issued; a
+        // connect superseded while prompting (a background close, a repository
+        // switch) must stop here, or it would reopen what was just closed.
+        try Task.checkCancellation()
         try await Bridge.triggerNetworkPermissionIfNeeded(url: configuration.hostURL)
         _ = try await repository.open(
             hostURL: configuration.hostURL,

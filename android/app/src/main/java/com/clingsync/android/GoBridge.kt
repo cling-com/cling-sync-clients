@@ -60,6 +60,10 @@ open class GoBridge : IGoBridge {
         executeInternal("init", params)
     }
 
+    override fun closeRepository() {
+        executeInternal("closeRepository", JSONObject())
+    }
+
     override fun checkRepositoryOpen(repositoryUri: String): Boolean {
         val params = JSONObject().apply { put("hostUrl", repositoryUri) }
         val response = executeInternal("checkRepositoryOpen", params)

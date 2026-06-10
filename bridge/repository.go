@@ -112,7 +112,7 @@ func GetRepositoryHeadRevisionID() string {
 // OpenRepository closes any existing repository and opens a new one. `hostURL`
 // is a local path or an `s3+...` URI carrying its encrypted credentials.
 func OpenRepository(hostURL, password string) error {
-	closeRepository()
+	releaseRepository()
 	storage, err := workspace.OpenStorage(hostURL, []byte(password))
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open repository storage")
@@ -123,7 +123,7 @@ func OpenRepository(hostURL, password string) error {
 	}
 	repositoryHostURL = hostURL
 	if err := refreshSnapshot(); err != nil {
-		closeRepository()
+		releaseRepository()
 		return err
 	}
 	return nil
@@ -186,13 +186,33 @@ func EnsureFileHashesAtHead() error {
 	return rebuildSnapshot(currentHead)
 }
 
+// closeRepository drops the open repository and clears the hash index. Used when
+// switching repositories, where the index no longer applies: answering reminder
+// scans from another repository's index would wrongly mark files as backed up.
 func closeRepository() {
+	releaseRepository()
+	repositoryFileHashes.Clear()
+}
+
+// CloseRepository drops the open repository on the app's request (e.g. when it is
+// sent to the background), freeing the decrypted repository and its in-memory
+// snapshot. The persisted hash index is KEPT: HEAD has not moved, so the headless
+// merge reminder's CheckFiles keeps answering correctly with no repository open.
+func CloseRepository() {
+	releaseRepository()
+}
+
+// releaseRepository drops the open repository, closing it to release its resources,
+// without touching the persisted hash index.
+func releaseRepository() {
+	if repository != nil {
+		_ = repository.Close()
+	}
 	repository = nil
 	repositoryHostURL = ""
 	head = lib.RevisionId{}
 	snapshot = nil
 	snapshotCache = nil
-	repositoryFileHashes.Clear()
 }
 
 // RepositoryFileHashes is the sorted set of file content hashes in the

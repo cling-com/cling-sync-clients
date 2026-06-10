@@ -193,6 +193,16 @@ class UploadWorker(
                         "result_file" to resultFile.absolutePath,
                     )
 
+                // A share upload stages its files in a cache subdir it owns; reclaim it
+                // only on success. A failed or aborted upload keeps the staged files,
+                // or the retry the share screen offers would have nothing to upload.
+                // An abandoned share's dir is removed by ShareActivity on finish.
+                inputData
+                    .getString(KEY_SOURCE_DIR)
+                    ?.let(::File)
+                    ?.takeIf { it.absolutePath.startsWith(applicationContext.cacheDir.absolutePath) }
+                    ?.deleteRecursively()
+
                 Result.success(outputData)
             } catch (e: Exception) {
                 Log.e("Worker", "Upload failed", e)
@@ -223,14 +233,6 @@ class UploadWorker(
                 // enclosing withContext from ever completing.
                 progressJob.cancel()
                 updateProgressFile()
-                // A share upload stages its files in a cache subdir it owns; reclaim
-                // it here (tied to the worker, which outlives the share screen) rather
-                // than in the UI, so cancelling the screen mid-upload can't leak it.
-                inputData
-                    .getString(KEY_SOURCE_DIR)
-                    ?.let(::File)
-                    ?.takeIf { it.absolutePath.startsWith(applicationContext.cacheDir.absolutePath) }
-                    ?.deleteRecursively()
             }
         }
 

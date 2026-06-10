@@ -129,6 +129,9 @@ object MainReducer {
             MainEvent.ConnectSucceeded ->
                 only(state.copy(isConnecting = false, isConnected = true))
 
+            MainEvent.RepositoryClosed ->
+                only(state.copy(isConnecting = false, isConnected = false))
+
             is MainEvent.ConnectFailed ->
                 only(
                     state.copy(

@@ -135,6 +135,16 @@ struct MainReducerTest {
             ])
     }
 
+    @Test func savingFirstValidSettingsLeavesTheWelcomeScreen() {
+        var state = AppState.initial(
+            configuration: RepositoryConfiguration(hostURL: "", repoPathPrefix: "", author: ""))
+        state.phase = .needsSettings
+
+        let reduction = MainReducer.reduce(state, .settingsSaved(config()))
+
+        #expect(reduction.state.phase == .ready)
+    }
+
     @Test func changingNonRepoSettingsJustPersists() {
         let state = stateWithFiles(["a.jpg": .done])
         let newConfig = config(author: "Renamed")

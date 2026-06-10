@@ -28,10 +28,12 @@ import com.clingsync.android.effect.RepositoryGateway
 import com.clingsync.android.getSourceDirectory
 import com.clingsync.android.getSourceFiles
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,7 +83,14 @@ class MainViewModel(
     val actions = _actions.receiveAsFlow()
 
     private var scanJob: Job? = null
+    private var connectJob: Job? = null
     private var s3Continuation: CancellableContinuation<S3CredentialsResult>? = null
+
+    // Whether THIS ViewModel enqueued the upload it is observing. Both the main and
+    // the share ViewModel watch the same unique work, so the share screen also sees
+    // a backup upload that was already running; that foreign upload must not be
+    // reported as the share's outcome.
+    private var enqueuedOwnUpload = false
 
     init {
         viewModelScope.launch {
@@ -124,6 +133,7 @@ class MainViewModel(
             is Effect.EnqueueUpload -> {
                 scanJob?.cancel()
                 scanJob = null
+                enqueuedOwnUpload = true
                 if (shareMode) {
                     RecentTargets.record(getApplication(), _state.value.settings.repoPathPrefix)
                 }
@@ -140,6 +150,11 @@ class MainViewModel(
             Effect.CancelUpload -> workManager.cancelUniqueWork(UploadWorker.WORK_NAME)
             is Effect.PersistSettings -> settingsManager.saveSettings(effect.settings)
             is Effect.InvalidateRepository -> {
+                // Emitted only on a repository switch. A connect still in flight for
+                // the old repository must not survive it: its late success would mark
+                // the app connected while the bridge holds the old repository, and
+                // uploads would land there.
+                connectJob?.cancel()
                 passphraseStore.delete(effect.repositoryId)
                 repositoryUriStore.clear(effect.repositoryId)
             }
@@ -160,9 +175,18 @@ class MainViewModel(
             if (settings.isValid()) {
                 if (gateway.isAlreadyOpen(settings)) {
                     dispatch(MainEvent.ConnectSucceeded)
-                } else if (shareMode || passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
-                    // The share connects eagerly (prompting if needed) so it scans right away.
-                    connect()
+                } else {
+                    // The ViewModel can outlive the repository: a recreate (rotation
+                    // while away) re-runs onStart with state still claiming the
+                    // connection the background grace close dropped. Reset it, or
+                    // connect()'s isConnected guard would block the reopen forever.
+                    if (_state.value.isConnected) {
+                        dispatch(MainEvent.RepositoryClosed)
+                    }
+                    if (shareMode || passphraseStore.hasStoredPassphrase(settings.repositoryID())) {
+                        // The share connects eagerly (prompting if needed) so it scans right away.
+                        connect()
+                    }
                 }
             }
             if (shareMode) {
@@ -174,6 +198,32 @@ class MainViewModel(
                 if (!granted) {
                     emit(ViewAction.RequestPermissions)
                 }
+            }
+        }
+    }
+
+    // Returning to the foreground. The background grace close (RepositoryCloser) may
+    // have dropped the repository while the app was away: if this screen still shows
+    // a connection the bridge no longer has, re-open (a Keychain passphrase unlocks
+    // via biometrics, otherwise the passphrase prompt is shown). A connect already in
+    // flight is left alone, or its prompt would be duplicated and its S3 continuation
+    // leaked. The repository can also have been opened by the other Activity (main
+    // screen vs share) in the meantime; then this screen just adopts the connection.
+    fun onResumed() {
+        viewModelScope.launch {
+            val s = _state.value
+            if (!s.settings.isValid() || s.isConnecting) return@launch
+            // A finished share only shows its outcome dialog; re-authenticating
+            // just to let the user acknowledge it would be pointless friction.
+            if (s.shareOutcome != null) return@launch
+            if (gateway.isAlreadyOpen(s.settings)) {
+                if (!s.isConnected) {
+                    dispatch(MainEvent.ConnectSucceeded)
+                    scanUnscanned()
+                }
+            } else if (s.isConnected) {
+                dispatch(MainEvent.RepositoryClosed)
+                connect()
             }
         }
     }
@@ -205,18 +255,27 @@ class MainViewModel(
         saveToKeychain: Boolean,
     ) {
         dispatch(MainEvent.ConnectStarted)
-        viewModelScope.launch {
-            try {
-                gateway.open(_state.value.settings, passphrase) { askS3() }
-                dispatch(MainEvent.ConnectSucceeded)
-                if (saveToKeychain) {
-                    emit(ViewAction.SavePassphrase(passphrase, _state.value.settings.repositoryID()))
+        connectJob =
+            viewModelScope.launch {
+                try {
+                    gateway.open(_state.value.settings, passphrase) { askS3() }
+                    // A connect cancelled by a repository switch must not record a
+                    // connection for the repository the bridge no longer targets.
+                    ensureActive()
+                    dispatch(MainEvent.ConnectSucceeded)
+                    if (saveToKeychain) {
+                        emit(ViewAction.SavePassphrase(passphrase, _state.value.settings.repositoryID()))
+                    }
+                    scanUnscanned()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: CancelledException) {
+                    // A dismissed credentials prompt is a decline, not a failure.
+                    dispatch(MainEvent.RepositoryClosed)
+                } catch (e: Exception) {
+                    dispatch(MainEvent.ConnectFailed("Failed to connect: ${e.message}"))
                 }
-                scanUnscanned()
-            } catch (e: Exception) {
-                dispatch(MainEvent.ConnectFailed("Failed to connect: ${e.message}"))
             }
-        }
     }
 
     private suspend fun askS3(): S3CredentialsResult =
@@ -252,7 +311,16 @@ class MainViewModel(
     private fun scanUnscanned() {
         val s = _state.value
         if (!s.settings.isValid() || s.files.isEmpty() || !s.isConnected || scanJob != null) return
-        val toCheck = s.files.filter { s.fileStatus[it.absolutePath] == null }
+        // New is rechecked like never-scanned (cheap, the hash cache answers), so a
+        // failed or cancelled scan that reverted files to New heals on the next scan.
+        // A stale Scanning marker (its scan died without a ScanFailed) heals the same way.
+        val toCheck =
+            s.files.filter {
+                when (s.fileStatus[it.absolutePath]) {
+                    null, FileStatus.New, FileStatus.Scanning -> true
+                    else -> false
+                }
+            }
         if (toCheck.isEmpty()) return
         scanJob =
             viewModelScope.launch {
@@ -267,7 +335,11 @@ class MainViewModel(
             fileChecker.checkFiles(
                 filePaths = paths,
                 onProgress = { update ->
-                    dispatch(MainEvent.ScanProgress(update.processedCount, update.totalFiles, update.statuses))
+                    // Invoked on the checker's IO dispatcher; state mutation must stay
+                    // on the main thread or concurrent dispatches lose updates.
+                    viewModelScope.launch {
+                        dispatch(MainEvent.ScanProgress(update.processedCount, update.totalFiles, update.statuses))
+                    }
                 },
             )
         result.fold(
@@ -343,8 +415,10 @@ class MainViewModel(
         val uploadCount = _state.value.currentUploadPaths.size
         dispatchWork(update)
         // A share returns to the main app after its outcome is acknowledged; an abort
-        // keeps the share open so the user can retry or cancel.
-        if (shareMode) {
+        // keeps the share open so the user can retry or cancel. Only an upload this
+        // screen enqueued counts: the share also observes (and may abort) a backup
+        // upload that was already running, whose outcome is not the share's.
+        if (shareMode && enqueuedOwnUpload) {
             _state.value =
                 when (update) {
                     is WorkUpdate.Succeeded -> _state.value.copy(shareOutcome = ShareOutcome.Success(uploadCount))

@@ -36,6 +36,9 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 		}
 		Init(params.CacheDir)
 		return successResponse()
+	case "closeRepository":
+		CloseRepository()
+		return successResponse()
 	case "checkRepositoryOpen":
 		var params struct {
 			HostURL string `json:"hostUrl"`

@@ -6,9 +6,9 @@ import SwiftUI
 // (de)select before uploading. The only additions are the target-directory picker
 // and the "abort the running upload first" guard.
 struct ShareScreen: View {
-    @StateObject private var passphraseController: PassphrasePromptController
-    @StateObject private var s3Controller: S3CredentialsPromptController
-    @StateObject private var store: MainStore
+    @ObservedObject private var passphraseController: PassphrasePromptController
+    @ObservedObject private var s3Controller: S3CredentialsPromptController
+    @ObservedObject private var store: MainStore
 
     private let uploadGuard: ActiveUploadGuard
     private let onFinished: () -> Void
@@ -17,23 +17,19 @@ struct ShareScreen: View {
     @State private var target: String
     @State private var showAbortConfirm = false
 
+    // The store arrives from the main store's `pendingShare` (it owns the share
+    // store so the background grace close can see it), already wired to its own
+    // prompt controllers.
     init(
-        staged: [(file: SourceFile, url: URL)],
+        store: MainStore,
         uploadGuard: ActiveUploadGuard,
         onFinished: @escaping () -> Void
     ) {
-        let passphrase = PassphrasePromptController()
-        let s3Prompt = S3CredentialsPromptController()
         let settings = UserDefaultsSettingsGateway()
         let options = ShareTargetOptions(settingsPrefix: settings.load().repoPathPrefix, recent: RecentTargets.load())
-        _passphraseController = StateObject(wrappedValue: passphrase)
-        _s3Controller = StateObject(wrappedValue: s3Prompt)
-        _store = StateObject(
-            wrappedValue: MainStore(
-                settings: settings,
-                source: SharedFilesSource(staged: staged),
-                passphraseController: passphrase,
-                s3Controller: s3Prompt))
+        _store = ObservedObject(wrappedValue: store)
+        _passphraseController = ObservedObject(wrappedValue: store.passphraseController)
+        _s3Controller = ObservedObject(wrappedValue: store.s3Controller)
         self.uploadGuard = uploadGuard
         self.onFinished = onFinished
         targetOptions = options.options

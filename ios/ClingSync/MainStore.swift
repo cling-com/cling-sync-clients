@@ -2,6 +2,8 @@ import Photos
 import SwiftUI
 import UIKit
 
+// swiftlint:disable file_length
+
 // Terminal banner after an upload finishes, shown in the bottom bar. The share screen
 // returns to the main app once a succeeded/failed banner is dismissed (not aborted).
 enum UploadOutcome: Equatable {
@@ -43,6 +45,23 @@ final class MainStore: ObservableObject {
     private var connectTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
     private var uploadTask: Task<Void, Never>?
+    // Set when the background grace close dropped the repository, so the next
+    // foreground re-authenticates (biometric for a Keychain passphrase, prompt
+    // otherwise).
+    private var reopenOnForeground = false
+    private var closeGraceTask: Task<Void, Never>?
+    private var closeBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    // Set when the background allowance expired while an upload was still running:
+    // close the moment the upload ends, while its own background task still keeps
+    // the process alive, instead of leaving the repository open all suspension long.
+    private var closeWhenUploadEnds = false
+    // The share screen's store points back at the main store, which coordinates the
+    // background close for both.
+    weak var backgroundCloseDelegate: MainStore?
+    // The settings sheet's connection test, tracked so the background close can
+    // cancel it; an untracked test could finish its open after the close and leave
+    // the repository silently open in the background.
+    private var testConnectionTask: Task<Void, Error>?
     // A brief background grace window. An interrupted transfer resumes from already-transferred blocks next time.
     private var uploadBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -144,6 +163,146 @@ final class MainStore: ObservableObject {
                 hostURL: configuration.hostURL, repoPathPrefix: configuration.repoPathPrefix, author: author)
         }
         settings.save(configuration)
+    }
+
+    // MARK: - Background lifecycle
+
+    // Close the repository only after this long in the background, so a quick app
+    // switch costs no re-authentication. iOS grants roughly this much background
+    // runtime; if it ends sooner, the task's expiration handler closes early.
+    private static let backgroundCloseGraceSeconds: UInt64 = 30
+
+    // The app left the foreground: drop the open repository after a grace period,
+    // so the decrypted repository and its keys do not linger in memory. Armed
+    // unconditionally: the repository can be open without any store flag showing
+    // it (an abandoned repository after a settings switch, a share dismissed
+    // mid-connect), and closing a closed repository is a no-op. The close waits
+    // for a running upload (the main screen's or the share screen's) and runs as
+    // soon as it finishes. A running scan survives the close: it answers from the
+    // persisted hash index, which closeRepository keeps. Only the main store
+    // receives scene-phase calls; it covers the share screen's store through
+    // `pendingShare`.
+    func enterBackground() {
+        closeGraceTask?.cancel()
+        closeWhenUploadEnds = false
+        beginCloseBackgroundTask()
+        closeGraceTask = Task {
+            try? await Task.sleep(nanoseconds: Self.backgroundCloseGraceSeconds * NSEC_PER_SEC)
+            while !Task.isCancelled, self.hasAnyActiveUpload {
+                try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
+            }
+            guard !Task.isCancelled else { return }
+            self.closeForBackground()
+        }
+    }
+
+    // Returning to the foreground. Within the grace period this just cancels the
+    // pending close. After a close, re-open: when the share cover is up its store
+    // reconnects (its prompt sheets present above the cover; the main store's
+    // would be stuck beneath it) and the main store adopts the connection once
+    // the share is dismissed. A Keychain passphrase unlocks via biometrics; a
+    // session-only passphrase prompts.
+    func enterForeground() {
+        closeGraceTask?.cancel()
+        closeGraceTask = nil
+        closeWhenUploadEnds = false
+        endCloseBackgroundTask()
+        guard reopenOnForeground else { return }
+        reopenOnForeground = false
+        if let share = pendingShare?.store {
+            share.connect(promptIfNeeded: true)
+        } else {
+            connect(promptIfNeeded: true)
+        }
+    }
+
+    // After the share cover is gone, the main screen takes the connection back:
+    // the share flow usually left the repository open (adopted silently, the
+    // connector short-circuits), or the grace close dropped it while the cover
+    // was up. Then a stored passphrase reopens via biometrics; without one the
+    // screen stays disconnected, like a declined launch connect.
+    func reconnectAfterShareDismissed() {
+        guard !state.isConnected, !state.isConnecting else { return }
+        connect(promptIfNeeded: false)
+    }
+
+    private var anyConnectionActive: Bool {
+        let share = pendingShare?.store
+        return state.isConnected || state.isConnecting
+            || share?.state.isConnected == true || share?.state.isConnecting == true
+    }
+
+    private var hasAnyActiveUpload: Bool {
+        state.isBusy || pendingShare?.store.state.isBusy == true
+    }
+
+    private func closeForBackground() {
+        defer { endCloseBackgroundTask() }
+        // The close must never land after the user is already back: a wait tick or
+        // the expiration handler can race the foreground transition.
+        guard UIApplication.shared.applicationState == .background else { return }
+        guard !hasAnyActiveUpload else { return }
+        // Reopen on return only when a screen showed a connection; the close also
+        // drops repositories no flag tracks (after a settings switch or a test),
+        // and those must not summon a prompt out of nowhere.
+        let reopen = anyConnectionActive
+        // Cancel in-flight connects first so no new open is issued; the close is
+        // serialized behind a bridge open already in flight and so drops it too.
+        noteRepositoryClosed()
+        pendingShare?.store.noteRepositoryClosed()
+        testConnectionTask?.cancel()
+        try? Bridge.closeRepository()
+        if reopen {
+            reopenOnForeground = true
+        }
+    }
+
+    // On the main store: the grace close defers to a running upload (of either
+    // store); when the background allowance expired mid-upload, close the moment
+    // the upload ends, while its background task still keeps the process alive.
+    func uploadEnded() {
+        guard closeWhenUploadEnds else { return }
+        closeWhenUploadEnds = false
+        closeForBackground()
+    }
+
+    // Folds the background close into this store's state: an in-flight connect is
+    // cancelled (its success would record a connection the bridge no longer has)
+    // and the connection flags drop without surfacing an error.
+    private func noteRepositoryClosed() {
+        connectTask?.cancel()
+        passphraseController.cancel()
+        s3Controller.cancel()
+        state.isConnecting = false
+        state.isConnected = false
+    }
+
+    private func beginCloseBackgroundTask() {
+        endCloseBackgroundTask()
+        closeBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "ClingSyncClose") { [weak self] in
+            // Called on the main thread when iOS is about to suspend the app before
+            // the grace ran out. Run synchronously: an async hop might never execute
+            // before the process freezes, and the allowance is about as long as the
+            // grace, so this is the close that usually fires. With an upload still
+            // running (it holds its own background task), close as soon as it ends.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.closeGraceTask?.cancel()
+                self.closeGraceTask = nil
+                if self.hasAnyActiveUpload {
+                    self.closeWhenUploadEnds = true
+                    self.endCloseBackgroundTask()
+                } else {
+                    self.closeForBackground()
+                }
+            }
+        }
+    }
+
+    private func endCloseBackgroundTask() {
+        guard closeBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(closeBackgroundTask)
+        closeBackgroundTask = .invalid
     }
 
     // MARK: - Connect
@@ -287,8 +446,9 @@ final class MainStore: ObservableObject {
             uploadOutcome = .failed(message: error)
             endUploadBackgroundTask()
         case .enqueued, .running:
-            break
+            return
         }
+        (backgroundCloseDelegate ?? self).uploadEnded()
     }
 
     private func beginUploadBackgroundTask() {
@@ -349,6 +509,12 @@ final class MainStore: ObservableObject {
     func handleSettingsSaved(_ configuration: RepositoryConfiguration) {
         if state.configuration.repositoryID != configuration.repositoryID {
             uploadOutcome = nil
+            // The new repository must not inherit an in-flight connect: its late
+            // success would mark the app connected while the bridge still holds
+            // the old repository, and uploads would land there.
+            connectTask?.cancel()
+            passphraseController.cancel()
+            s3Controller.cancel()
         }
         dispatch(.settingsSaved(configuration))
     }
@@ -360,10 +526,39 @@ final class MainStore: ObservableObject {
         passphrase: PassphrasePromptController,
         s3 s3Controller: S3CredentialsPromptController
     ) async throws {
-        try await connector.connect(configuration, promptIfNeeded: true, passphrase: passphrase, s3: s3Controller)
+        let task = Task {
+            try await connector.connect(configuration, promptIfNeeded: true, passphrase: passphrase, s3: s3Controller)
+        }
+        testConnectionTask = task
+        defer { testConnectionTask = nil }
+        do {
+            try await task.value
+        } catch {
+            await resyncAfterFailedTest()
+            throw error
+        }
+        // Testing a different repository IS a switch (the bridge holds a single
+        // repository), so the old repository's scan results must not survive it,
+        // or its already-backed-up marks would suppress uploads to the new one.
+        if state.configuration.repositoryID != configuration.repositoryID {
+            state.fileStatus = [:]
+            state.selectedIds = []
+        }
         state.configuration = configuration
         uploadOutcome = nil
         connectSucceeded()
+    }
+
+    // A test that touched a different repository closed the live one (checking a
+    // mismatched host closes it in the bridge). Put the screen back into an honest
+    // state and try to reopen the previous repository without prompting.
+    private func resyncAfterFailedTest() async {
+        guard state.isConnected else { return }
+        if await repository.isAlreadyOpen(hostURL: state.configuration.hostURL).open {
+            return
+        }
+        state.isConnected = false
+        connect(promptIfNeeded: false)
     }
 }
 
@@ -380,10 +575,12 @@ extension MainStore: ActiveUploadGuard {
     }
 }
 
-// A file with no scan status yet, or reset to New, still needs checking.
+// A file with no scan status yet, or reset to New, still needs checking. A stale
+// `.checking` (its scan was cancelled mid-flight) is rechecked the same way, or it
+// would be stranded unscannable for the rest of the session.
 private func isUnscanned(_ status: FileStatus?) -> Bool {
     switch status {
-    case .none, .new:
+    case .none, .new, .checking:
         return true
     default:
         return false

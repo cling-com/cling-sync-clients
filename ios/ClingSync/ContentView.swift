@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var passphraseController: PassphrasePromptController
     @StateObject private var s3Controller: S3CredentialsPromptController
     @StateObject private var store: MainStore
@@ -38,9 +39,16 @@ struct ContentView: View {
                 store.receiveSharedURLs(shareTestFixtureURLs())
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: store.enterBackground()
+            case .active: store.enterForeground()
+            default: break
+            }
+        }
         .onOpenURL { url in store.receiveSharedURLs([url]) }
         .fullScreenCover(item: $store.pendingShare) { share in
-            ShareScreen(staged: share.staged, uploadGuard: store, onFinished: { store.dismissShare() })
+            ShareScreen(store: share.store, uploadGuard: store, onFinished: { store.dismissShare() })
         }
         .sheet(isPresented: showSettings) {
             SettingsView(store: store, isPresented: showSettings)

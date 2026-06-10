@@ -285,6 +285,64 @@ func TestRepository(t *testing.T) { //nolint:paralleltest
 		assert.Equal(true, os.IsNotExist(statErr))
 	})
 
+	t.Run("CloseRepository keeps the index for the reminder", func(t *testing.T) { //nolint:paralleltest
+		setupRepositoryGlobals(t)
+		assert := lib.NewAssert(t)
+
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		assert.NoError(InitNewFileRepository(repoDir, "testpassphrase"))
+		assert.NoError(OpenRepository(repoDir, "testpassphrase"))
+		source := filepath.Join(t.TempDir(), "a.jpg")
+		assert.NoError(os.WriteFile(source, []byte("alpha"), 0o600))
+		entry, _, err := UploadFile(source, "a.jpg")
+		assert.NoError(err)
+		_, err = CommitEntries([]*lib.RevisionEntry{entry}, "Tester", "backup")
+		assert.NoError(err)
+		indexPath := repositoryFileHashes.path
+
+		// The deliberate close (what the app calls when backgrounded) drops the
+		// repository but keeps the persisted index.
+		CloseRepository()
+
+		assert.Equal(true, repository == nil)
+		assert.Equal("", repositoryHostURL)
+		assert.Equal(true, snapshot == nil)
+		assert.Equal(true, snapshotCache == nil)
+		_, statErr := os.Stat(indexPath)
+		assert.NoError(statErr)
+
+		// Drop the in-memory copy to prove the on-disk index survived the close, so the
+		// headless merge reminder's CheckFiles still answers.
+		repositoryFileHashes.hashes = nil
+		found, err := CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+		assert.NoError(err)
+		assert.Equal([]bool{true}, found)
+	})
+
+	t.Run("A failed reopen keeps the persisted index", func(t *testing.T) { //nolint:paralleltest
+		setupRepositoryGlobals(t)
+		assert := lib.NewAssert(t)
+
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		assert.NoError(InitNewFileRepository(repoDir, "testpassphrase"))
+		assert.NoError(OpenRepository(repoDir, "testpassphrase"))
+		source := filepath.Join(t.TempDir(), "a.jpg")
+		assert.NoError(os.WriteFile(source, []byte("alpha"), 0o600))
+		entry, _, err := UploadFile(source, "a.jpg")
+		assert.NoError(err)
+		_, err = CommitEntries([]*lib.RevisionEntry{entry}, "Tester", "backup")
+		assert.NoError(err)
+		CloseRepository()
+
+		// The reopen after a background close can fail (wrong passphrase, offline);
+		// the merge reminder must still answer from the last session's index.
+		assert.Error(OpenRepository(repoDir, "wrongpassphrase"), "failed to open repository")
+		repositoryFileHashes.hashes = nil
+		found, err := CheckFiles([]lib.Sha256{td.SHA256("alpha")})
+		assert.NoError(err)
+		assert.Equal([]bool{true}, found)
+	})
+
 	t.Run("CheckRepositoryOpen closes on host mismatch", func(t *testing.T) { //nolint:paralleltest
 		setupRepositoryGlobals(t)
 		assert := lib.NewAssert(t)

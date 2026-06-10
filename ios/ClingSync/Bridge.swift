@@ -26,6 +26,13 @@ class Bridge {
         _ = try execute(command: "init", params: ["cacheDir": cacheDir])
     }
 
+    // Closes the open repository, freeing the decrypted repository and its in-memory
+    // snapshot. The persisted file-hash index is kept so background reminder scans
+    // (checkFiles) keep working. The app calls this when it is sent to the background.
+    static func closeRepository() throws(BridgeError) {
+        _ = try execute(command: "closeRepository", params: [:])
+    }
+
     // Encrypts the S3 credentials into the repository URI and returns it. The
     // bridge keeps no credential state. The caller stores the URI and re-sends it.
     static func encodeS3URI(
