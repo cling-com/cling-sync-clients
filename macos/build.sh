@@ -52,7 +52,7 @@ usage() {
     echo "        go        - build the Go bridge (arm64 debug)"
     echo "        app       - build the macOS app with xcodebuild (arm64 debug, default)"
     echo "        release   - build the universal App Store release .pkg"
-    echo "        universal - build an unsigned universal .app.zip"
+    echo "        universal - build a signed, notarized universal .app.zip (Developer ID)"
     echo
     echo "  fmt"
     echo "      Format code"
@@ -341,41 +341,84 @@ build_release() {
 }
 
 build_universal() {
-    echo ">>> Building universal unsigned macOS app"
+    echo ">>> Building signed, notarized universal macOS app (Developer ID)"
+    load_env
     sync_icon
     build_go_universal
 
-    local app_release_path="$derived_data_path/Build/Products/Release/ClingSyncMac.app"
-    rm -rf "$derived_data_path/Build/Products/Release"
+    # The sandbox/Hardened Runtime is what binds the login-keychain item's ACL to
+    # the app identity; an unsigned, unsandboxed build (the old behaviour here)
+    # leaves the per-remote encryption key reachable by any same-user process.
+    if ! security find-identity -v -p codesigning \
+        | grep -q "Developer ID Application: .*($development_team_id)"; then
+        echo "Error: no 'Developer ID Application' identity for team $development_team_id in the keychain."
+        echo "       Create one at developer.apple.com and install it in the login keychain."
+        exit 1
+    fi
+    if [ -z "${APP_STORE_CONNECT_API_KEY:-}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
+        echo "Error: APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID must be set in .env for notarization."
+        exit 1
+    fi
+    api_key_file="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY}.p8"
+    if [ ! -f "$api_key_file" ]; then
+        echo "Error: notarization key not found at $api_key_file"
+        exit 1
+    fi
 
-    run_xcodebuild xcodebuild-universal.log \
+    rm -rf build/ClingSyncMac.xcarchive build/export-universal
+
+    echo ">>> Creating archive..."
+    run_xcodebuild xcodebuild-universal-archive.log \
+        archive \
         -project "$xcode_project" \
         -scheme "$xcode_scheme" \
         -configuration Release \
         -destination 'generic/platform=macOS' \
-        -derivedDataPath "$derived_data_path" \
-        CODE_SIGNING_ALLOWED=NO \
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGN_ENTITLEMENTS="" \
-        ENABLE_HARDENED_RUNTIME=NO \
-        build
+        -archivePath build/ClingSyncMac.xcarchive \
+        CODE_SIGNING_ALLOWED=YES \
+        CODE_SIGN_STYLE=Automatic \
+        ENABLE_HARDENED_RUNTIME=YES \
+        DEVELOPMENT_TEAM="$development_team_id" \
+        -allowProvisioningUpdates
 
-    if [ ! -d "$app_release_path" ]; then
-        echo "Error: built .app not found at $app_release_path"
+    echo ">>> Exporting Developer ID app..."
+    PATH="/usr/bin:$PATH" run_xcodebuild xcodebuild-universal-export.log \
+        -exportArchive \
+        -archivePath build/ClingSyncMac.xcarchive \
+        -exportPath build/export-universal \
+        -exportOptionsPlist ExportOptionsDeveloperID.plist \
+        -allowProvisioningUpdates
+
+    local exported_app="$root/build/export-universal/ClingSyncMac.app"
+    if [ ! -d "$exported_app" ]; then
+        echo "Error: exported .app not found at $exported_app"
         exit 1
     fi
+
+    echo ">>> Submitting to the Apple notary service (uploads and waits)..."
+    local notarize_zip="$root/build/ClingSyncMac-notarize.zip"
+    rm -f "$notarize_zip"
+    ditto -c -k --keepParent "$exported_app" "$notarize_zip"
+    xcrun notarytool submit "$notarize_zip" \
+        --key "$api_key_file" \
+        --key-id "$APP_STORE_CONNECT_API_KEY" \
+        --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+        --wait
+    rm -f "$notarize_zip"
+
+    echo ">>> Stapling notarization ticket..."
+    xcrun stapler staple "$exported_app"
 
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
     local zip_path="$repo_build/ClingSyncMac.app.zip"
-    echo ">>> Zipping app to $zip_path"
+    echo ">>> Zipping stapled app to $zip_path"
     rm -f "$zip_path"
-    (cd "$(dirname "$app_release_path")" && zip -qry "$zip_path" "$(basename "$app_release_path")")
+    ditto -c -k --keepParent "$exported_app" "$zip_path"
 
     echo ">>> Build complete"
     echo "    Zip: $zip_path"
-    echo "    On each Mac: unzip, then right-click the .app -> Open (one-time Gatekeeper allow)."
+    echo "    Signed (Developer ID), Hardened Runtime, sandboxed, notarized and stapled."
 }
 
 load_env() {
