@@ -15,7 +15,7 @@ object GoBridgeProvider {
     // a worker can cold-start the process on its own.
     fun initialize(context: Context) {
         if (initialized) return
-        getInstance().initialize(context.filesDir.absolutePath)
+        getInstance().initialize(context.filesDir.absolutePath, HashIndexKeyStore.getOrCreate())
         initialized = true
     }
 

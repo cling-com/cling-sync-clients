@@ -9,6 +9,16 @@ import java.net.URL
 // in-process repository. There is no fake bridge: the translation AND the Go
 // logic are the production ones.
 class HttpGoBridge(private val serverUrl: String) : GoBridge() {
+    // Robolectric has no AndroidKeyStore, so HashIndexKeyStore returns null here.
+    // Inject a fixed key so tests still exercise the encrypted index path (the bridge
+    // requires one and never writes the index in the clear).
+    override fun initialize(
+        cacheDir: String,
+        indexKey: ByteArray?,
+    ) {
+        super.initialize(cacheDir, indexKey ?: ByteArray(32))
+    }
+
     override fun rawExecute(
         command: String,
         params: String,

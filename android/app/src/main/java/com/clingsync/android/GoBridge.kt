@@ -1,5 +1,6 @@
 package com.clingsync.android
 
+import android.util.Base64
 import android.util.Log
 import org.json.JSONObject
 
@@ -55,8 +56,17 @@ open class GoBridge : IGoBridge {
         }
     }
 
-    override fun initialize(cacheDir: String) {
-        val params = JSONObject().apply { put("cacheDir", cacheDir) }
+    override fun initialize(
+        cacheDir: String,
+        indexKey: ByteArray?,
+    ) {
+        val params =
+            JSONObject().apply {
+                put("cacheDir", cacheDir)
+                if (indexKey != null) {
+                    put("indexKey", Base64.encodeToString(indexKey, Base64.NO_WRAP))
+                }
+            }
         executeInternal("init", params)
     }
 

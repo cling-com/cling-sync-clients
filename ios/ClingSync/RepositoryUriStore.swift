@@ -62,10 +62,11 @@ enum RepositoryURIStore {
 
     // Removes every stored URI. Used by the app's `--reset` test entry point.
     static func resetAll() {
-        SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-        ] as CFDictionary)
+        SecItemDelete(
+            [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ] as CFDictionary)
         UserDefaults.standard.removeObject(forKey: legacyKey)
     }
 

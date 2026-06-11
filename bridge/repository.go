@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -28,10 +27,13 @@ var (
 	repositoryFileHashes *RepositoryFileHashes //nolint:gochecknoglobals
 )
 
-// Init sets the directory the bridge writes its caches to. Apps must call this
-// once at startup before the repository file hash index can be persisted or read.
-func Init(cacheDir string) {
-	repositoryFileHashes = NewRepositoryFileHashes(cacheDir)
+// Init sets the directory the bridge writes its caches to and the key used to
+// encrypt the file hash index at rest. The key is a 32-byte XChaCha20-Poly1305 key
+// the platform supplies from its keystore. Persisting the index requires it: an
+// absent or wrong-size key fails the write rather than producing a plaintext index.
+// Apps must call this once at startup before the index can be persisted or read.
+func Init(cacheDir string, indexKey []byte) {
+	repositoryFileHashes = NewRepositoryFileHashes(cacheDir, indexKey)
 }
 
 // CheckRepositoryOpen returns true if a repository is currently open for the given host URL.
@@ -217,20 +219,25 @@ func releaseRepository() {
 
 // RepositoryFileHashes is the sorted set of file content hashes in the
 // repository's HEAD, kept in memory and persisted to disk so membership can be
-// answered without the repository open.
+// answered without the repository open. The on-disk index is encrypted under a
+// per-install device key (the platform supplies it via Init), so a copy of the cache
+// file alone is not a membership oracle over the encrypted backup; persisting the
+// index requires the key and never falls back to writing it in the clear.
 type RepositoryFileHashes struct {
 	path   string
 	head   lib.RevisionId
 	hashes []lib.Sha256
+	key    []byte
 }
 
 const repositoryFileHashesFileName = "repository_file_hashes.bin"
 
-func NewRepositoryFileHashes(cacheDir string) *RepositoryFileHashes {
+func NewRepositoryFileHashes(cacheDir string, key []byte) *RepositoryFileHashes {
 	return &RepositoryFileHashes{
 		path:   filepath.Join(cacheDir, repositoryFileHashesFileName),
 		head:   lib.RevisionId{},
 		hashes: nil,
+		key:    key,
 	}
 }
 
@@ -260,32 +267,14 @@ func (r *RepositoryFileHashes) Write(snapshot *lib.Temp[*lib.RevisionEntry], hea
 	r.head = head
 	r.hashes = hashes
 
-	// Write the file.
-	tmp := r.path + ".tmp"
-	file, err := os.Create(tmp)
+	// Serialize, encrypt at rest (when keyed), and replace atomically.
+	out, err := r.seal(r.marshal())
 	if err != nil {
-		return lib.WrapErrorf(err, "failed to create %s", tmp)
+		return lib.WrapErrorf(err, "failed to encrypt %s", r.path)
 	}
-	writer := bufio.NewWriter(file)
-	if _, err := writer.Write(head[:]); err != nil {
-		_ = file.Close()
+	tmp := r.path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return lib.WrapErrorf(err, "failed to write %s", tmp)
-	}
-	for i := range r.hashes {
-		if i > 0 && r.hashes[i] == r.hashes[i-1] {
-			continue
-		}
-		if _, err := writer.Write(r.hashes[i][:]); err != nil {
-			_ = file.Close()
-			return lib.WrapErrorf(err, "failed to write %s", tmp)
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		_ = file.Close()
-		return lib.WrapErrorf(err, "failed to flush %s", tmp)
-	}
-	if err := file.Close(); err != nil {
-		return lib.WrapErrorf(err, "failed to close %s", tmp)
 	}
 	if err := os.Rename(tmp, r.path); err != nil {
 		return lib.WrapErrorf(err, "failed to replace %s", r.path)
@@ -320,29 +309,86 @@ func (r *RepositoryFileHashes) get() []lib.Sha256 {
 	if r.hashes != nil {
 		return r.hashes
 	}
-	file, err := os.Open(r.path)
+	raw, err := os.ReadFile(r.path)
 	if err != nil {
 		return nil
 	}
-	defer file.Close() //nolint:errcheck
-	info, err := file.Stat()
-	if err != nil || int(info.Size()) < len(r.head) {
+	plain, ok := r.open(raw)
+	if !ok {
+		// Unreadable: a wrong key, a corrupt file, or a plaintext index left by a
+		// version before encryption. Drop it so the next foreground refresh rebuilds it.
+		_ = os.Remove(r.path)
 		return nil
 	}
-	reader := bufio.NewReader(file)
-	var head lib.RevisionId
-	if _, err := io.ReadFull(reader, head[:]); err != nil {
-		return nil
-	}
-	hashes := make([]lib.Sha256, (int(info.Size())-len(head))/sha256.Size)
-	for i := range hashes {
-		if _, err := io.ReadFull(reader, hashes[i][:]); err != nil {
-			r.head, r.hashes = head, hashes[:i]
-			return r.hashes
+	r.unmarshal(plain)
+	return r.hashes
+}
+
+// marshal lays the index out as the 32-byte head revision id followed by the
+// sorted, de-duplicated content hashes.
+func (r *RepositoryFileHashes) marshal() []byte {
+	out := make([]byte, 0, len(r.head)+len(r.hashes)*sha256.Size)
+	out = append(out, r.head[:]...)
+	for i := range r.hashes {
+		if i > 0 && r.hashes[i] == r.hashes[i-1] {
+			continue
 		}
+		out = append(out, r.hashes[i][:]...)
+	}
+	return out
+}
+
+// unmarshal parses the layout marshal produced back into the in-memory head and hashes.
+func (r *RepositoryFileHashes) unmarshal(plain []byte) {
+	if len(plain) < len(r.head) {
+		r.head, r.hashes = lib.RevisionId{}, make([]lib.Sha256, 0)
+		return
+	}
+	var head lib.RevisionId
+	copy(head[:], plain[:len(head)])
+	body := plain[len(head):]
+	hashes := make([]lib.Sha256, len(body)/sha256.Size)
+	for i := range hashes {
+		copy(hashes[i][:], body[i*sha256.Size:])
 	}
 	r.head, r.hashes = head, hashes
-	return r.hashes
+}
+
+// seal encrypts the marshalled index under the per-install key with the same
+// XChaCha20-Poly1305 primitive the repository uses (lib.NewCipher/lib.Encrypt), so
+// the cache file alone is not a membership oracle. A missing or wrong-size key is an
+// error: the index is never written in the clear.
+func (r *RepositoryFileHashes) seal(plain []byte) ([]byte, error) {
+	if len(r.key) != lib.RawKeySize {
+		return nil, lib.Errorf("hash index key must be %d bytes, got %d", lib.RawKeySize, len(r.key))
+	}
+	cipher, err := lib.NewCipher(lib.RawKey(r.key))
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "failed to create cipher")
+	}
+	out, err := lib.Encrypt(plain, cipher, nil, make([]byte, len(plain)+lib.TotalCipherOverhead))
+	if err != nil {
+		return nil, lib.WrapErrorf(err, "failed to encrypt hash index")
+	}
+	return out, nil
+}
+
+// open reverses seal. ok is false when the payload cannot be decrypted (no key, wrong
+// key, corruption, or a pre-encryption plaintext file), which the caller treats as a
+// missing index to be rebuilt.
+func (r *RepositoryFileHashes) open(raw []byte) (plain []byte, ok bool) {
+	if len(r.key) != lib.RawKeySize || len(raw) < lib.TotalCipherOverhead {
+		return nil, false
+	}
+	cipher, err := lib.NewCipher(lib.RawKey(r.key))
+	if err != nil {
+		return nil, false
+	}
+	out, err := lib.Decrypt(raw, cipher, nil, make([]byte, len(raw)-lib.TotalCipherOverhead))
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // CheckFiles reports, for each given SHA-256, whether its content is present in the

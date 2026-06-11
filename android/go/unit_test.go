@@ -43,7 +43,8 @@ func newExecuteServer(t *testing.T) *executeServer {
 	t.Helper()
 	// The app calls the bridge's "init" once at startup to set a writable cache
 	// dir; mirror that here so the process-global bridge is ready for every test.
-	bridge.Init(t.TempDir())
+	// The Kotlin side re-runs "init" with its own dir and index key over /execute.
+	bridge.Init(t.TempDir(), make([]byte, 32))
 	es := &executeServer{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/execute", es.handleExecute)

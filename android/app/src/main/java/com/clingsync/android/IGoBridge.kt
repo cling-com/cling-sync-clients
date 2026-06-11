@@ -1,9 +1,13 @@
 package com.clingsync.android
 
 interface IGoBridge {
-    // Sets the directory the bridge writes its caches to. Called once per process
-    // before any other call.
-    fun initialize(cacheDir: String)
+    // Sets the directory the bridge writes its caches to, and the key used to encrypt
+    // the file-hash index at rest (null leaves it in the clear). Called once per
+    // process before any other call.
+    fun initialize(
+        cacheDir: String,
+        indexKey: ByteArray?,
+    )
 
     // Closes the open repository, freeing the decrypted repository and its in-memory
     // snapshot. The persisted file-hash index is kept so background reminder scans

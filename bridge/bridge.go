@@ -30,11 +30,20 @@ func Execute(command string, paramsJSON string) (result string) { //nolint:funle
 	case "init":
 		var params struct {
 			CacheDir string `json:"cacheDir"`
+			IndexKey string `json:"indexKey"`
 		}
 		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
 			return errorResponse("Failed to parse parameters: " + err.Error())
 		}
-		Init(params.CacheDir)
+		var indexKey []byte
+		if params.IndexKey != "" {
+			key, err := base64.StdEncoding.DecodeString(params.IndexKey)
+			if err != nil {
+				return errorResponse("Failed to decode indexKey: " + err.Error())
+			}
+			indexKey = key
+		}
+		Init(params.CacheDir, indexKey)
 		return successResponse()
 	case "closeRepository":
 		CloseRepository()

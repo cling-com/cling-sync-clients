@@ -36,6 +36,9 @@ func fileEntry(path, content string) *lib.RevisionEntry {
 	return td.RevisionEntryExt(path, lib.RevisionEntryKindAdd, 0o600, content)
 }
 
+// testIndexKey is a fixed 32-byte key so encrypted-index round-trips are deterministic.
+func testIndexKey() []byte { return bytes.Repeat([]byte{0x42}, lib.RawKeySize) }
+
 func setupRepositoryGlobals(t *testing.T) {
 	t.Helper()
 	repository = nil
@@ -43,7 +46,7 @@ func setupRepositoryGlobals(t *testing.T) {
 	head = lib.RevisionId{}
 	snapshot = nil
 	snapshotCache = nil
-	Init(t.TempDir())
+	Init(t.TempDir(), testIndexKey())
 }
 
 func TestRepositoryFileHashes(t *testing.T) {
@@ -52,7 +55,7 @@ func TestRepositoryFileHashes(t *testing.T) {
 	t.Run("New uses the cache dir", func(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
-		r := NewRepositoryFileHashes("/some/cache")
+		r := NewRepositoryFileHashes("/some/cache", nil)
 		assert.Equal(filepath.Join("/some/cache", "repository_file_hashes.bin"), r.path)
 	})
 
@@ -62,7 +65,7 @@ func TestRepositoryFileHashes(t *testing.T) {
 		cacheDir := t.TempDir()
 		snapshot, head := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"), fileEntry("b.jpg", "beta"))
 
-		r := NewRepositoryFileHashes(cacheDir)
+		r := NewRepositoryFileHashes(cacheDir, testIndexKey())
 		assert.NoError(r.Write(snapshot, head))
 		assert.Equal(true, r.Contains(td.SHA256("alpha")))
 		assert.Equal(true, r.Contains(td.SHA256("beta")))
@@ -71,7 +74,7 @@ func TestRepositoryFileHashes(t *testing.T) {
 
 		// A fresh instance over the same dir reads the persisted index AND the head it
 		// was built for, the case the headless reminder relies on (no Write, cold process).
-		reloaded := NewRepositoryFileHashes(cacheDir)
+		reloaded := NewRepositoryFileHashes(cacheDir, testIndexKey())
 		assert.Equal(true, reloaded.Contains(td.SHA256("alpha")))
 		assert.Equal(false, reloaded.Contains(td.SHA256("gamma")))
 		assert.Equal(head, reloaded.Head())
@@ -90,15 +93,15 @@ func TestRepositoryFileHashes(t *testing.T) {
 			fileEntry("sub/c.jpg", "other"),
 		)
 
-		r := NewRepositoryFileHashes(cacheDir)
+		r := NewRepositoryFileHashes(cacheDir, testIndexKey())
 		assert.NoError(r.Write(snapshot, head))
 
-		data, err := os.ReadFile(r.path)
-		assert.NoError(err)
-		// The 32-byte head revision precedes the two de-duplicated content hashes.
-		assert.Equal(len(head)+2*sha256.Size, len(data))
-		assert.Equal(true, bytes.Equal(data[:len(head)], head[:]))
-		hashes := data[len(head):]
+		// The serialized (pre-encryption) layout: the 32-byte head precedes the two
+		// de-duplicated, sorted content hashes.
+		plain := r.marshal()
+		assert.Equal(len(head)+2*sha256.Size, len(plain))
+		assert.Equal(true, bytes.Equal(plain[:len(head)], head[:]))
+		hashes := plain[len(head):]
 		for i := sha256.Size; i < len(hashes); i += sha256.Size {
 			assert.Equal(true, bytes.Compare(hashes[i-sha256.Size:i], hashes[i:i+sha256.Size]) < 0)
 		}
@@ -111,7 +114,7 @@ func TestRepositoryFileHashes(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
 		snapshot, head := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"))
-		r := NewRepositoryFileHashes(t.TempDir())
+		r := NewRepositoryFileHashes(t.TempDir(), testIndexKey())
 		assert.NoError(r.Write(snapshot, head))
 		assert.Equal(true, r.Contains(td.SHA256("alpha")))
 
@@ -126,8 +129,37 @@ func TestRepositoryFileHashes(t *testing.T) {
 	t.Run("Contains is false without an index", func(t *testing.T) {
 		t.Parallel()
 		assert := lib.NewAssert(t)
-		r := NewRepositoryFileHashes(t.TempDir())
+		r := NewRepositoryFileHashes(t.TempDir(), nil)
 		assert.Equal(false, r.Contains(td.SHA256("alpha")))
+	})
+
+	t.Run("Encrypted at rest, round-trips, and rejects a wrong key", func(t *testing.T) {
+		t.Parallel()
+		assert := lib.NewAssert(t)
+		cacheDir := t.TempDir()
+		snapshot, head := snapshotFromEntries(t, fileEntry("a.jpg", "alpha"))
+
+		key := bytes.Repeat([]byte{0x11}, lib.RawKeySize)
+		r := NewRepositoryFileHashes(cacheDir, key)
+		assert.NoError(r.Write(snapshot, head))
+
+		// On disk the head no longer sits in the clear at offset 0, and the file carries
+		// the AEAD nonce + tag overhead over the 32-byte head plus the one content hash.
+		data, err := os.ReadFile(r.path)
+		assert.NoError(err)
+		assert.Equal(len(head)+sha256.Size+lib.TotalCipherOverhead, len(data))
+		assert.Equal(false, bytes.Equal(data[:len(head)], head[:]))
+
+		// The same key reads it back: the headless reminder's cold reload with the device key.
+		reloaded := NewRepositoryFileHashes(cacheDir, key)
+		assert.Equal(true, reloaded.Contains(td.SHA256("alpha")))
+		assert.Equal(head, reloaded.Head())
+
+		// A wrong key cannot decrypt it; the unreadable index is dropped and reads empty.
+		wrong := NewRepositoryFileHashes(cacheDir, bytes.Repeat([]byte{0x22}, lib.RawKeySize))
+		assert.Equal(false, wrong.Contains(td.SHA256("alpha")))
+		_, statErr := os.Stat(r.path)
+		assert.Equal(true, os.IsNotExist(statErr))
 	})
 }
 

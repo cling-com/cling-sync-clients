@@ -20,10 +20,15 @@ struct RepositoryStatus {
 }
 
 class Bridge {
-    // Points the bridge at an app-writable directory for its caches. Call once at
-    // startup before any other bridge call.
-    static func initialize(cacheDir: String) throws(BridgeError) {
-        _ = try execute(command: "init", params: ["cacheDir": cacheDir])
+    // Points the bridge at an app-writable directory for its caches, and the key used
+    // to encrypt the file-hash index at rest (nil leaves it in the clear). Call once
+    // at startup before any other bridge call.
+    static func initialize(cacheDir: String, indexKey: Data? = nil) throws(BridgeError) {
+        var params: [String: Any] = ["cacheDir": cacheDir]
+        if let indexKey {
+            params["indexKey"] = indexKey.base64EncodedString()
+        }
+        _ = try execute(command: "init", params: params)
     }
 
     // Closes the open repository, freeing the decrypted repository and its in-memory
