@@ -114,7 +114,7 @@ class MainViewModel(
             is MainEvent.PassphraseLoaded -> openWith(event.passphrase, saveToKeychain = false)
             is MainEvent.PassphraseLoadFailed ->
                 if (event.error.contains("re-enter", ignoreCase = true)) {
-                    dispatch(MainEvent.ShowPassphrasePrompt(passphraseStore.canUseBiometric()))
+                    dispatch(MainEvent.ShowPassphrasePrompt(passphraseStore.canStoreSecurely()))
                 }
             is MainEvent.S3CredentialsEntered -> {
                 s3Continuation?.takeIf { it.isActive }?.resumeWith(Result.success(event.result))
@@ -246,7 +246,7 @@ class MainViewModel(
         if (passphraseStore.hasStoredPassphrase(s.settings.repositoryID())) {
             emit(ViewAction.LoadStoredPassphrase(s.settings.repositoryID()))
         } else {
-            dispatch(MainEvent.ShowPassphrasePrompt(passphraseStore.canUseBiometric()))
+            dispatch(MainEvent.ShowPassphrasePrompt(passphraseStore.canStoreSecurely()))
         }
     }
 
@@ -302,7 +302,6 @@ class MainViewModel(
                 files.isEmpty() &&
                 sourceDir.exists() &&
                 !settings.mediaOnly &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 !Environment.isExternalStorageManager()
         dispatch(MainEvent.FilesLoaded(files, needsStoragePermission))
         scanUnscanned()

@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 // file's content is committed to a freshly provisioned repository; the worker's
 // checkFiles queries the bridge's persisted hash index.
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class MergeReminderWorkerTest {
     private lateinit var context: Context
     private lateinit var sourceDir: File

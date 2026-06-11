@@ -38,7 +38,7 @@ import org.robolectric.annotation.Config
 // S3 repository: passphrase -> S3 -> real open, and the failure paths.
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class MainViewModelTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private lateinit var context: Context

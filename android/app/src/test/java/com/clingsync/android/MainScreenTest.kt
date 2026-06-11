@@ -31,7 +31,7 @@ import java.io.File
  * is just a Compose smoke test that the state renders and events are emitted.
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28], qualifiers = "w1000dp-h2000dp")
+@Config(sdk = [30], qualifiers = "w1000dp-h2000dp")
 class MainScreenTest {
     @get:Rule
     val composeTestRule = createComposeRule()

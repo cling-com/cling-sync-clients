@@ -1,9 +1,10 @@
 package com.clingsync.android
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -16,6 +17,7 @@ import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 class PassphraseStore(private val context: Context) {
@@ -37,11 +39,22 @@ class PassphraseStore(private val context: Context) {
         return has
     }
 
-    fun canUseBiometric(): Boolean {
+    // Whether the saved passphrase can be put behind a user-authentication gate on this
+    // device: any secure lock screen (PIN, pattern, password, or an enrolled biometric,
+    // which requires a backup credential). Without one the app declines to store the
+    // passphrase rather than keep it behind an unguarded key.
+    fun canStoreSecurely(): Boolean = isDeviceSecure()
+
+    private fun canUseBiometric(): Boolean {
         val biometricManager = BiometricManager.from(context)
         return biometricManager.canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG,
         ) == BiometricManager.BIOMETRIC_SUCCESS
+    }
+
+    private fun isDeviceSecure(): Boolean {
+        val keyguard = ContextCompat.getSystemService(context, KeyguardManager::class.java)
+        return keyguard?.isDeviceSecure == true
     }
 
     fun save(
@@ -50,12 +63,20 @@ class PassphraseStore(private val context: Context) {
         repositoryID: String,
         onDone: () -> Unit,
     ) {
+        if (!canStoreSecurely()) {
+            // No biometric and no crypto-bindable lock screen: storing the passphrase
+            // would leave it behind an unguarded key, so decline instead.
+            Log.w(TAG, "Device cannot gate a stored passphrase; not saving")
+            onDone()
+            return
+        }
+
         val key = getOrCreateKey(repositoryID)
 
         try {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
-            authenticateAndRun(activity, cipher, "Save passphrase securely") {
+            authenticateAndRun(activity, cipher, key, "Save passphrase securely") {
                 val encryptCipher = it ?: cipher
                 val ciphertext = encryptCipher.doFinal(passphrase.toByteArray(Charsets.UTF_8))
                 val iv = encryptCipher.iv
@@ -99,14 +120,14 @@ class PassphraseStore(private val context: Context) {
         try {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
-            authenticateAndRun(activity, cipher, "Unlock passphrase") {
+            authenticateAndRun(activity, cipher, key, "Unlock passphrase") {
                 val decryptCipher = it ?: cipher
                 val plaintext = decryptCipher.doFinal(ciphertext)
                 onSuccess(String(plaintext, Charsets.UTF_8))
             }
         } catch (e: KeyPermanentlyInvalidatedException) {
             delete(repositoryID)
-            onError("Biometric data changed. Please re-enter your passphrase.")
+            onError("Device security changed. Please re-enter your passphrase.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to init decrypt cipher", e)
             delete(repositoryID)
@@ -141,20 +162,37 @@ class PassphraseStore(private val context: Context) {
     private fun authenticateAndRun(
         activity: FragmentActivity,
         cipher: Cipher,
+        key: SecretKey,
         subtitle: String,
         onAuthenticated: (Cipher?) -> Unit,
     ) {
-        if (!canUseBiometric()) {
-            // No biometric available — use cipher directly (key has no auth requirement).
+        val info = keyInfo(key)
+        // Fall back to the live capability check only when the key cannot be introspected.
+        val requiresAuth = info?.isUserAuthenticationRequired ?: canUseBiometric()
+        if (!requiresAuth) {
+            // Legacy/unguarded key (no auth binding) — use the cipher directly.
             onAuthenticated(null)
             return
         }
+
+        // A device-credential-bound key (created when no biometric was enrolled) is
+        // unlocked by the PIN/pattern/password prompt, which carries its own cancel
+        // affordance and rejects a negative button.
+        val deviceCredentialOnly =
+            info?.userAuthenticationType == KeyProperties.AUTH_DEVICE_CREDENTIAL
 
         val promptInfo =
             BiometricPrompt.PromptInfo.Builder()
                 .setTitle("Cling Sync")
                 .setSubtitle(subtitle)
-                .setNegativeButtonText("Cancel")
+                .apply {
+                    if (deviceCredentialOnly) {
+                        setAllowedAuthenticators(BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                    } else {
+                        setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                        setNegativeButtonText("Cancel")
+                    }
+                }
                 .build()
 
         val biometricPrompt =
@@ -175,7 +213,7 @@ class PassphraseStore(private val context: Context) {
                         errString: CharSequence,
                     ) {
                         Log.w(TAG, "Auth error $errorCode: $errString")
-                        // Proceed without crypto binding on cancel.
+                        // Cancel/lockout: abort rather than run unauthenticated.
                     }
 
                     override fun onAuthenticationFailed() {
@@ -187,11 +225,22 @@ class PassphraseStore(private val context: Context) {
         try {
             biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
         } catch (e: Exception) {
-            Log.w(TAG, "CryptoObject auth failed, running without", e)
-            onAuthenticated(null)
+            // The key requires auth, so there is no safe unauthenticated fallback.
+            Log.w(TAG, "Authentication could not start", e)
         }
     }
 
+    private fun keyInfo(key: SecretKey): KeyInfo? =
+        try {
+            val factory = SecretKeyFactory.getInstance(key.algorithm, KEYSTORE_PROVIDER)
+            factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read key info", e)
+            null
+        }
+
+    // Only reached from save(), which has already checked canStoreSecurely(), so a
+    // newly created key is always bound to a user-authentication gate.
     private fun getOrCreateKey(repositoryID: String): SecretKey {
         getKey(repositoryID)?.let { return it }
 
@@ -204,17 +253,16 @@ class PassphraseStore(private val context: Context) {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
+                .setUserAuthenticationRequired(true)
 
-        // Bind key to biometric auth when available.
         if (canUseBiometric()) {
-            specBuilder.setUserAuthenticationRequired(true)
+            // Per-use, bound to the current biometric set; re-enrolling invalidates it.
             specBuilder.setInvalidatedByBiometricEnrollment(true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                specBuilder.setUserAuthenticationParameters(
-                    0,
-                    KeyProperties.AUTH_BIOMETRIC_STRONG,
-                )
-            }
+            specBuilder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        } else {
+            // No biometric, but a secure lock screen exists (save() checked
+            // canStoreSecurely()): bind the key to the device credential per use.
+            specBuilder.setUserAuthenticationParameters(0, KeyProperties.AUTH_DEVICE_CREDENTIAL)
         }
 
         keyGenerator.init(specBuilder.build())

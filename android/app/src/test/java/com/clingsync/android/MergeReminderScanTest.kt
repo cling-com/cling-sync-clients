@@ -15,7 +15,7 @@ import java.io.File
 // content hash is in a freshly provisioned repository (seeded by uploading +
 // committing), as answered by the bridge's checkFiles.
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class MergeReminderScanTest {
     private lateinit var context: Context
     private lateinit var dir: File

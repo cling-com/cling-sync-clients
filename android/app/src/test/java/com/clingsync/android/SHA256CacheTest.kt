@@ -15,7 +15,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class SHA256CacheTest {
     private lateinit var context: Context
     private lateinit var cacheFile: File

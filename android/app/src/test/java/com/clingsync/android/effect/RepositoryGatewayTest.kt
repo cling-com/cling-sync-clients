@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 // repository (no fake): cleartext-S3 fallback, store-after-open, and resume.
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class RepositoryGatewayTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private lateinit var bridge: HttpGoBridge

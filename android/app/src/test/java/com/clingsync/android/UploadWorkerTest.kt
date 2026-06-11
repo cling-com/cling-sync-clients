@@ -23,7 +23,7 @@ import java.security.MessageDigest
 // S3 repository. Verification is by querying the actual repository (checkFiles)
 // and the worker's own status/result output, not a fake.
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class UploadWorkerTest {
     private lateinit var context: Context
     private lateinit var sourceDir: File

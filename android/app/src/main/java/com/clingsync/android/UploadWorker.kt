@@ -276,19 +276,17 @@ class UploadWorker(
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel =
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "File Upload",
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply {
-                    description = "Shows progress of file uploads"
-                }
+        val channel =
+            NotificationChannel(
+                CHANNEL_ID,
+                "File Upload",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Shows progress of file uploads"
+            }
 
-            val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
+        val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
     }
 
     private suspend fun updateProgressFile() {

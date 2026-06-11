@@ -37,7 +37,7 @@ import java.io.File
 // auto-selects the new ones.
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class ShareModeTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private lateinit var context: Context

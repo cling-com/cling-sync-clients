@@ -47,7 +47,9 @@ fun PassphrasePromptDialog(
 ) {
     var passphrase by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var saveToKeychain by remember { mutableStateOf(true) }
+    // Default off when the device can't gate the key, so the passphrase is never
+    // silently stored without an authentication requirement.
+    var saveToKeychain by remember { mutableStateOf(showKeychainOption) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -106,6 +108,14 @@ fun PassphrasePromptDialog(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                } else {
+                    Text(
+                        text =
+                            "This device can't securely remember your passphrase, " +
+                                "so you'll be asked for it each time.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 Row(

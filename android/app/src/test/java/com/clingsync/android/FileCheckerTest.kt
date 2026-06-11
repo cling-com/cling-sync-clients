@@ -20,7 +20,7 @@ import java.io.File
 // the Exists path is exercised end-to-end (no fake results).
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [28])
+@Config(sdk = [30])
 class FileCheckerTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private lateinit var context: Context
