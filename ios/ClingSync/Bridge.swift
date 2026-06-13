@@ -21,8 +21,9 @@ struct RepositoryStatus {
 
 class Bridge {
     // Points the bridge at an app-writable directory for its caches, and the key used
-    // to encrypt the file-hash index at rest (nil leaves it in the clear). Call once
-    // at startup before any other bridge call.
+    // to encrypt the file-hash index at rest. With no key the bridge refuses to persist
+    // the index rather than writing it unencrypted. Call once at startup before any
+    // other bridge call.
     static func initialize(cacheDir: String, indexKey: Data? = nil) throws(BridgeError) {
         var params: [String: Any] = ["cacheDir": cacheDir]
         if let indexKey {

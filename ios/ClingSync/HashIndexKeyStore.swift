@@ -13,7 +13,8 @@ enum HashIndexKeyStore {
     private static let keySize = 32
 
     // Returns the secret, creating it on first use. Returns nil only when the Keychain
-    // is unavailable, in which case the bridge writes the index in the clear.
+    // is unavailable; the bridge then refuses to persist the index rather than writing
+    // it unencrypted, so reminder scans fall back to a full scan.
     static func getOrCreate() -> Data? {
         if let existing = load() { return existing }
         guard let key = randomKey() else { return nil }
