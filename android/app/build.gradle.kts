@@ -13,8 +13,11 @@ android {
         applicationId = "com.clingsync.android"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Release builds pass -PversionCode/-PversionName (derived from git: commit
+        // count and the latest tag) so the version is set at build time and nothing
+        // is committed; local builds keep these defaults.
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

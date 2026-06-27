@@ -218,10 +218,22 @@ build_apk() {
 
 # Build the release APK. It is debug-signed (see app/build.gradle.kts) so it can be
 # installed on a device; switch to a real keystore before publishing.
+# The version is derived from git at build time (versionName from the latest
+# vX.Y.Z tag, versionCode from the commit count), so nothing is committed and the
+# version matches the macOS/iOS release builds. A tagged release is required.
 build_apk_release() {
     echo ">>> Building Android release APK"
     set_local_path
-    ./gradlew assembleRelease -q
+    local version_code version_name
+    version_code=$(git -C "$root" rev-list --count HEAD)
+    version_name=$(git -C "$root" for-each-ref --sort=-v:refname --format='%(refname:short)' 'refs/tags/*' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^v//')
+    if [ -z "$version_name" ]; then
+        echo "No release tag found. Tag a release (vX.Y.Z) before building." >&2
+        exit 1
+    fi
+    echo "    Version: $version_name ($version_code)"
+    ./gradlew assembleRelease -q -PversionCode="$version_code" -PversionName="$version_name"
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
     echo ">>> Copying APK to $repo_build/clingsync-release.apk"

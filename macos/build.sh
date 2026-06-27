@@ -38,6 +38,23 @@ PY
     return 1
 }
 
+# xcodebuild version settings derived from git, so release/App Store builds get
+# their version at build time without committing a changed project or Info.plist.
+# Marketing version comes from the latest vX.Y.Z tag (a tagged release is
+# required); the build number is the total commit count, which is monotonic and
+# keeps App Store Connect uploads strictly increasing.
+xcode_version_settings() {
+    local mv bn
+    bn=$(git -C "$root" rev-list --count HEAD)
+    mv=$(git -C "$root" for-each-ref --sort=-v:refname --format='%(refname:short)' 'refs/tags/*' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^v//')
+    if [ -z "$mv" ]; then
+        echo "No release tag found. Tag a release (vX.Y.Z) before building." >&2
+        return 1
+    fi
+    printf 'CURRENT_PROJECT_VERSION=%s MARKETING_VERSION=%s' "$bn" "$mv"
+}
+
 usage() {
     echo "Usage: $0 <command> [options]"
     echo
@@ -79,9 +96,12 @@ usage() {
     echo "  clean"
     echo "      Clean build artifacts"
     echo
-    echo "  deploy_new_version"
-    echo "      Build universal release with incremented build number and upload"
-    echo "      to App Store Connect. Reads API credentials from project root .env."
+    echo "  release build|upload"
+    echo "      App Store release. \`build\` archives and exports the .pkg; \`upload\`"
+    echo "      validates and uploads it to App Store Connect. The version is derived"
+    echo "      from git at build time (marketing version from the latest vX.Y.Z tag,"
+    echo "      build number from the commit count), so nothing is committed. \`upload\`"
+    echo "      reads API credentials from the project root .env."
     exit 1
 }
 
@@ -290,14 +310,9 @@ build_release() {
     echo ">>> Building macOS app for App Store"
     sync_icon
 
-    # Increment build number if requested.
-    if [ $# -gt 0 ] && [ "$1" = "--inc-build-number" ]; then
-        cd "$root"
-        current_build=$(xcrun agvtool what-version -terse)
-        xcrun agvtool next-version -all 2>/dev/null
-        new_build=$(xcrun agvtool what-version -terse)
-        echo ">>> Build number: $current_build -> $new_build"
-    fi
+    local version_settings
+    version_settings=$(xcode_version_settings) || exit 1
+    echo ">>> Version: $version_settings"
 
     build_go_universal
 
@@ -316,6 +331,7 @@ build_release() {
         CODE_SIGN_ENTITLEMENTS=ClingSyncMac.entitlements \
         ENABLE_HARDENED_RUNTIME=YES \
         DEVELOPMENT_TEAM="$development_team_id" \
+        $version_settings \
         -allowProvisioningUpdates
 
     echo ">>> Exporting for App Store..."
@@ -367,6 +383,10 @@ build_universal() {
 
     rm -rf build/ClingSyncMac.xcarchive build/export-universal
 
+    local version_settings
+    version_settings=$(xcode_version_settings) || exit 1
+    echo ">>> Version: $version_settings"
+
     echo ">>> Creating archive..."
     run_xcodebuild xcodebuild-universal-archive.log \
         archive \
@@ -379,6 +399,7 @@ build_universal() {
         CODE_SIGN_STYLE=Automatic \
         ENABLE_HARDENED_RUNTIME=YES \
         DEVELOPMENT_TEAM="$development_team_id" \
+        $version_settings \
         -allowProvisioningUpdates
 
     echo ">>> Exporting Developer ID app..."
@@ -432,7 +453,9 @@ load_env() {
     set +a
 }
 
-deploy_new_version() {
+# Validate and upload the App Store .pkg built by `release build` to App Store
+# Connect.
+release_upload() {
     load_env
 
     if [ -z "${APP_STORE_CONNECT_API_KEY:-}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
@@ -440,11 +463,10 @@ deploy_new_version() {
         exit 1
     fi
 
-    build_release --inc-build-number
-
+    local pkg
     pkg=$(find "$root/build/export" -name "*.pkg" | head -1)
     if [ -z "$pkg" ]; then
-        echo "Error: No .pkg found in build/export/"
+        echo "Error: No .pkg found in build/export/. Run \`$0 release build\` first."
         exit 1
     fi
 
@@ -556,8 +578,15 @@ case "$cmd" in
     clean)
         clean
         ;;
-    deploy_new_version)
-        deploy_new_version
+    release)
+        case "${1:-}" in
+            build)  build_release ;;
+            upload) release_upload ;;
+            *)
+                echo "Usage: $0 release build|upload"
+                exit 1
+                ;;
+        esac
         ;;
     *)
         echo "Unknown command: $cmd"

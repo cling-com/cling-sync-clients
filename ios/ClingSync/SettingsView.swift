@@ -156,10 +156,21 @@ struct SettingsView: View {
                     showFolderPicker = true
                 }
             }
+
+            Section("About") {
+                LabeledContent("Version", value: appVersion)
+                    .accessibilityIdentifier("appVersionLabel")
+            }
         }
         .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
             handleFolderPick(result)
         }
+    }
+
+    private var appVersion: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
     }
 
     private func loadStoredValues() {

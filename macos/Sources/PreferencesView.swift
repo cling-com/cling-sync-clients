@@ -89,6 +89,14 @@ struct PreferencesView: View {
                 Text("Forces a reminder notification for every configured folder after a few seconds, to test it.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+
+            Section("About") {
+                LabeledContent("Version") {
+                    Text(Bundle.main.appVersion)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("appVersionLabel")
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -291,6 +299,14 @@ struct PreferencesView: View {
                 draft.author = $0
                 store.dispatch(.draftMetadataEdited(draft, now: Date()))
             })
+    }
+}
+
+extension Bundle {
+    var appVersion: String {
+        let short = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
     }
 }
 

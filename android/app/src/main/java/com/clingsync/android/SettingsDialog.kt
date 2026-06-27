@@ -141,6 +141,12 @@ fun SettingsDialog(
                     if (BuildConfig.REMINDER_TEST_CONTROLS) {
                         ReminderTestControls()
                     }
+
+                    Text(
+                        text = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 Row(

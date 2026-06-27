@@ -3,3 +3,4 @@
 .spell/
 .env
 /build/
+/dist/

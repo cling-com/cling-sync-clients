@@ -25,13 +25,15 @@ if [ $# -eq 0 ]; then
     echo "      Available targets:"
     echo "        go [--simulator]  - build the Go shared library"
     echo "            --simulator build for iOS simulator instead of iOS"
-    echo "        app [--inc-build-number] - build the iOS app archive for App Store"
-    echo "            --inc-build-number increment the build number before building"
+    echo "        app               - build the iOS app archive for App Store"
     echo "        all               - build everything (default)"
     echo
-    echo "  deploy_new_version"
-    echo "      Build with incremented build number and upload to App Store Connect."
-    echo "      Reads APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID from"
+    echo "  release build|upload"
+    echo "      App Store release. \`build\` archives and exports the .ipa; \`upload\`"
+    echo "      validates and uploads it to App Store Connect. The version is derived"
+    echo "      from git at build time (marketing version from the latest vX.Y.Z tag,"
+    echo "      build number from the commit count), so nothing is committed. \`upload\`"
+    echo "      reads APP_STORE_CONNECT_API_KEY and APP_STORE_CONNECT_ISSUER_ID from"
     echo "      the project root .env file."
     echo
     echo "  App Store Connect API Key Setup:"
@@ -125,10 +127,27 @@ PY
     return 1
 }
 
+# xcodebuild version settings derived from git, so release/App Store builds get
+# their version at build time without committing a changed project or Info.plist.
+# Marketing version comes from the latest vX.Y.Z tag (a tagged release is
+# required); the build number is the total commit count, which is monotonic and
+# keeps App Store Connect uploads strictly increasing.
+xcode_version_settings() {
+    local mv bn
+    bn=$(git -C "$root" rev-list --count HEAD)
+    mv=$(git -C "$root" for-each-ref --sort=-v:refname --format='%(refname:short)' 'refs/tags/*' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^v//')
+    if [ -z "$mv" ]; then
+        echo "No release tag found. Tag a release (vX.Y.Z) before building." >&2
+        return 1
+    fi
+    printf 'CURRENT_PROJECT_VERSION=%s MARKETING_VERSION=%s' "$bn" "$mv"
+}
+
 # Build the Go shared library for the iOS app.
 #
 # Input:
-#   $1: "--simulator" to build for iOS simulator instead of iOS, because for some 
+#   $1: "--simulator" to build for iOS simulator instead of iOS, because for some
 #       reason there is a difference.
 build_go() {
     local sdk=iphoneos
@@ -159,20 +178,12 @@ build_go() {
 }
 
 # Build the iOS app archive for App Store.
-#
-# Input:
-#   $1: "--inc-build-number" to increment the build number before building (optional).
 build_app() {
     echo ">>> Building iOS app archive for App Store"
 
-    # Increment build number if requested.
-    if [ $# -gt 0 ] && [ "$1" == "--inc-build-number" ]; then
-        cd "$root"
-        local current_build=$(xcrun agvtool what-version -terse)
-        xcrun agvtool next-version -all 2>/dev/null
-        local new_build=$(xcrun agvtool what-version -terse)
-        echo ">>> Build number: $current_build -> $new_build"
-    fi
+    local version_settings
+    version_settings=$(xcode_version_settings) || exit 1
+    echo ">>> Version: $version_settings"
 
     # Build Go library for device first.
     build_go
@@ -190,7 +201,8 @@ build_app() {
         -destination 'generic/platform=iOS' \
         -archivePath build/ClingSync.xcarchive \
         CODE_SIGN_STYLE=Automatic \
-        DEVELOPMENT_TEAM="$development_team_id"
+        DEVELOPMENT_TEAM="$development_team_id" \
+        $version_settings
 
     # Export IPA for App Store.
     # Use system PATH to avoid Homebrew rsync incompatibility with Xcode's export.
@@ -223,7 +235,9 @@ load_env() {
     set +a
 }
 
-deploy_new_version() {
+# Validate and upload the App Store .ipa built by `release build` to App Store
+# Connect.
+release_upload() {
     load_env
 
     if [ -z "${APP_STORE_CONNECT_API_KEY:-}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
@@ -232,9 +246,11 @@ deploy_new_version() {
         exit 1
     fi
 
-    build_app --inc-build-number
-
     local ipa="$root/build/export/ClingSync.ipa"
+    if [ ! -f "$ipa" ]; then
+        echo "Error: No IPA found at $ipa. Run \`$0 release build\` first."
+        exit 1
+    fi
 
     echo ">>> Validating IPA..."
     xcrun altool --validate-app \
@@ -486,8 +502,15 @@ case "$cmd" in
                 ;;
         esac
         ;;
-    deploy_new_version)
-        deploy_new_version
+    release)
+        case "${1:-}" in
+            build)  build_app ;;
+            upload) release_upload ;;
+            *)
+                echo "Usage: $0 release build|upload"
+                exit 1
+                ;;
+        esac
         ;;
     fmt)
         fmt
