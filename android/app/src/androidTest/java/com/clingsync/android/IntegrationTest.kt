@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.espresso.Espresso
@@ -26,6 +27,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.runner.RunWith
+import java.io.File
 import java.net.Socket
 
 /**
@@ -53,6 +55,8 @@ class IntegrationTest {
     private val testS3AccessKey = args.getString("s3Key") ?: "minioadmin"
     private val destination = args.getString("destination") ?: "/phone/"
     private val switchDestination = args.getString("switchDestination") ?: "/switched/"
+    private val mediaSubUrl = args.getString("mediaSubUrl")
+    private val docsSubUrl = args.getString("docsSubUrl")
 
     // Runs BEFORE the Activity launches (lower order = outer), so each test starts
     // with cleared settings/keychain. A plain @Before runs after the compose rule
@@ -169,6 +173,26 @@ class IntegrationTest {
     private fun upload() {
         composeTestRule.waitUntilExactlyOneExists(hasTestTag("upload_button").and(isEnabled()), 5000)
         composeTestRule.onNodeWithText("Upload").performClick()
+    }
+
+    // Replaces the Source Directory field (which shows the DCIM default on a fresh
+    // install) with the given path.
+    private fun setSourceDirectory(path: String) {
+        composeTestRule.onNodeWithText(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath,
+        ).performTextReplacement(path)
+    }
+
+    private fun uncheckMediaOnly() {
+        composeTestRule.onNodeWithTag("media_only_checkbox").performScrollTo().performClick()
+    }
+
+    // Opens Settings on the already-connected screen. Changes saved here reach the
+    // reducer as a genuine settings diff, unlike on the first-run dialog where a
+    // preceding "Test" already commits the dialog values into the state.
+    private fun reopenSettings() {
+        composeTestRule.onNode(hasContentDescription("Settings")).performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("Source Directory"), 5000)
     }
 
     // --- Tests ---------------------------------------------------------------
@@ -397,5 +421,120 @@ class IntegrationTest {
         // No stuck connecting overlay; the Settings dialog is still usable.
         composeTestRule.onAllNodesWithText("Connecting to server...").assertCountEquals(0)
         composeTestRule.waitUntilExactlyOneExists(hasText("Save"), 5000)
+    }
+
+    @Test
+    fun testSubdirectoryMediaFilesAreSynced() {
+        val url = mediaSubUrl ?: return
+        composeTestRule.waitForIdle()
+
+        // Set the custom source on the first-run dialog and connect via "Test" before
+        // saving. This also guards that a Test-then-Save still rebuilds the file
+        // list (Test commits the settings, so Save sees no diff to react to).
+        fillFreshSettings(url, "/backup/")
+        setSourceDirectory("${Environment.getExternalStorageDirectory().path}/MediaSub")
+        composeTestRule.onNodeWithText("Test").performClick()
+        enterPassphrase(testPassphrase)
+        enterS3Credentials()
+        saveAndWaitForList()
+
+        // media-only (default): the image nested in a subdirectory is listed, the
+        // text file sharing that subdirectory is not.
+        composeTestRule.waitUntilExactlyOneExists(hasText("beach.jpg", substring = true), 5000)
+        composeTestRule.waitUntilExactlyOneExists(hasText("root.jpg", substring = true), 5000)
+        composeTestRule.onAllNodesWithText("readme.txt", substring = true).assertCountEquals(0)
+
+        composeTestRule.onNodeWithTag("select_all_button").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("2 file", substring = true), 5000)
+        upload()
+        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 2, 15000)
+    }
+
+    @Test
+    fun testNonMediaSubdirectoryFilesAreSyncedWhenMediaFilterIsOff() {
+        val url = docsSubUrl ?: return
+        composeTestRule.waitForIdle()
+
+        // Back up from the app's own external-files directory: it holds non-media files
+        // in subdirectories and is readable without all-files access, so this exercises
+        // the recursive scan + media filter without the storage-permission gate.
+        val source =
+            File(
+                InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null),
+                "SubDocs",
+            )
+        source.deleteRecursively()
+        File(source, "letters").mkdirs()
+        File(source, "reports").mkdirs()
+        File(source, "letters/hello.txt").writeText("Hello letter")
+        File(source, "reports/q1.pdf").writeText("Q1 report")
+
+        connectFreshRepo(url, "/backup/", testPassphrase)
+        saveAndWaitForList()
+
+        reopenSettings()
+        setSourceDirectory(source.absolutePath)
+        uncheckMediaOnly()
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 15000)
+
+        // Both documents, each nested in its own subdirectory, are listed and upload
+        // with their subdirectory structure preserved (asserted on the Go side).
+        composeTestRule.waitUntilExactlyOneExists(hasText("hello.txt", substring = true), 5000)
+        composeTestRule.waitUntilExactlyOneExists(hasText("q1.pdf", substring = true), 5000)
+
+        composeTestRule.onNodeWithTag("select_all_button").performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasText("2 file", substring = true), 5000)
+        upload()
+        composeTestRule.waitUntilNodeCount(hasContentDescription("Synced"), 2, 15000)
+    }
+
+    @Test
+    fun testEmptyFolderDoesNotRequestStoragePermission() {
+        val url = scratchUrl ?: return
+        composeTestRule.waitForIdle()
+
+        // An empty app-owned source with the media filter off shows the empty list,
+        // never the access prompt: the app can fully read its own directories, so
+        // nothing can be hiding there.
+        val empty =
+            File(
+                InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null),
+                "EmptyBackup",
+            )
+        empty.deleteRecursively()
+        empty.mkdirs()
+
+        connectFreshRepo(url, "/backup/", testPassphrase)
+        saveAndWaitForList()
+
+        reopenSettings()
+        setSourceDirectory(empty.absolutePath)
+        uncheckMediaOnly()
+        composeTestRule.onNodeWithText("Save").performClick()
+
+        composeTestRule.waitUntilExactlyOneExists(hasText("No Files Found", substring = true), 15000)
+        composeTestRule.onAllNodesWithText("Storage Permission Required").assertCountEquals(0)
+    }
+
+    @Test
+    fun testNonMediaBackupFromSharedStorageRequestsAllFilesAccess() {
+        val url = scratchUrl ?: return
+        composeTestRule.waitForIdle()
+
+        connectFreshRepo(url, "/backup/", testPassphrase)
+        saveAndWaitForList()
+
+        reopenSettings()
+        setSourceDirectory("${Environment.getExternalStorageDirectory().path}/ClingSyncTest")
+        uncheckMediaOnly()
+        composeTestRule.onNodeWithText("Save").performClick()
+
+        // Scoped storage hides other apps' files (like the adb-pushed ones in
+        // ClingSyncTest) from the listing entirely, so a non-media backup from shared
+        // storage must ask for All files access even though the scan reports no error.
+        composeTestRule.waitUntilExactlyOneExists(hasText("Storage Permission Required"), 15000)
+        composeTestRule.onNodeWithText("Cancel").performClick()
+        composeTestRule.waitUntilDoesNotExist(hasText("Storage Permission Required"), 5000)
     }
 }

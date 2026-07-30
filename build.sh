@@ -27,6 +27,7 @@ if [ $# -eq 0 ]; then
     echo "  release check|tag|build|upload|all"
     echo "      Tag, build, and publish a new patch release. Run on darwin."
     echo "        check  - verify HEAD has a green CI build on GitHub"
+    echo "                 (tag, build, and upload run this first too)"
     echo "        tag    - tag HEAD with the next patch version (latest + 1; first tag by hand)"
     echo "        build  - build the GitHub downloads (macOS universal app, Android APK)"
     echo "                 into ./dist and the macOS/iOS App Store packages"
@@ -192,11 +193,14 @@ run_upload_release() {
 }
 
 run_release() {
+    # tag, build, and upload each verify HEAD has a green CI build first, so a
+    # release can never be cut from a red or untested commit regardless of which
+    # phase is invoked. `all` runs the check once up front instead of per phase.
     case "${1:-}" in
         check)  run_check_release ;;
-        tag)    run_tag_release ;;
-        build)  run_build_release ;;
-        upload) run_upload_release ;;
+        tag)    run_check_release; run_tag_release ;;
+        build)  run_check_release; run_build_release ;;
+        upload) run_check_release; run_upload_release ;;
         all)
             run_check_release
             run_tag_release

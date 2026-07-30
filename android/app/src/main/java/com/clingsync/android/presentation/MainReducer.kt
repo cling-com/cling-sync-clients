@@ -238,7 +238,10 @@ object MainReducer {
                     base.copy(fileStatus = emptyMap(), selectedPaths = emptySet()),
                     listOf(persist, Effect.LoadFiles),
                 )
-            else -> Reduction(base, listOf(persist))
+            // Reload even when nothing appears to have changed: a preceding "Test"
+            // commits the edited settings into the state, so by Save time the diff
+            // above can be empty while the file list was never rebuilt for them.
+            else -> Reduction(base, listOf(persist, Effect.LoadFiles))
         }
     }
 }

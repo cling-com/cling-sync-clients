@@ -180,14 +180,34 @@ class MainReducerTest {
     }
 
     @Test
-    fun savingUnchangedSettingsJustPersists() {
+    fun savingUnchangedSettingsStillReloadsFiles() {
         val s0 = stateWithFiles(mapOf(path("a.jpg") to FileStatus.Done)).copy(isConnected = true)
 
         val reduction = MainReducer.reduce(s0, MainEvent.SettingsSaved(s0.settings))
 
         assertTrue(reduction.state.isConnected)
         assertEquals(mapOf(path("a.jpg") to FileStatus.Done), reduction.state.fileStatus)
-        assertEquals(listOf(Effect.PersistSettings(s0.settings)), reduction.effects)
+        // A preceding "Test" commits the edited settings into the state, so an
+        // unchanged-looking Save must still rebuild the list to reflect them.
+        assertEquals(listOf(Effect.PersistSettings(s0.settings), Effect.LoadFiles), reduction.effects)
+    }
+
+    @Test
+    fun filesLoadedNeedingStoragePermissionShowsPrompt() {
+        val s0 = stateWithFiles(emptyMap())
+
+        val reduction = MainReducer.reduce(s0, MainEvent.FilesLoaded(emptyList(), needsStoragePermission = true))
+
+        assertTrue(reduction.state.overlay is Overlay.StoragePermission)
+    }
+
+    @Test
+    fun filesLoadedWithoutStoragePermissionNeedShowsNoPrompt() {
+        val s0 = stateWithFiles(emptyMap())
+
+        val reduction = MainReducer.reduce(s0, MainEvent.FilesLoaded(emptyList(), needsStoragePermission = false))
+
+        assertEquals(Overlay.None, reduction.state.overlay)
     }
 
     @Test

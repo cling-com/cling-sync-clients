@@ -107,16 +107,22 @@ func startServer(t *testing.T, port int, fault *faultControl) *testServer {
 func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	assert := lib.NewAssert(t)
 
-	t.Log("Starting repositories (A=main, B=switch-target, scratch=failure/abort/wrong-pass, reattach)")
+	t.Log(
+		"Starting repositories (A=main, B=switch-target, scratch=failure/abort/wrong-pass, reattach, mediaSub, docsSub)",
+	)
 	repoA := startServer(t, 9124, nil)
 	repoB := startServer(t, 9125, nil)
 	scratch := startServer(t, 9126, &faultControl{})
 	reattach := startServer(t, 9127, &faultControl{})
+	mediaSub := startServer(t, 9128, nil)
+	docsSub := startServer(t, 9129, nil)
 
 	headA := repoA.repo.Head()
 	headB := repoB.repo.Head()
 	headScratch := scratch.repo.Head()
 	headReattach := reattach.repo.Head()
+	headMediaSub := mediaSub.repo.Head()
+	headDocsSub := docsSub.repo.Head()
 
 	// An S3 URL that already carries its encrypted credentials, so the app can
 	// connect to repo A after only the passphrase prompt (no S3 dialog).
@@ -135,6 +141,7 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	for _, dir := range []string{
 		"/sdcard/DCIM/Camera/vacation",
 		"/sdcard/ClingSyncTest/docs",
+		"/sdcard/MediaSub/album",
 	} {
 		out, err := exec.CommandContext(t.Context(), adb, "shell", "mkdir", "-p", dir).
 			CombinedOutput()
@@ -151,6 +158,11 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		{"video.mp4", "/sdcard/ClingSyncTest/video.mp4", "Test video"},
 		{"notes.txt", "/sdcard/ClingSyncTest/notes.txt", "Test notes"},
 		{"report.pdf", "/sdcard/ClingSyncTest/docs/report.pdf", "Test report"},
+		// MediaSub: a media file in a subdirectory (synced under media-only) and a
+		// text file in the same subdirectory (excluded under media-only).
+		{"root.jpg", "/sdcard/MediaSub/root.jpg", "Root pic"},
+		{"beach.jpg", "/sdcard/MediaSub/album/beach.jpg", "Beach pic"},
+		{"readme.txt", "/sdcard/MediaSub/album/readme.txt", "Album readme"},
 	} {
 		tmpFile := t.TempDir() + "/" + f.name
 		assert.NoError(os.WriteFile(tmpFile, []byte(f.content), 0o644)) //nolint:gosec
@@ -175,6 +187,8 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		arg("s3Key", testS3SecretAccessKey),
 		arg("destination", "/phone/"),
 		arg("switchDestination", "/switched/"),
+		arg("mediaSubUrl", mediaSub.url),
+		arg("docsSubUrl", docsSub.url),
 	)
 	cmd.Dir = ".."
 	output, err := cmd.CombinedOutput()
@@ -241,4 +255,27 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		{"phone/Camera/blue_sky.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Blue sky")},
 		{"phone/Camera/red_earth.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Red earth")},
 	}, reattach.repo.RevisionInfos(newHeadReattach))
+
+	t.Log("Verifying mediaSub repository (subdirectory media file synced, subdirectory text file excluded)")
+	newHeadMediaSub := mediaSub.repo.Head()
+	assert.NotEqual(headMediaSub, newHeadMediaSub, "MediaSub repo should have received the upload")
+	// Entries are ordered files-before-subdirectories within each level, so the
+	// top-level root.jpg precedes the album/ subdirectory.
+	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"backup", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/root.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Root pic")},
+		{"backup/album", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/album/beach.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Beach pic")},
+	}, mediaSub.repo.RevisionInfos(newHeadMediaSub))
+
+	t.Log("Verifying docsSub repository (non-media subdirectory files synced after the media filter was turned off)")
+	newHeadDocsSub := docsSub.repo.Head()
+	assert.NotEqual(headDocsSub, newHeadDocsSub, "DocsSub repo should have received the upload")
+	assert.Equal([]lib.TestRevisionEntryInfo{
+		{"backup", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/letters", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/letters/hello.txt", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Hello letter")},
+		{"backup/reports", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
+		{"backup/reports/q1.pdf", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Q1 report")},
+	}, docsSub.repo.RevisionInfos(newHeadDocsSub))
 }

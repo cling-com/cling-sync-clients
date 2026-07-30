@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -131,6 +132,7 @@ fun SettingsDialog(
                         Checkbox(
                             checked = mediaOnly,
                             onCheckedChange = { mediaOnly = it },
+                            modifier = Modifier.testTag("media_only_checkbox"),
                         )
                         Text(
                             text = "Media files only",

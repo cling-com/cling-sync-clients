@@ -2,6 +2,7 @@ package com.clingsync.android.presentation
 
 import android.app.Application
 import android.content.Context
+import android.os.Environment
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.work.WorkManager
@@ -33,12 +34,29 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowEnvironment
+import java.io.File
 
 // Drives the ViewModel's connect orchestration against the REAL bridge + a fresh
 // S3 repository: passphrase -> S3 -> real open, and the failure paths.
+// Robolectric does not shadow Environment.isExternalStorageManager: the real API 30
+// code indexes an empty external-dirs array and throws.
+@Implements(Environment::class)
+class ShadowEnvironmentWithAllFilesAccess : ShadowEnvironment() {
+    companion object {
+        @JvmStatic var allFilesAccess = false
+
+        @JvmStatic
+        @Implementation
+        fun isExternalStorageManager(): Boolean = allFilesAccess
+    }
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [30])
+@Config(sdk = [30], shadows = [ShadowEnvironmentWithAllFilesAccess::class])
 class MainViewModelTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private lateinit var context: Context
@@ -50,6 +68,7 @@ class MainViewModelTest {
     @Before
     fun setup() {
         Dispatchers.setMain(dispatcher)
+        ShadowEnvironmentWithAllFilesAccess.allFilesAccess = false
         context = ApplicationProvider.getApplicationContext()
         context.getSharedPreferences("cling_sync_prefs", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("repository_uris", Context.MODE_PRIVATE).edit().clear().commit()
@@ -125,6 +144,81 @@ class MainViewModelTest {
         assertTrue(overlay is Overlay.Error)
         assertEquals("Connection Error", (overlay as Overlay.Error).title)
         assertFalse(viewModel.state.value.isConnected)
+    }
+
+    // Saving new settings runs the real load path, so these cover the storage-prompt
+    // rule end to end: shared storage cannot be scanned completely for non-media
+    // files without "All files access", the app's own directories always can.
+
+    private fun setAllFilesAccess(granted: Boolean) {
+        ShadowEnvironmentWithAllFilesAccess.allFilesAccess = granted
+    }
+
+    // The shared root of the volume holding the app-files dir, mirroring how
+    // needsAllFilesAccess derives it (<volume>/Android/data/<pkg>/files).
+    private fun volumeRoot(): File {
+        var dir = context.getExternalFilesDir(null)!!
+        repeat(4) { dir = dir.parentFile!! }
+        return dir
+    }
+
+    private fun saveSettings(
+        sourceDir: File,
+        mediaOnly: Boolean,
+    ) {
+        val settings = viewModel.state.value.settings.copy(sourceDirectory = sourceDir.path, mediaOnly = mediaOnly)
+        viewModel.dispatch(MainEvent.SettingsSaved(settings))
+    }
+
+    @Test
+    fun nonMediaBackupFromSharedStorageAsksForAllFilesAccess() {
+        setAllFilesAccess(false)
+        val shared = File(volumeRoot(), "Docs").apply { mkdirs() }
+
+        saveSettings(shared, mediaOnly = false)
+
+        assertTrue(viewModel.state.value.overlay is Overlay.StoragePermission)
+    }
+
+    @Test
+    fun nonexistentSourceDirectoryDoesNotAsk() {
+        setAllFilesAccess(false)
+
+        saveSettings(File(volumeRoot(), "Missing"), mediaOnly = false)
+
+        assertEquals(Overlay.None, viewModel.state.value.overlay)
+    }
+
+    @Test
+    fun nonMediaBackupFromAppOwnedStorageDoesNotAsk() {
+        setAllFilesAccess(false)
+        val own = File(context.getExternalFilesDir(null), "Docs").apply { mkdirs() }
+        File(own, "letter.txt").writeText("x")
+
+        saveSettings(own, mediaOnly = false)
+
+        assertEquals(Overlay.None, viewModel.state.value.overlay)
+        assertEquals(listOf("letter.txt"), viewModel.state.value.files.map { it.name })
+    }
+
+    @Test
+    fun mediaOnlyBackupFromSharedStorageDoesNotAsk() {
+        setAllFilesAccess(false)
+        val shared = File(volumeRoot(), "Pictures").apply { mkdirs() }
+
+        saveSettings(shared, mediaOnly = true)
+
+        assertEquals(Overlay.None, viewModel.state.value.overlay)
+    }
+
+    @Test
+    fun grantedAllFilesAccessSuppressesThePrompt() {
+        setAllFilesAccess(true)
+        val shared = File(volumeRoot(), "Docs").apply { mkdirs() }
+
+        saveSettings(shared, mediaOnly = false)
+
+        assertEquals(Overlay.None, viewModel.state.value.overlay)
     }
 
     @Test

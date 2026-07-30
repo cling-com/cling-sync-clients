@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -27,6 +26,7 @@ import com.clingsync.android.data.UploadProgressIo
 import com.clingsync.android.effect.RepositoryGateway
 import com.clingsync.android.getSourceDirectory
 import com.clingsync.android.getSourceFiles
+import com.clingsync.android.needsAllFilesAccess
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -297,12 +297,13 @@ class MainViewModel(
         val sourceDir = sourceDirOverride?.let(::File) ?: getSourceDirectory(settings)
         val mediaOnly = !shareMode && settings.mediaOnly
         val files = withContext(ioDispatcher) { getSourceFiles(sourceDir, mediaOnly) }
+        // The prompt cannot be keyed on the scan result: scoped storage hides files by
+        // omitting them from listings, not by failing (see needsAllFilesAccess). A
+        // media-only backup never prompts: the runtime media permissions govern media
+        // visibility, and the directories they cannot enter (e.g. Android/data) stay
+        // unreadable even with "All files access".
         val needsStoragePermission =
-            !shareMode &&
-                files.isEmpty() &&
-                sourceDir.exists() &&
-                !settings.mediaOnly &&
-                !Environment.isExternalStorageManager()
+            !shareMode && !settings.mediaOnly && needsAllFilesAccess(getApplication(), sourceDir)
         dispatch(MainEvent.FilesLoaded(files, needsStoragePermission))
         scanUnscanned()
     }
