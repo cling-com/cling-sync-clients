@@ -23,6 +23,16 @@ struct AppStateTests {
         #expect(idle.trayTooltip == "2 operations in progress")
     }
 
+    @Test func autoMergeTargetsSkipBusyAndIncompleteFolders() {
+        var state = AppState()
+        let idle = workspace(name: "idle")
+        var busy = workspace(name: "busy")
+        busy.status = .running(message: "Scanning...", detail: "", canCancel: true)
+        let incomplete = WorkspaceState(config: WorkspaceConfig(hostURL: "", localDirectory: "/x", author: "me"))
+        state.workspaces = [idle, busy, incomplete]
+        #expect(state.autoMergeTargets.map(\.id) == [idle.id])
+    }
+
     @Test func statusMessagePrecedence() {
         var state = AppState()
         #expect(state.statusMessage == "Setup required")

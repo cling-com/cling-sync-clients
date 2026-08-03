@@ -216,6 +216,16 @@ struct AppReducerAutoMergeTests {
         #expect(reduction.effects == [.startOperation(id: workspace.id, kind: .merge, isAutoMerge: true)])
     }
 
+    // A tick that lands on a busy folder is dropped rather than queued, so whoever
+    // scheduled it has to re-fire to get an auto-merge at all.
+    @Test func autoMergeTimerSkipsBusyWorkspaces() {
+        var workspace = makeWorkspace()
+        workspace.status = .running(message: "Scanning...", detail: "", canCancel: true)
+        let reduction = AppReducer.reduce(stateWith([workspace]), .autoMergeTimerFired(now: fixedNow))
+        #expect(reduction.state.workspace(workspace.id)?.merge.isRunning == false)
+        #expect(reduction.effects.isEmpty)
+    }
+
     @Test func staleCheckNotifiesOverdueWorkspaceOncePerDay() {
         var workspace = makeWorkspace()
         workspace.lastSuccessfulMerge = fixedNow.addingTimeInterval(-5 * 86_400)

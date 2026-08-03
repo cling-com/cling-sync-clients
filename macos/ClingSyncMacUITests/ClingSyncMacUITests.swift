@@ -176,7 +176,7 @@ final class ClingSyncMacUITests: XCTestCase {
         let testButton = app.buttons["testWorkspaceButton"]
         XCTAssertTrue(testButton.isEnabled)
         testButton.tap()
-        let cancelButton = app.buttons["Cancel"].firstMatch
+        let cancelButton = app.buttons["confirmCreateRepositoryCancelButton"]
         XCTAssertTrue(cancelButton.waitToAppear(timeout: 5))
         cancelButton.tap()
         XCTAssertTrue(localFolderField.waitToAppear(timeout: 2))
@@ -185,7 +185,7 @@ final class ClingSyncMacUITests: XCTestCase {
         // Second attempt: accept the prompt, supply a passphrase, and confirm
         // that no "save in keychain" option is offered for the new repository.
         testButton.tap()
-        let createButton = app.buttons["Create"].firstMatch
+        let createButton = app.buttons["confirmCreateRepositoryButton"]
         XCTAssertTrue(createButton.waitToAppear(timeout: 5))
         createButton.tap()
 
@@ -197,7 +197,7 @@ final class ClingSyncMacUITests: XCTestCase {
         )
         newPassphraseField.tap()
         newPassphraseField.typeText(config.passphrase)
-        let confirmCreate = app.buttons["Create"].firstMatch
+        let confirmCreate = app.buttons["newRepositoryPassphraseCreateButton"]
         XCTAssertTrue(confirmCreate.waitToAppear(timeout: 5))
         confirmCreate.tap()
 
@@ -399,17 +399,30 @@ final class ClingSyncMacUITests: XCTestCase {
         closeSettingsWindow(in: app)
 
         // The timer fires after 5s. Poll the menu until the "Last Merge:" line shows a
-        // real age, which happens only after the auto-merge records a success,
-        // and confirm it did not leave the merge item in the failed state.
+        // real age, which happens only after the auto-merge records a success.
+        // Both menu lines are read every round so a run that never records a merge
+        // reports what the menu actually showed: on its own, "no success within 30s"
+        // does not say whether the merge failed, is still running, or never started.
         let deadline = Date().addingTimeInterval(30)
         var recordedMerge = false
+        var lastSeen = "menu never read"
         while Date() < deadline {
             openTrayMenu(app, expecting: "Settings")
             let lastText = lastMergeText(for: localDir, in: app)
+            let mergeText = mergeItemText(for: localDir, in: app)
+            lastSeen = "last=\(lastText ?? "<missing>"), merge=\(mergeText ?? "<missing>")"
+            if mergeText == "Merge (failed)" {
+                // An auto-merge presents no progress window, so the bridge's error text
+                // is only reachable by opening the failed merge from the menu.
+                clickWorkspaceMergeMenuItem(for: localDir, in: app)
+                let errorLabel = app.staticTexts["mergeErrorMessage"]
+                let detail =
+                    errorLabel.waitToAppear(timeout: 5)
+                    ? elementText(errorLabel) : "no error message shown"
+                XCTFail("auto-merge finished in a failed state: \(detail)")
+                return
+            }
             if let lastText, lastText.hasPrefix("Last Merge: "), lastText != "Last Merge: never" {
-                XCTAssertNotEqual(
-                    mergeItemText(for: localDir, in: app), "Merge (failed)",
-                    "auto-merge finished in a failed state")
                 recordedMerge = true
                 dismissMenuBarMenu(in: app)
                 break
@@ -417,7 +430,7 @@ final class ClingSyncMacUITests: XCTestCase {
             dismissMenuBarMenu(in: app)
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
-        XCTAssertTrue(recordedMerge, "auto-merge did not record a successful merge within 30s")
+        XCTAssertTrue(recordedMerge, "auto-merge did not record a successful merge within 30s (\(lastSeen))")
     }
 
     private func lastMergeText(for localDir: String, in app: XCUIApplication) -> String? {
@@ -663,10 +676,36 @@ final class ClingSyncMacUITests: XCTestCase {
         field.typeText(config.passphrase)
 
         if saveToKeychain {
+            // An auto-merge cannot prompt, so it only succeeds if this box is ticked.
+            // The box can take a moment to appear on a loaded machine, and a tick that
+            // never happens surfaces much later as a failed background merge.
             let remember = app.checkBoxes["passphrasePromptRemember"]
-            if remember.waitToAppear(timeout: 1), remember.value as? Int != 1 {
-                remember.tap()
+            XCTAssertTrue(remember.waitToAppear(timeout: 5), "save-to-keychain checkbox not found")
+            // Tick it without consulting its value. The checkbox carries no action, so
+            // AppKit never posts an accessibility value change for it, and the value
+            // read back can stay stale indefinitely. A tap decided on that reading
+            // toggles a box that was already ticked. A freshly presented prompt always
+            // starts unchecked, so clicking is unconditional the first time round.
+            // Clicks into this alert are dropped often enough to matter, and the value
+            // read back is accurate (a 0 here has always meant the box really is off),
+            // so re-clicking on a 0 cannot toggle a box that was already ticked.
+            let isChecked = { "\(remember.value ?? "")" == "1" }
+            var clicks = 0
+            while clicks < 8, !isChecked() {
+                remember.click()
+                clicks += 1
+                let settle = Date().addingTimeInterval(1)
+                while Date() < settle, !isChecked() {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                }
             }
+            // Fails here, while the prompt is still up, instead of eight seconds later
+            // as an unexplained merge failure.
+            XCTAssertTrue(
+                isChecked(),
+                "save-to-keychain click did not register after \(clicks) clicks "
+                    + "(enabled=\(remember.isEnabled), hittable=\(remember.isHittable), "
+                    + "frame=\(remember.frame), windows=\(app.dialogs.count)/\(app.windows.count))")
         }
 
         field.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])

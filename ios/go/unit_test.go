@@ -107,7 +107,7 @@ func (ps *provisionServer) createRepo(ctx context.Context) (repoConfig, error) {
 	if err != nil {
 		return repoConfig{}, err
 	}
-	if _, err := lib.InitNewRepository(ctx, storage, []byte(passphrase)); err != nil {
+	if _, err := lib.InitNewRepository(ctx, storage, []byte(passphrase), td.Argon2idParams()); err != nil {
 		return repoConfig{}, err
 	}
 

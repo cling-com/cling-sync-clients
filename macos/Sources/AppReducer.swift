@@ -266,7 +266,7 @@ enum AppReducer {
             effects.append(.rescheduleStaleCheck)
 
         case .autoMergeTimerFired:
-            for workspace in state.workspaces where workspace.config.isComplete && !workspace.isBusy {
+            for workspace in state.autoMergeTargets {
                 beginOperation(
                     &state, &effects, id: workspace.id, kind: .merge, presentWindow: false, isAutoMerge: true)
             }

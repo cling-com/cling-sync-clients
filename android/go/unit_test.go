@@ -119,7 +119,7 @@ func (es *executeServer) createRepo(ctx context.Context, fault bool) (repoConfig
 	if err != nil {
 		return repoConfig{}, err
 	}
-	if _, err := lib.InitNewRepository(ctx, storage, []byte(passphrase)); err != nil {
+	if _, err := lib.InitNewRepository(ctx, storage, []byte(passphrase), td.Argon2idParams()); err != nil {
 		return repoConfig{}, err
 	}
 

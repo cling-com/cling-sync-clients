@@ -300,7 +300,8 @@ func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState)
 
 	tmpFS := lib.NewMemoryFS(500_000_000)
 	opts := &workspace.StatusOptions{
-		PathFilter:             nil,
+		Include:                nil,
+		Exclude:                nil,
 		Monitor:                stagingMonitor,
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
@@ -735,7 +736,7 @@ func openWorkspaceRepository(ws *workspace.Workspace, password string) (*lib.Rep
 		// A failure with a stored passphrase means the saved access no longer
 		// works, so the UI must re-prompt.
 		if password == "" {
-			return nil, ErrPassphraseRequired
+			return nil, lib.WrapErrorf(ErrPassphraseRequired, "the saved passphrase did not open the repository")
 		}
 		return nil, lib.WrapErrorf(err, "failed to open repository")
 	}
@@ -749,8 +750,12 @@ func workspacePassphrase(ws *workspace.Workspace, password string) ([]byte, erro
 	if password != "" {
 		return []byte(password), nil
 	}
+	// Each way of losing stored access wraps the same sentinel, so callers still
+	// prompt, but the message says which step failed. Collapsing them makes a
+	// missing keychain entry indistinguishable from a workspace that was never
+	// asked to remember anything.
 	if !ws.HasSavedPassphrase(context.Background()) {
-		return nil, ErrPassphraseRequired
+		return nil, lib.WrapErrorf(ErrPassphraseRequired, "no passphrase saved for this workspace")
 	}
 	encKeyStr, keyErr := keychain.GetKeychainEntry(
 		context.Background(),
@@ -758,19 +763,19 @@ func workspacePassphrase(ws *workspace.Workspace, password string) ([]byte, erro
 		string(ws.RemoteRepository),
 	)
 	if keyErr != nil {
-		return nil, ErrPassphraseRequired
+		return nil, lib.WrapErrorf(ErrPassphraseRequired, "no keychain entry for the repository: %v", keyErr)
 	}
 	encKey, decodeErr := hex.DecodeString(encKeyStr)
 	if decodeErr != nil {
-		return nil, ErrPassphraseRequired
+		return nil, lib.WrapErrorf(ErrPassphraseRequired, "the keychain entry is not valid hex")
 	}
 	encKeyCipher, cipherErr := lib.NewCipher(lib.RawKey(encKey))
 	if cipherErr != nil {
-		return nil, ErrPassphraseRequired
+		return nil, lib.WrapErrorf(ErrPassphraseRequired, "the keychain entry is not a valid key")
 	}
 	passphrase, readErr := ws.ReadSavedPassphrase(context.Background(), encKeyCipher)
 	if readErr != nil {
-		return nil, ErrPassphraseRequired
+		return nil, lib.WrapErrorf(ErrPassphraseRequired, "the saved passphrase could not be read: %v", readErr)
 	}
 	return passphrase, nil
 }

@@ -30,25 +30,39 @@ protocol Prompter {
 
 // The real prompts: synchronous NSAlert.runModal wrapped as async. Every
 // accessibility identifier and button title is preserved verbatim because the
-// XCUITests drive these.
+// XCUITests drive these. Where two prompts share a button title, those buttons
+// carry identifiers: a title-based query cannot tell two alerts apart, and picks
+// whichever the accessibility hierarchy happens to list first.
 @MainActor
 final class AppKitPrompter: Prompter {
+    // Progress windows are `.floating`, which sits above a modal alert at the default
+    // level and covers whatever part of it they overlap. Clicks aimed at the covered
+    // part hit the progress window and are dropped by the modal session, while typing
+    // still reaches the alert's first responder, so a prompt can look like it is
+    // working while every click into it goes nowhere.
+    private func runModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        // Raised once the modal session is running, because the ordering `runModal`
+        // does when it presents the window discards a level set before the call.
+        DispatchQueue.main.async { alert.window.level = .modalPanel }
+        return alert.runModal()
+    }
+
     func passphrase(workspaceName: String) async -> PassphrasePromptResult? {
         while true {
             let alert = NSAlert()
             alert.messageText = "Enter Passphrase"
             alert.informativeText = "Cling Sync needs the repository passphrase for \(workspaceName)."
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            field.placeholderString = "Passphrase"
+            field.setAccessibilityIdentifier("passphrasePromptField")
+            let checkbox = NSButton(checkboxWithTitle: "Save access in macOS Keychain", target: nil, action: nil)
+            checkbox.setAccessibilityIdentifier("passphrasePromptRemember")
             let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 56))
             let stack = NSStackView(frame: container.bounds)
             stack.orientation = .vertical
             stack.spacing = 8
             stack.alignment = .leading
             stack.autoresizingMask = [.width, .height]
-            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-            field.placeholderString = "Passphrase"
-            field.setAccessibilityIdentifier("passphrasePromptField")
-            let checkbox = NSButton(checkboxWithTitle: "Save access in macOS Keychain", target: nil, action: nil)
-            checkbox.setAccessibilityIdentifier("passphrasePromptRemember")
             stack.addArrangedSubview(field)
             stack.addArrangedSubview(checkbox)
             container.addSubview(stack)
@@ -61,7 +75,7 @@ final class AppKitPrompter: Prompter {
                 alert.window.makeFirstResponder(field)
                 field.selectText(nil)
             }
-            if alert.runModal() != .alertFirstButtonReturn {
+            if runModal(alert) != .alertFirstButtonReturn {
                 return nil
             }
             let passphrase = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,6 +97,7 @@ final class AppKitPrompter: Prompter {
             field.setAccessibilityIdentifier("newRepositoryPassphraseField")
             alert.accessoryView = field
             alert.addButton(withTitle: "Create")
+                .setAccessibilityIdentifier("newRepositoryPassphraseCreateButton")
             alert.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)
             alert.window.initialFirstResponder = field
@@ -90,7 +105,7 @@ final class AppKitPrompter: Prompter {
                 alert.window.makeFirstResponder(field)
                 field.selectText(nil)
             }
-            if alert.runModal() != .alertFirstButtonReturn {
+            if runModal(alert) != .alertFirstButtonReturn {
                 return nil
             }
             let passphrase = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,9 +120,9 @@ final class AppKitPrompter: Prompter {
         let alert = NSAlert()
         alert.messageText = "Create New Repository?"
         alert.informativeText = "No repository was found at \(path). Do you want to create a new repository there?"
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        alert.addButton(withTitle: "Create").setAccessibilityIdentifier("confirmCreateRepositoryButton")
+        alert.addButton(withTitle: "Cancel").setAccessibilityIdentifier("confirmCreateRepositoryCancelButton")
+        return runModal(alert) == .alertFirstButtonReturn
     }
 
     func s3Credentials(hostURL: String) async -> S3CredentialsResult? {
@@ -140,7 +155,7 @@ final class AppKitPrompter: Prompter {
             DispatchQueue.main.async {
                 alert.window.makeFirstResponder(keyIdField)
             }
-            if alert.runModal() != .alertFirstButtonReturn {
+            if runModal(alert) != .alertFirstButtonReturn {
                 return nil
             }
             let accessKeyId = keyIdField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -181,7 +196,7 @@ final class AppKitPrompter: Prompter {
             DispatchQueue.main.async {
                 alert.window.makeFirstResponder(nameField)
             }
-            if alert.runModal() != .alertFirstButtonReturn {
+            if runModal(alert) != .alertFirstButtonReturn {
                 return nil
             }
             let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -198,7 +213,7 @@ final class AppKitPrompter: Prompter {
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        _ = runModal(alert)
     }
 }
 

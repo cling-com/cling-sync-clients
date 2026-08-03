@@ -46,6 +46,10 @@ struct AppState: Equatable {
     var anyOperationRunning: Bool { workspaces.contains { $0.isBusy } }
     func hasRunning(_ kind: OperationKind) -> Bool { workspaces.contains { $0.operation(kind).isRunning } }
 
+    // The folders an auto-merge tick applies to. A tick that finds none is dropped,
+    // because an auto-merge must never interrupt an operation already in flight.
+    var autoMergeTargets: [WorkspaceState] { workspaces.filter { $0.config.isComplete && !$0.isBusy } }
+
     var runningOperationLabels: [String] {
         var labels: [String] = []
         for workspace in workspaces {

@@ -5,6 +5,10 @@ enum AutoMergePolicy {
     static let backoffInterval: TimeInterval = 15 * 60
     static let secondsPerDay: TimeInterval = 86_400
 
+    // How long a manually requested auto-merge keeps waiting for a folder that is
+    // not already running an operation, before it stops trying.
+    static let manualRetryWindow: TimeInterval = 60
+
     // e.g. "5s", "3m", "2h", "4d".
     static func coarseAge(_ seconds: TimeInterval) -> String {
         let total = max(0, Int(seconds))

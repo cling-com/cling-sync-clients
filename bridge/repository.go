@@ -97,7 +97,12 @@ func InitNewFileRepository(localPath, passphrase string) error {
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to open file storage at %s", localPath)
 	}
-	if _, err := lib.InitNewRepository(context.Background(), storage, []byte(passphrase)); err != nil {
+	if _, err := lib.InitNewRepository(
+		context.Background(),
+		storage,
+		[]byte(passphrase),
+		lib.DefaultArgon2idParams(),
+	); err != nil {
 		return lib.WrapErrorf(err, "failed to initialize new repository at %s", localPath)
 	}
 	return nil

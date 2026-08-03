@@ -160,8 +160,13 @@ final class AppStore: ObservableObject {
                 }
                 do {
                     try await callStart(kind, path: path, author: author, workers: workers, password: prompt.passphrase)
+                    // The save runs after the start proves the passphrase, so it cannot
+                    // persist a wrong one. A save that fails still has to be reported:
+                    // remembering nothing leaves every later auto-merge failing with
+                    // "passphrase required" and no clue why, because an auto-merge has
+                    // no prompt to fall back on.
                     if prompt.rememberInKeychain {
-                        try? await gateway.storeWorkspacePassphrase(localPath: path, password: prompt.passphrase)
+                        try await gateway.storeWorkspacePassphrase(localPath: path, password: prompt.passphrase)
                     }
                     beginPolling(kind)
                 } catch {
@@ -293,12 +298,22 @@ final class AppStore: ObservableObject {
     }
 
     // Runs an auto-merge for every folder after a few seconds (the Options "try it"
-    // button). Drives the same path the repeating timer does.
+    // button). Drives the same path the repeating timer does. A tick that lands while
+    // every folder is busy is dropped, and this timer is the only thing that would
+    // have delivered it, so it keeps re-firing until a folder is idle. Without that
+    // the button silently does nothing at all and never reports why.
     func scheduleAutoMergeSoon() {
         notifier.requestAuthorization()
         manualAutoMergeTimer?.invalidate()
-        let timer = Timer(timeInterval: 5, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.fireAutoMerge() }
+        let giveUpAt = clock().addingTimeInterval(AutoMergePolicy.manualRetryWindow)
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.state.autoMergeTargets.isEmpty, self.clock() < giveUpAt { return }
+                self.manualAutoMergeTimer?.invalidate()
+                self.manualAutoMergeTimer = nil
+                self.fireAutoMerge()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         manualAutoMergeTimer = timer
