@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/flunderpero/cling-sync/cli/keychain"
-	"github.com/flunderpero/cling-sync/lib"
-	"github.com/flunderpero/cling-sync/workspace"
+	"github.com/cling-com/cling-sync/keychain"
+	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 const keychainService = "com.cling.sync"
@@ -303,6 +303,7 @@ func statusWorkspaceSync(localPath, password string, state *mergeWorkspaceState)
 		Include:                nil,
 		Exclude:                nil,
 		Monitor:                stagingMonitor,
+		SnapshotMonitor:        workspace.NewDefaultRevisionSnapshotMonitor(workspace.DefaultMonitorModeSilent, nil),
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
 		UseStagingCache:        true,
 	}
@@ -361,6 +362,7 @@ func MergeWorkspace(localPath, password, author, message string) (string, bool, 
 			false,
 		),
 		CommitMonitor:          workspace.NewDefaultCommitMonitor(workspace.DefaultMonitorModeSilent, nil, nil),
+		SnapshotMonitor:        workspace.NewDefaultRevisionSnapshotMonitor(workspace.DefaultMonitorModeSilent, nil),
 		Author:                 author,
 		Message:                message,
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),
@@ -512,6 +514,7 @@ func mergeWorkspaceAsync( //nolint:funlen
 		StagingMonitor:         staging,
 		CpMonitor:              cp,
 		CommitMonitor:          commit,
+		SnapshotMonitor:        workspace.NewDefaultRevisionSnapshotMonitor(workspace.DefaultMonitorModeSilent, nil),
 		Author:                 author,
 		Message:                message,
 		RestorableMetadataFlag: lib.RestorableMetadataFlag(0),

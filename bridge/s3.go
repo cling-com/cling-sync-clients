@@ -1,8 +1,8 @@
 package bridge
 
 import (
-	clinghttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
+	clinghttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
 )
 
 // EncodeS3URI builds an `s3+...` repository URI that carries the given S3

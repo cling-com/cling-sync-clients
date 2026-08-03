@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	clingsynchttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
+	clingsynchttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
 )
 
 var td = lib.TestData{} //nolint:gochecknoglobals

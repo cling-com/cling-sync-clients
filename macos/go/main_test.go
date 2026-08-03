@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
+	clingsynchttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
+	ws "github.com/cling-com/cling-sync/workspace"
 	bridgepkg "github.com/flunderpero/cling-sync-clients/bridge"
-	clingsynchttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
-	ws "github.com/flunderpero/cling-sync/workspace"
 )
 
 type nopCommitMonitor struct{}

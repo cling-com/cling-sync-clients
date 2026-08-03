@@ -6,7 +6,7 @@ root=$(cd $(dirname $0) && pwd)
 cd "$root"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 bridge|ios|android|macos|tools|build|fmt|lint|test|precommit [options]"
+    echo "Usage: $0 bridge|ios|android|macos|tools|use-dev-cling-sync|build|fmt|lint|test|precommit [options]"
     echo
     echo "Commands:"
     echo "  bridge [options]"
@@ -35,6 +35,11 @@ if [ $# -eq 0 ]; then
     echo "                 publish ./dist as a GitHub release"
     echo "        all    - run check, tag, build, and upload in order"
     echo
+    echo "  use-dev-cling-sync on|off"
+    echo "      Build against the ../cling-sync checkout instead of the released"
+    echo "      version, for lock-step development. While on, \`macos test --remote\`"
+    echo "      also mirrors ../cling-sync to the runner VM and tests against it."
+    echo
     echo "  build [project]"
     echo "      Build apps. If no project is specified, build all apps (ios, android, macos)."
     echo
@@ -54,6 +59,10 @@ if [ $# -eq 0 ]; then
 fi
 
 projects="bridge ios android macos"
+
+# The checkout `use-dev-cling-sync` builds against. macos/build.sh assumes this
+# same location when mirroring it to the runner VM.
+dev_cling_sync="../cling-sync"
 
 build_tools() {
     if [ -f tools/golangci-lint ]; then
@@ -210,6 +219,38 @@ run_upload_release() {
     echo "Released $version"
 }
 
+# Point the Go modules at the ../cling-sync checkout instead of the released
+# version, for developing both repositories in lock-step. The go.work file is
+# untracked, so this is a local-only override that never reaches CI or a release.
+# Its presence is what "dev mode is on" means, here and in macos/build.sh.
+run_use_dev_cling_sync() {
+    cd "$root"
+    case "${1:-}" in
+        on)
+            [ -f "$dev_cling_sync/go.mod" ] || {
+                echo "No Go module at $dev_cling_sync"; exit 1
+            }
+            rm -f go.work go.work.sum
+            go work init
+            go work use ./bridge ./ios/go ./android/go ./macos/go "$dev_cling_sync"
+            echo ">>> On. Building against $dev_cling_sync."
+            ;;
+        off)
+            rm -f go.work go.work.sum
+            echo ">>> Off. Building against the released cling-sync."
+            ;;
+        *)
+            if [ -f go.work ]; then
+                echo "On, building against $dev_cling_sync."
+            else
+                echo "Off, building against the released cling-sync."
+            fi
+            echo "Usage: $0 use-dev-cling-sync on|off"
+            exit 1
+            ;;
+    esac
+}
+
 run_release() {
     # tag, build, and upload each verify HEAD has a green CI build first, so a
     # release can never be cut from a red or untested commit regardless of which
@@ -252,6 +293,9 @@ case "$cmd" in
         ;;
     release)
         run_release "$@"
+        ;;
+    use-dev-cling-sync)
+        run_use_dev_cling_sync "$@"
         ;;
     build)
         apps="ios android macos"

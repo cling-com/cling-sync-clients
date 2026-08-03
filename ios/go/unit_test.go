@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	clingsynchttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
+	clingsynchttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
 )
 
 // provisionPort is the fixed loopback port the Swift unit tests reach the

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flunderpero/cling-sync/lib"
-	"github.com/flunderpero/cling-sync/workspace"
+	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 var workspaceTestData = lib.TestData{} //nolint:gochecknoglobals

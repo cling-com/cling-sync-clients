@@ -24,16 +24,6 @@ jobs:
           # The self-hosted runner already persists the module cache on disk
           # between runs, so the GitHub-side cache layer is just overhead.
           cache: false
-      - name: Sync cling-sync dependency
-        run: |
-          set -eu
-          sibling="$(dirname "$GITHUB_WORKSPACE")/cling-sync"
-          if [ -d "$sibling/.git" ]; then
-            git -C "$sibling" fetch origin main
-            git -C "$sibling" checkout -f -B main FETCH_HEAD
-          else
-            git clone https://github.com/cling-com/cling-sync.git "$sibling"
-          fi
       - name: Build
         run: ./build.sh build
       - name: Lint

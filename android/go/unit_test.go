@@ -12,9 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	clingsynchttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
 	bridge "github.com/flunderpero/cling-sync-clients/bridge"
-	clingsynchttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
 )
 
 // TestAndroidUnit drives the JVM unit tests against the REAL Go bridge. It starts

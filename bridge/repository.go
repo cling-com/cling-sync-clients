@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	clinghttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
-	"github.com/flunderpero/cling-sync/workspace"
+	clinghttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 var (
@@ -158,7 +158,13 @@ func rebuildSnapshot(revision lib.RevisionId) error {
 	ctx := context.Background()
 	head = revision
 	tmpFs := lib.NewMemoryFS(500_000_000)
-	newSnapshot, err := lib.NewRevisionSnapshot(ctx, repository, revision, tmpFs)
+	newSnapshot, err := lib.NewRevisionSnapshot(
+		ctx,
+		repository,
+		revision,
+		tmpFs,
+		workspace.NewDefaultRevisionSnapshotMonitor(workspace.DefaultMonitorModeSilent, nil),
+	)
 	if err != nil {
 		return lib.WrapErrorf(err, "failed to create revision snapshot")
 	}

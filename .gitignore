@@ -4,3 +4,5 @@
 .env
 /build/
 /dist/
+/go.work
+/go.work.sum

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	clinghttp "github.com/flunderpero/cling-sync/http"
-	"github.com/flunderpero/cling-sync/lib"
-	"github.com/flunderpero/cling-sync/workspace"
+	clinghttp "github.com/cling-com/cling-sync/http"
+	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 var (

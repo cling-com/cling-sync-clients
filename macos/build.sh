@@ -83,9 +83,10 @@ usage() {
     echo
     echo "  test [--remote]"
     echo "      Run integration tests (go/main_test.go, which drives the xcodebuild UI tests)."
-    echo "      Pass --remote to rsync this worktree and ../cling-sync to the runner VM"
+    echo "      Pass --remote to rsync this worktree to the runner VM"
     echo "      (REMOTE_RUNNER_HOST/REMOTE_RUNNER_USER from .env) and run the integration tests"
-    echo "      there. Unit tests always run locally."
+    echo "      there. Unit tests always run locally. While \`use-dev-cling-sync\` is on,"
+    echo "      ../cling-sync is mirrored along with it and tested against."
     echo
     echo "  tools"
     echo "      Install development tools (swiftlint, golangci-lint)"
@@ -268,8 +269,8 @@ integration_test() {
     go test -v -count=1 -timeout 20m ./...
 }
 
-# Mirror this worktree and its sibling cling-sync to the runner VM and run the
-# integration tests there, so the XCUITests do not take over the local machine.
+# Mirror this worktree to the runner VM and run the integration tests there, so
+# the XCUITests do not take over the local machine.
 remote_integration_test() {
     load_env
     if [ -z "${REMOTE_RUNNER_HOST:-}" ] || [ -z "${REMOTE_RUNNER_USER:-}" ]; then
@@ -278,25 +279,35 @@ remote_integration_test() {
     fi
     remote="$REMOTE_RUNNER_USER@$REMOTE_RUNNER_HOST"
 
-    # Keep the worktree's own name so parallel worktrees do not clobber each
-    # other, and keep cling-sync beside it so the go.mod ../../../cling-sync
-    # replace still resolves on the runner.
+    # Keep the worktree's own name so parallel worktrees do not clobber each other.
     clients_root=$(cd "$root/.." && pwd)
     folder=$(basename "$clients_root")
-    sibling="$clients_root/../cling-sync"
-    if [ ! -d "$sibling" ]; then
-        echo "Error: sibling cling-sync not found at $sibling"
-        exit 1
-    fi
 
     base="remote_runner"
     ssh_opts="-o StrictHostKeyChecking=accept-new -o BatchMode=yes"
     excludes="--exclude=.git --exclude=build --exclude=tools --exclude=DerivedData --exclude=.DS_Store"
 
-    echo ">>> Syncing $folder and cling-sync to $remote:~/$base"
-    ssh $ssh_opts "$remote" "mkdir -p '$base'"
+    # Drop any go.work an earlier dev-mode run left behind. rsync --delete will
+    # not do it when go.work is excluded, and a stale one would silently point
+    # the runner at a cling-sync copy this run never refreshed.
+    ssh $ssh_opts "$remote" "mkdir -p '$base' && rm -f '$base/$folder/go.work' '$base/$folder/go.work.sum'"
+
+    # A go.work means `use-dev-cling-sync on`, so the runner has to test against
+    # the same checkout. Mirroring it to $base/cling-sync puts it exactly where
+    # go.work's relative `../cling-sync` resolves to from $base/$folder.
+    sibling="$clients_root/../cling-sync"
+    if [ -f "$clients_root/go.work" ]; then
+        if [ ! -d "$sibling" ]; then
+            echo "Error: use-dev-cling-sync is on but $sibling does not exist"
+            exit 1
+        fi
+        echo ">>> Syncing $folder and cling-sync (dev mode) to $remote:~/$base"
+        rsync -az --delete -e "ssh $ssh_opts" $excludes "$sibling/" "$remote:$base/cling-sync/"
+    else
+        echo ">>> Syncing $folder to $remote:~/$base"
+        excludes="$excludes --exclude=go.work --exclude=go.work.sum"
+    fi
     rsync -az --delete -e "ssh $ssh_opts" $excludes "$clients_root/" "$remote:$base/$folder/"
-    rsync -az --delete -e "ssh $ssh_opts" $excludes "$sibling/" "$remote:$base/cling-sync/"
 
     # Run under a login shell so the runner's profile (Homebrew PATH for go and
     # friends) is sourced. A bare ssh command shell does not read it.

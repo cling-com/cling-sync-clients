@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flunderpero/cling-sync/lib"
+	"github.com/cling-com/cling-sync/lib"
 )
 
 var td = lib.TestData{} //nolint:gochecknoglobals
@@ -27,7 +27,13 @@ func snapshotFromEntries(t *testing.T, entries ...*lib.RevisionEntry) (*lib.Temp
 	}
 	_, err = commit.Commit(context.Background(), td.CommitInfo())
 	assert.NoError(err)
-	snapshot, err := lib.NewRevisionSnapshot(context.Background(), repo.Repository, repo.Head(), td.NewFS(t))
+	snapshot, err := lib.NewRevisionSnapshot(
+		context.Background(),
+		repo.Repository,
+		repo.Head(),
+		td.NewFS(t),
+		td.NewRevisionSnapshotMonitor(),
+	)
 	assert.NoError(err)
 	return snapshot, repo.Head()
 }
