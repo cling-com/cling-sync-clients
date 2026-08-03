@@ -28,7 +28,7 @@ if [ $# -eq 0 ]; then
     echo "      Tag, build, and publish a new patch release. Run on darwin."
     echo "        check  - verify HEAD has a green CI build on GitHub"
     echo "                 (tag, build, and upload run this first too)"
-    echo "        tag    - tag HEAD with the next patch version (latest + 1; first tag by hand)"
+    echo "        tag    - tag HEAD with the next patch version (latest pushed + 1)"
     echo "        build  - build the GitHub downloads (macOS universal app, Android APK)"
     echo "                 into ./dist and the macOS/iOS App Store packages"
     echo "        upload - push the tag, upload macOS/iOS to App Store Connect, and"
@@ -94,6 +94,17 @@ latest_version() {
         | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1
 }
 
+# Latest vMAJOR.MINOR.PATCH release tag that exists on the remote, excluding $1
+# if given, or empty if there are none. The remote is the source of truth for
+# what has been released: a local tag from a release run that failed before
+# `upload` is not one.
+latest_pushed_version() {
+    git ls-remote --tags origin 'v*' \
+        | sed -n 's|.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' \
+        | grep -vxF "${1:-}" \
+        | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n1
+}
+
 # Verify the current HEAD has a green CI build on GitHub.
 run_check_release() {
     cd "$root"
@@ -115,24 +126,30 @@ run_check_release() {
     esac
 }
 
-# Tag HEAD with the next patch version: the latest release tag with its patch
-# bumped.
+# Tag HEAD with the next patch version after the latest *pushed* release. If a
+# previous release run already created that tag but died before pushing it, reuse
+# it rather than bumping again, so a resumed run releases the version it started.
 run_tag_release() {
     cd "$root"
     if [ -n "$(git status --porcelain)" ]; then
         echo "Working tree is not clean. Commit or stash your changes before releasing."
         exit 1
     fi
-    local latest ver major minor patch new
-    latest=$(latest_version)
-    [ -n "$latest" ] || { echo "No release tag found. Tag the first release by hand (e.g. git tag v1.0.1)."; exit 1; }
-    ver="${latest#v}"
+    local pushed ver major minor patch new
+    pushed=$(latest_pushed_version)
+    [ -n "$pushed" ] || { echo "No pushed release tag found on origin."; exit 1; }
+    ver="${pushed#v}"
     major="${ver%%.*}"
     minor="${ver#*.}"; minor="${minor%%.*}"
     patch="${ver##*.}"
     new="v$major.$minor.$((patch + 1))"
-    echo ">>> Tagging $new (previous: $latest)"
-    git tag "$new"
+    if git rev-parse -q --verify "refs/tags/$new^{commit}" >/dev/null; then
+        echo ">>> Reusing $new, tagged by an earlier run that never pushed it"
+    else
+        echo ">>> Tagging $new (latest pushed: $pushed)"
+    fi
+    # -f so a reused tag follows HEAD if it moved since that run.
+    git tag -f "$new"
 }
 
 # Build every release artifact for the current tag: the GitHub downloads (macOS
@@ -173,6 +190,9 @@ run_upload_release() {
     local version prev
     version=$(latest_version)
     [ -n "$version" ] || { echo "No release tag found. Run \`release tag\` first."; exit 1; }
+    # Excluding the version being released keeps the notes right when a partial
+    # upload is re-run and the tag is already on the remote.
+    prev=$(latest_pushed_version "$version")
     echo ">>> Pushing git tag $version"
     git push origin "$version"
 
@@ -184,9 +204,7 @@ run_upload_release() {
 
     echo ">>> Publishing GitHub release $version"
     # Release notes are the commit log since the previous release tag.
-    prev=$(git for-each-ref --sort=-v:refname --format='%(refname:short)' 'refs/tags/*' \
-        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
-    git log --format='- %s (%h) by %an' "${prev:+$prev..}$version" \
+    git log --format='- %s (%h) by %an' "$prev..$version" \
         | gh release create "$version" dist/* --title "$version" --notes-file -
     echo
     echo "Released $version"
