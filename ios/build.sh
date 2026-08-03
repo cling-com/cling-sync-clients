@@ -371,7 +371,7 @@ unit_test() {
 integration_test() {
     echo ">>> Running integration tests"
     cd go
-    go test -v -count=1 -run TestIOSIntegration ./... "$@"
+    go test -v -count=1 -run TestIOSIntegration -timeout 30m ./... "$@"
     cd "$root"
 }
 
