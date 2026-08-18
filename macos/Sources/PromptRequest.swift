@@ -35,15 +35,24 @@ protocol Prompter {
 // whichever the accessibility hierarchy happens to list first.
 @MainActor
 final class AppKitPrompter: Prompter {
-    // Progress windows are `.floating`, which sits above a modal alert at the default
-    // level and covers whatever part of it they overlap. Clicks aimed at the covered
-    // part hit the progress window and are dropped by the modal session, while typing
-    // still reaches the alert's first responder, so a prompt can look like it is
-    // working while every click into it goes nowhere.
+    // Progress windows are `.floating`, which sits above a modal alert and covers
+    // whatever part of it they overlap. Clicks aimed at the covered part hit the
+    // progress window and are dropped by the modal session, while typing still
+    // reaches the alert's first responder, so a prompt can look like it is working
+    // while every click into it goes nowhere. Raising the alert instead does not
+    // help: the level it is given is not honoured against a floating window for as
+    // long as the modal session owns it. Dropping the windows that float, for no
+    // longer than the prompt is up, is what actually clears the alert.
     private func runModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        // Raised once the modal session is running, because the ordering `runModal`
-        // does when it presents the window discards a level set before the call.
-        DispatchQueue.main.async { alert.window.level = .modalPanel }
+        let floating = NSApp.windows.filter { $0.level == .floating }
+        for window in floating {
+            window.level = .normal
+        }
+        defer {
+            for window in floating {
+                window.level = .floating
+            }
+        }
         return alert.runModal()
     }
 

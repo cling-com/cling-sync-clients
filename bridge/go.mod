@@ -2,7 +2,7 @@ module github.com/flunderpero/cling-sync-clients/bridge
 
 go 1.26.5
 
-require github.com/cling-com/cling-sync v0.0.3
+require github.com/cling-com/cling-sync v0.0.4
 
 require (
 	golang.org/x/crypto v0.54.0 // indirect

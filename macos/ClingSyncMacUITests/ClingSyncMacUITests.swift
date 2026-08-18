@@ -681,31 +681,35 @@ final class ClingSyncMacUITests: XCTestCase {
             // never happens surfaces much later as a failed background merge.
             let remember = app.checkBoxes["passphrasePromptRemember"]
             XCTAssertTrue(remember.waitToAppear(timeout: 5), "save-to-keychain checkbox not found")
-            // Tick it without consulting its value. The checkbox carries no action, so
-            // AppKit never posts an accessibility value change for it, and the value
-            // read back can stay stale indefinitely. A tap decided on that reading
-            // toggles a box that was already ticked. A freshly presented prompt always
-            // starts unchecked, so clicking is unconditional the first time round.
-            // Clicks into this alert are dropped often enough to matter, and the value
-            // read back is accurate (a 0 here has always meant the box really is off),
-            // so re-clicking on a 0 cannot toggle a box that was already ticked.
+            // The prompt drops any floating window to the normal level while it is up,
+            // so a click aimed here reaches the box instead of the progress window that
+            // would otherwise cover it and eat it. The retry is for a box that has not
+            // finished being presented, and is only ever taken while the box reads off,
+            // since clicking one that is already ticked would clear it.
             let isChecked = { "\(remember.value ?? "")" == "1" }
-            var clicks = 0
-            while clicks < 8, !isChecked() {
+            var attempts = 0
+            while attempts < 4, !isChecked() {
                 remember.click()
-                clicks += 1
-                let settle = Date().addingTimeInterval(1)
+                attempts += 1
+                let settle = Date().addingTimeInterval(2)
                 while Date() < settle, !isChecked() {
                     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
                 }
             }
             // Fails here, while the prompt is still up, instead of eight seconds later
-            // as an unexplained merge failure.
+            // as an unexplained merge failure. The window frames go into the message
+            // because the failure worth telling apart is a covered box, and that is
+            // only visible as another window overlapping this one.
+            let windows = (0..<app.windows.count)
+                .map { app.windows.element(boundBy: $0) }
+                .map { "\($0.title.isEmpty ? "<untitled>" : $0.title)@\($0.frame)" }
+                .joined(separator: " ")
             XCTAssertTrue(
                 isChecked(),
-                "save-to-keychain click did not register after \(clicks) clicks "
-                    + "(enabled=\(remember.isEnabled), hittable=\(remember.isHittable), "
-                    + "frame=\(remember.frame), windows=\(app.dialogs.count)/\(app.windows.count))")
+                "save-to-keychain did not register after \(attempts) attempts "
+                    + "(value=\(String(describing: remember.value)), enabled=\(remember.isEnabled), "
+                    + "hittable=\(remember.isHittable), frame=\(remember.frame), "
+                    + "dialogs=\(app.dialogs.count), windows=[\(windows)])")
         }
 
         field.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])

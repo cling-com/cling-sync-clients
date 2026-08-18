@@ -259,13 +259,13 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	t.Log("Verifying mediaSub repository (subdirectory media file synced, subdirectory text file excluded)")
 	newHeadMediaSub := mediaSub.repo.Head()
 	assert.NotEqual(headMediaSub, newHeadMediaSub, "MediaSub repo should have received the upload")
-	// Entries are ordered files-before-subdirectories within each level, so the
-	// top-level root.jpg precedes the album/ subdirectory.
+	// Entries are ordered lexicographically by path, so the album/ subdirectory and
+	// its contents precede the top-level root.jpg.
 	assert.Equal([]lib.TestRevisionEntryInfo{
 		{"backup", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
-		{"backup/root.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Root pic")},
 		{"backup/album", lib.RevisionEntryKindAdd, 0o700 | iofs.ModeDir, lib.Sha256{}},
 		{"backup/album/beach.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Beach pic")},
+		{"backup/root.jpg", lib.RevisionEntryKindAdd, 0o600, td.SHA256("Root pic")},
 	}, mediaSub.repo.RevisionInfos(newHeadMediaSub))
 
 	t.Log("Verifying docsSub repository (non-media subdirectory files synced after the media filter was turned off)")

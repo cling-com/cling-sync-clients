@@ -18,11 +18,11 @@ import (
 )
 
 var (
-	repository        *lib.Repository                    //nolint:gochecknoglobals
-	repositoryHostURL string                             //nolint:gochecknoglobals
-	head              lib.RevisionId                     //nolint:gochecknoglobals
-	snapshot          *lib.Temp[*lib.RevisionEntry]      //nolint:gochecknoglobals
-	snapshotCache     *lib.TempCache[*lib.RevisionEntry] //nolint:gochecknoglobals
+	repository        *lib.Repository               //nolint:gochecknoglobals
+	repositoryHostURL string                        //nolint:gochecknoglobals
+	head              lib.RevisionId                //nolint:gochecknoglobals
+	snapshot          *lib.Temp[*lib.RevisionEntry] //nolint:gochecknoglobals
+	snapshotCache     *lib.RevisionEntryCache       //nolint:gochecknoglobals
 
 	repositoryFileHashes *RepositoryFileHashes //nolint:gochecknoglobals
 )
@@ -445,7 +445,7 @@ func UploadFile(localFilePath string, repoFilePath string) (*lib.RevisionEntry, 
 	}
 
 	// Check if file already exists in the current head of the repository.
-	existingEntry, found, err := snapshotCache.Get(lib.PathCompareString(repoPath, false))
+	existingEntry, found, err := snapshotCache.Get(lib.PathKey{Path: repoPath, IsDir: false})
 	if err != nil {
 		return nil, false, lib.WrapErrorf(err, "failed to get path %s from remote revision", repoPath)
 	}
