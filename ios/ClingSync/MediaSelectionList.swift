@@ -99,14 +99,20 @@ func allSelectableSelected(_ state: AppState) -> Bool {
     return !targets.isEmpty && targets.isSubset(of: state.selectedIds)
 }
 
-// The leading toolbar button shared by the main and share screens. Once a scan
-// settles with nothing left to back up it reads "No new files" and is disabled.
+// The leading toolbar button shared by the main and share screens. It is disabled
+// while a scan runs: a file that has not been checked yet counts as selectable, so
+// selecting mid-scan takes in files that the scan then turns out to have backed up
+// already, and those stay selected. Once a scan settles with nothing left to back
+// up it reads "No new files" and is disabled.
 struct SelectAllButton: View {
     @ObservedObject var store: MainStore
 
     var body: some View {
-        if store.state.selectAllTargets.isEmpty {
-            Button(store.state.isScanning ? "Select All" : "No new files") {}
+        if store.state.isScanning {
+            Button("Select All") {}
+                .disabled(true)
+        } else if store.state.selectAllTargets.isEmpty {
+            Button("No new files") {}
                 .disabled(true)
         } else if allSelectableSelected(store.state) {
             Button("Deselect All") { store.dispatch(.deselectAllClicked) }

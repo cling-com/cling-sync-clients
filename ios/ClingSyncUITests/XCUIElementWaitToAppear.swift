@@ -15,4 +15,17 @@ extension XCUIElement {
         }
         return exists
     }
+
+    // A disabled placeholder can carry the same label as the control it stands in
+    // for, so existence alone does not mean the control is the live one.
+    func waitToEnable(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if exists, isEnabled {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return exists && isEnabled
+    }
 }

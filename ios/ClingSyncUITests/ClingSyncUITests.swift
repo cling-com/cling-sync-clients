@@ -157,7 +157,16 @@ final class ClingSyncUITests: XCTestCase {
 
         // Slow the uploads so the abort lands while work is in flight.
         injectFault(controlURL: Self.abortControlURL, "latency?ms=4000")
-        app.navigationBars["Cling Sync"].buttons["Select All"].tap()
+        // Select All is disabled for as long as the scan runs, and a tap on it then
+        // selects nothing, leaving no upload to abort. The added latency is what makes
+        // the scan still be running by the time we get here.
+        let selectAll = app.navigationBars["Cling Sync"].buttons["Select All"]
+        XCTAssertTrue(selectAll.waitToEnable(timeout: 60), "scan never offered a selectable file")
+        selectAll.tap()
+        let selection = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'selected'")
+        ).firstMatch
+        XCTAssertTrue(selection.waitToAppear(timeout: 30), "Select All selected nothing")
         app.buttons["Upload"].tap()
 
         let abortButton = app.buttons["Abort"]
