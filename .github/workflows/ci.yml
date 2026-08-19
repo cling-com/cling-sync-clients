@@ -28,13 +28,49 @@ jobs:
         run: ./build.sh build
       - name: Lint
         run: ./build.sh lint
+      # The runner is self-hosted, so anything a test step leaves running stays on
+      # the machine: a booted simulator keeps its whole runtime resident, and a UI
+      # test killed by its timeout leaves the app it drove behind. Either one costs
+      # the timing-sensitive UI tests the CPU they need to finish in time.
+      #
+      # Every test step is bracketed by one of these. The step between two of them
+      # is both the cleanup after the first and the cleanup before the second, and
+      # the one below leads so that a run also starts clean: a job that is cancelled
+      # or that loses its runner never reaches its own trailing cleanup, and its
+      # leftovers would otherwise be inherited by the run after it.
+      #
+      # They run even when a test step failed, which is when there is most to clean
+      # up, and none of them may fail the build.
+      - name: Clean up before tests
+        run: |
+          xcrun simctl shutdown all || true
+          pkill -x ClingSyncMac || true
+          pkill -f ClingSyncMacUITests-Runner.app || true
       - name: Test (android unit)
         # Integration tests need an emulator with hardware virtualization.
         run: ./build.sh android test unit
+      - name: Clean up after Android
+        if: always()
+        run: |
+          xcrun simctl shutdown all || true
+          pkill -x ClingSyncMac || true
+          pkill -f ClingSyncMacUITests-Runner.app || true
       - name: Test (ios)
         run: ./build.sh ios test
+      - name: Clean up after iOS
+        if: always()
+        run: |
+          xcrun simctl shutdown all || true
+          pkill -x ClingSyncMac || true
+          pkill -f ClingSyncMacUITests-Runner.app || true
       - name: Test (macos)
         run: ./build.sh macos test
+      - name: Clean up after macOS
+        if: always()
+        run: |
+          xcrun simctl shutdown all || true
+          pkill -x ClingSyncMac || true
+          pkill -f ClingSyncMacUITests-Runner.app || true
       - name: Upload Android test reports
         if: failure()
         uses: actions/upload-artifact@v4

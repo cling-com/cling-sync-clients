@@ -42,11 +42,15 @@ final class AppKitPrompter: Prompter {
     // while every click into it goes nowhere. Raising the alert instead does not
     // help: the level it is given is not honoured against a floating window for as
     // long as the modal session owns it. Dropping the windows that float, for no
-    // longer than the prompt is up, is what actually clears the alert.
+    // longer than the prompt is up, is what actually clears the alert. They go below
+    // the alert rather than level with it: at an equal level the two are separated
+    // only by their front-to-back order, which would leave the very same prompt
+    // covered whenever the alert happens to land behind.
     private func runModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        let belowAlert = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
         let floating = NSApp.windows.filter { $0.level == .floating }
         for window in floating {
-            window.level = .normal
+            window.level = belowAlert
         }
         defer {
             for window in floating {

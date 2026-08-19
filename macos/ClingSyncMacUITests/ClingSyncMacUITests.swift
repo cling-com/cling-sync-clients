@@ -21,7 +21,11 @@ final class ClingSyncMacUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        executionTimeAllowance = 150
+        // Generous because this budget has to hold on a machine that is busy with
+        // something else: these drive a real UI, and every synthesized event slows
+        // down with the load, which turns a tight budget into a timeout that reads
+        // like a hang. Still short enough that a real hang is caught, not waited on.
+        executionTimeAllowance = 360
     }
 
     // Covers both URL flows in a single xcodebuild run to save startup time.
