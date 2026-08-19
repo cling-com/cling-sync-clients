@@ -202,7 +202,8 @@ build_app() {
         -archivePath build/ClingSync.xcarchive \
         CODE_SIGN_STYLE=Automatic \
         DEVELOPMENT_TEAM="$development_team_id" \
-        $version_settings
+        $version_settings \
+        -allowProvisioningUpdates
 
     # Export IPA for App Store.
     # Use system PATH to avoid Homebrew rsync incompatibility with Xcode's export.
@@ -211,7 +212,8 @@ build_app() {
         -exportArchive \
         -archivePath build/ClingSync.xcarchive \
         -exportPath build/export \
-        -exportOptionsPlist ExportOptions.plist
+        -exportOptionsPlist ExportOptions.plist \
+        -allowProvisioningUpdates
 
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
