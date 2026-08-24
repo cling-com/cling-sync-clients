@@ -214,6 +214,31 @@ func TestRepository(t *testing.T) { //nolint:paralleltest
 		assert.Equal(false, uploaded)
 	})
 
+	t.Run("Content under any prefix counts as backed up", func(t *testing.T) { //nolint:paralleltest
+		setupRepositoryGlobals(t)
+		assert := lib.NewAssert(t)
+
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		assert.NoError(InitNewFileRepository(repoDir, "testpassphrase"))
+		assert.NoError(OpenRepository(repoDir, "testpassphrase"))
+		source := filepath.Join(t.TempDir(), "x.jpg")
+		assert.NoError(os.WriteFile(source, []byte("shared bytes"), 0o600))
+		hash := td.SHA256("shared bytes")
+
+		entry, uploaded, err := UploadFile(source, "shared/inbox/x.jpg")
+		assert.NoError(err)
+		assert.Equal(true, uploaded)
+		_, err = CommitEntries([]*lib.RevisionEntry{entry}, "Tester", "share")
+		assert.NoError(err)
+
+		// Membership is content-only on purpose: a file the user moved or renamed
+		// inside the repository still counts as backed up and must not be
+		// re-uploaded at its old place by the next scan.
+		found, err := CheckFiles([]lib.Sha256{hash})
+		assert.NoError(err)
+		assert.Equal([]bool{true}, found)
+	})
+
 	t.Run("Rebuilds a cleared hash index even when HEAD looks unchanged", func(t *testing.T) { //nolint:paralleltest
 		setupRepositoryGlobals(t)
 		assert := lib.NewAssert(t)

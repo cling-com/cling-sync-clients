@@ -2,7 +2,7 @@ import Foundation
 
 // Scans source files against the repository: hashes each (via the source gateway)
 // and asks the bridge whether the content is already present, in batches, honoring
-// Task cancellation. CheckFiles is now the sole, definitive membership test, so
+// Task cancellation. CheckFiles is the sole, definitive membership test, so
 // there is no local index: a file is `.exists` if present, else `.new`.
 struct ScanService {
     private static let maxBatchSize = 100

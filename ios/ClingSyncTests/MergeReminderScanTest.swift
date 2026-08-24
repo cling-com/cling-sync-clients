@@ -86,7 +86,9 @@ extension BridgeSuite {
         for file in files { _ = try await env.source.sha256(for: file) }
         try env.backUp("backed.jpg")
 
-        #expect(await MergeReminderService.evaluate(mode: .daily, source: env.source) == .due(count: 1, weekly: false))
+        #expect(
+            await MergeReminderService.evaluate(mode: .daily, source: env.source)
+                == .due(count: 1, weekly: false))
     }
 
     @Test(.enabled(if: TestRepo.isAvailable))
@@ -109,7 +111,9 @@ extension BridgeSuite {
         try env.backUp("changed.jpg")
         env.write("changed.jpg", "after-the-edit-with-different-bytes")
 
-        #expect(await MergeReminderService.evaluate(mode: .weekly, source: env.source) == .due(count: 1, weekly: true))
+        #expect(
+            await MergeReminderService.evaluate(mode: .weekly, source: env.source)
+                == .due(count: 1, weekly: true))
     }
 
     @Test(.enabled(if: TestRepo.isAvailable))

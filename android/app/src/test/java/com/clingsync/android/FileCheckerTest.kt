@@ -56,6 +56,19 @@ class FileCheckerTest {
 
     private fun checker() = FileChecker(cache, dispatcher)
 
+    @Test
+    fun fileExistsWhenItsContentLivesUnderAnotherPrefix() =
+        runTest(dispatcher) {
+            val file = write("x.jpg", "shared bytes")
+            seedIntoRepo(file, "shared/inbox/x.jpg")
+
+            // Membership is content-only on purpose: a file the user moved or renamed
+            // inside the repository still counts as backed up and must not be
+            // re-uploaded at its old place by the next scan.
+            val result = checker().checkFiles(listOf(file.absolutePath)).getOrThrow()
+            assertEquals(FileStatus.Exists, result.statuses[file.absolutePath])
+        }
+
     // Uploads + commits a file so it is genuinely present in the repository.
     private fun seedIntoRepo(
         file: File,

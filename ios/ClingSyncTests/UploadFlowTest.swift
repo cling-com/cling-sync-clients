@@ -38,6 +38,24 @@ extension BridgeSuite {
     }
 
     @Test(.enabled(if: TestRepo.isAvailable))
+    func scanReportsExistsForContentPresentUnderAnotherPrefix() async throws {
+        let (source, files) = try await openFreshRepo()
+        let target = try #require(files.first)
+        let entry = try await source.withLocalCopy(of: target) { url in
+            try Bridge.uploadFile(localFilePath: url.path, repoFilePath: "shared/inbox/\(target.name)")
+        }
+        _ = try Bridge.commit(revisionEntries: [try #require(entry)], author: "Tester", message: "share")
+
+        // Membership is content-only on purpose: a file the user moved or renamed
+        // inside the repository still counts as backed up and must not be
+        // re-uploaded at its old place by the next scan.
+        let scan = ScanService(source: source)
+        var statuses: [String: FileStatus] = [:]
+        try await scan.scan(files) { _, batch in statuses.merge(batch) { _, new in new } }
+        #expect(statuses[target.id] == .exists(repoPath: ""))
+    }
+
+    @Test(.enabled(if: TestRepo.isAvailable))
     func uploadCommitsEveryFileThenDedupsOnReupload() async throws {
         let (source, files) = try await openFreshRepo()
         let coordinator = UploadCoordinator(source: source)

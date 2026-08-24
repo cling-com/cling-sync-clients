@@ -402,11 +402,14 @@ func (r *RepositoryFileHashes) open(raw []byte) (plain []byte, ok bool) {
 	return out, true
 }
 
-// CheckFiles reports, for each given SHA-256, whether its content is present in the
-// persisted hash index. It answers from the index alone, WITHOUT verifying the index
-// is current, so it does not require the repository open: the headless merge reminder
-// relies on this against the index the last foreground session left. Interactive
-// callers (scan/share) call EnsureFileHashesAtHead first to refresh a stale index.
+// CheckFiles reports, for each given SHA-256, whether its content is present in
+// the repository, regardless of path. Deliberately content-only: a file the user
+// moved or renamed inside the repository still counts as backed up and must not
+// be re-uploaded at its old place by the next scan. It answers from the index
+// alone, WITHOUT verifying the index is current, so it does not require the
+// repository open: the headless merge reminder relies on this against the index
+// the last foreground session left. Interactive callers (scan/share) call
+// EnsureFileHashesAtHead first to refresh a stale index.
 func CheckFiles(sha256s []lib.Sha256) ([]bool, error) {
 	if repositoryFileHashes == nil {
 		panic("Init() must be called first")
@@ -504,11 +507,18 @@ func CommitEntries(entries []*lib.RevisionEntry, author, message string) (string
 	if err != nil {
 		return "", lib.WrapErrorf(err, "failed to create commit")
 	}
+	inHead := func(key lib.PathKey) (bool, error) {
+		_, found, err := snapshotCache.Get(key)
+		if err != nil {
+			return false, lib.WrapErrorf(err, "failed to get path %s from snapshot", key.Path)
+		}
+		return found, nil
+	}
 	for _, entry := range entries {
 		// Ensure parent directories exist for entries with subdirectories.
 		parent := entry.Path.Dir()
 		if !parent.IsEmpty() {
-			if err := commit.EnsureDirExists(parent, snapshotCache, head); err != nil {
+			if err := commit.EnsureDirExists(parent, inHead); err != nil {
 				return "", lib.WrapErrorf(err, "failed to ensure directory %s exists", parent)
 			}
 		}

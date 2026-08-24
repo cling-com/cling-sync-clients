@@ -29,7 +29,6 @@ final class MainStore: ObservableObject {
     private var source: SourceGateway
     private let repository: RepositoryGateway
     private let connector: RepositoryConnector
-    private var scanner: ScanService
     private var uploader: UploadCoordinator
     private let isUITestMode: Bool
     // Set by the share flow (which reuses MainStore over a fixed shared-files source):
@@ -77,7 +76,6 @@ final class MainStore: ObservableObject {
         self.source = source
         self.repository = repository
         self.connector = RepositoryConnector(repository: repository, settings: settings)
-        self.scanner = ScanService(source: source)
         self.uploader = UploadCoordinator(source: source)
         self.passphraseController = passphraseController ?? PassphrasePromptController()
         self.s3Controller = s3Controller ?? S3CredentialsPromptController()
@@ -393,10 +391,11 @@ final class MainStore: ObservableObject {
         guard !unscanned.isEmpty else { return }
         let ids = unscanned.map(\.id)
         dispatch(.scanStarted(ids: ids))
+        let scanner = ScanService(source: source)
         scanTask?.cancel()
         scanTask = Task {
             do {
-                try await self.scanner.scan(unscanned) { processed, statuses in
+                try await scanner.scan(unscanned) { processed, statuses in
                     await self.dispatch(.scanProgress(processed: processed, total: ids.count, statuses: statuses))
                 }
                 self.dispatch(.scanCompleted(statuses: [:]))
@@ -492,7 +491,6 @@ final class MainStore: ObservableObject {
 
     private func applySource(_ selection: SourceSelection) {
         source = makeSource(selection)
-        scanner = ScanService(source: source)
         uploader = UploadCoordinator(source: source)
     }
 

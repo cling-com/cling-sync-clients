@@ -685,15 +685,16 @@ final class ClingSyncMacUITests: XCTestCase {
             // never happens surfaces much later as a failed background merge.
             let remember = app.checkBoxes["passphrasePromptRemember"]
             XCTAssertTrue(remember.waitToAppear(timeout: 5), "save-to-keychain checkbox not found")
-            // The prompt drops any floating window to the normal level while it is up,
-            // so a click aimed here reaches the box instead of the progress window that
-            // would otherwise cover it and eat it. The retry is for a box that has not
-            // finished being presented, and is only ever taken while the box reads off,
-            // since clicking one that is already ticked would clear it.
+            // Synthesized clicks into this alert are dropped intermittently on the
+            // runner (a progress window overlapping the box eats them), while key
+            // events always reach the modal alert, so the box is ticked via its
+            // Cmd-K key equivalent. The retry is for an alert that has not finished
+            // being presented, and is only ever taken while the box reads off,
+            // since toggling one that is already ticked would clear it.
             let isChecked = { "\(remember.value ?? "")" == "1" }
             var attempts = 0
             while attempts < 4, !isChecked() {
-                remember.click()
+                field.typeKey("k", modifierFlags: [.command])
                 attempts += 1
                 let settle = Date().addingTimeInterval(2)
                 while Date() < settle, !isChecked() {

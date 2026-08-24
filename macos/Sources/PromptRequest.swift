@@ -70,6 +70,11 @@ final class AppKitPrompter: Prompter {
             field.setAccessibilityIdentifier("passphrasePromptField")
             let checkbox = NSButton(checkboxWithTitle: "Save access in macOS Keychain", target: nil, action: nil)
             checkbox.setAccessibilityIdentifier("passphrasePromptRemember")
+            // Synthesized clicks into the modal alert are dropped intermittently on
+            // loaded machines while key events always reach it, so the checkbox is
+            // also toggleable from the keyboard.
+            checkbox.keyEquivalent = "k"
+            checkbox.keyEquivalentModifierMask = [.command]
             let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 56))
             let stack = NSStackView(frame: container.bounds)
             stack.orientation = .vertical
