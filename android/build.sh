@@ -206,10 +206,23 @@ build_go() {
     cd "$root"
 }
 
+# Debug builds carry the same git-derived version as release builds, otherwise
+# a debug APK claims versionCode 1 and cannot be installed over a released
+# version (INSTALL_FAILED_VERSION_DOWNGRADE). Every gradle invocation that
+# builds or installs a debug APK must carry it. Sets dev_version_code and
+# dev_version_name (release tag + -dev suffix, shown in the settings screen).
+compute_dev_version() {
+    dev_version_code=$(git -C "$root" rev-list --count HEAD)
+    dev_version_name=$(git -C "$root" for-each-ref --sort=-v:refname --format='%(refname:short)' 'refs/tags/*' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^v//')
+    dev_version_name="${dev_version_name:-0.0.0}-dev"
+}
+
 build_apk() {
     echo ">>> Building Android APK"
     set_local_path
-    ./gradlew assembleDebug -q
+    compute_dev_version
+    ./gradlew assembleDebug -q -PversionCode="$dev_version_code" -PversionName="$dev_version_name"
     local repo_build="$root/../build"
     mkdir -p "$repo_build"
     echo ">>> Copying APK to $repo_build/clingsync-debug.apk"
@@ -325,7 +338,8 @@ run_app() {
         fi
     fi
 
-    ./gradlew installDebug -q
+    compute_dev_version
+    ./gradlew installDebug -q -PversionCode="$dev_version_code" -PversionName="$dev_version_name"
 
     if [ "$create_samples" = true ]; then
         echo ">>> Creating sample files"
@@ -345,6 +359,17 @@ test_integration() {
         adb disconnect "$dev" 2>/dev/null || true
     done
     start_emulator_if_needed
+    # adb disconnect cannot detach USB devices, and a connected phone must
+    # never receive test installs, so pin every adb/gradle call (inherited by
+    # the Go driver's gradlew invocation) to the emulator.
+    ANDROID_SERIAL=$(adb devices | awk '/^emulator-/ && /device$/ {print $1; exit}')
+    export ANDROID_SERIAL
+    if [ -z "$ANDROID_SERIAL" ]; then
+        echo "No running emulator found to pin tests to." >&2
+        exit 1
+    fi
+    compute_dev_version
+    export ORG_GRADLE_PROJECT_versionCode="$dev_version_code" ORG_GRADLE_PROJECT_versionName="$dev_version_name"
     cd go
     go test -v -count=1 -run TestAndroidIntegration ./... "$@"
 }
