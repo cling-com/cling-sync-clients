@@ -8,6 +8,10 @@ set -eu
 root=$(cd $(dirname $0) && pwd)
 cd "$root"
 
+# Force the project's Go version for all tools.
+# This fixes golangci-lint picking up the wrong version.
+export GOTOOLCHAIN="go$(awk '/^go /{print $2}' "$root/go/go.mod")"
+
 swiftlint_bin="$root/../tools/swiftlint"
 golangci_lint_bin="$root/../tools/golangci-lint"
 logs_dir="$root/build/logs"

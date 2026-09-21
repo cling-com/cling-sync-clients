@@ -5,6 +5,10 @@ set -eu
 root=$(cd "$(dirname "$0")" && pwd)
 cd "$root"
 
+# Force the project's Go version for all tools.
+# This fixes golangci-lint picking up the wrong version.
+export GOTOOLCHAIN="go$(awk '/^go /{print $2}' "$root/go/go.mod")"
+
 icon_source="$root/../ios/ClingSync/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
 icon_target_1x="$root/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon-512.png"
 icon_target_2x="$root/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
