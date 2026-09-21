@@ -3,7 +3,7 @@ module github.com/flunderpero/cling-sync-clients/browse
 go 1.26.5
 
 require (
-	github.com/cling-com/cling-sync v0.0.5
+	github.com/cling-com/cling-sync v0.0.6
 	golang.org/x/term v0.45.0
 )
 

@@ -176,7 +176,7 @@ func (s *Session) StreamFile(ctx context.Context, w io.Writer, entry *lib.Revisi
 	return s.state.stream(ctx, func(ctx context.Context) error {
 		buf := lib.NewBlockBuf()
 		for _, blockId := range entry.Metadata.BlockIds {
-			data, err := s.view.Repository.ReadBlock(ctx, blockId, buf)
+			data, err := s.view.Repository.ReadBlock(ctx, blockId, buf, lib.ReadBlockOpts{})
 			if err != nil {
 				return fmt.Errorf("failed to read block of %q: %w", entry.Path.String(), err)
 			}

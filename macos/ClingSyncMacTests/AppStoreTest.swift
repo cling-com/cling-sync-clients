@@ -5,7 +5,10 @@ import Testing
 
 // A scriptable WorkspaceGateway that records calls in order and throws queued
 // errors, so store-orchestration logic (passphrase retry, Bug A ordering, the
-// test flow) is testable without the real bridge.
+// test flow) is testable without the real bridge. On the main actor because the
+// store fires gateway calls from concurrent tasks: nonisolated async methods would
+// run on the global executor and race on `calls`, dropping recorded calls.
+@MainActor
 final class FakeWorkspaceGateway: WorkspaceGateway {
     enum Call: Equatable {
         case inspect

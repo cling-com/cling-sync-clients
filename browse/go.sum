@@ -1,5 +1,5 @@
-github.com/cling-com/cling-sync v0.0.5 h1:jNYnXooQBCrD86/IXT9t+DRJWfYN/5BCX4q2un3ZfXo=
-github.com/cling-com/cling-sync v0.0.5/go.mod h1:Jz2uvitqheva/5ywRmRAoFdB6594LqVNYd9HWi8253o=
+github.com/cling-com/cling-sync v0.0.6 h1:/OB8L3HR7HgPn0oqNWCAE6zUaRSv3YVwJMXZJZMOnJg=
+github.com/cling-com/cling-sync v0.0.6/go.mod h1:Jz2uvitqheva/5ywRmRAoFdB6594LqVNYd9HWi8253o=
 golang.org/x/crypto v0.54.0 h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
 golang.org/x/crypto v0.54.0/go.mod h1:KWL8ny2AZdGR2cWmzeHrp2azQPGogOv+HeQaVEXC2dk=
 golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
