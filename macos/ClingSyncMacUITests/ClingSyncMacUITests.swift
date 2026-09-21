@@ -95,6 +95,19 @@ final class ClingSyncMacUITests: XCTestCase {
         waitForMergeToFinish(in: app)
         closeMergeProgressWindow(in: app)
 
+        // --- Workspace 1: browse the repository (smoke test). The status run
+        // above saved the passphrase, so the browse session opens without a
+        // prompt; the driver committed remote.txt to the repository. ---
+        openTrayMenu(app, expecting: "Browse")
+        app.menuItems["workspace.browse.\(config.localDir)"].firstMatch.click()
+        XCTAssertTrue(
+            app.webViews.staticTexts["remote.txt"].firstMatch.waitToAppear(timeout: 30),
+            "browse window did not render the repository content")
+        let browseWindow = app.windows["\(displayName(for: config.localDir)) Browse"].firstMatch
+        XCTAssertTrue(browseWindow.waitToAppear(timeout: 5), "browse window not found")
+        browseWindow.buttons[XCUIIdentifierCloseWindow].firstMatch.click()
+        waitForElementToDisappear(browseWindow)
+
         // --- Workspace 1: register a sync target and run "Sync Repository". ---
         // The target is a second server (S3 backup) whose URL embeds the
         // encrypted credentials, so no prompts appear here.

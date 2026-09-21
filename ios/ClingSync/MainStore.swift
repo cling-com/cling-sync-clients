@@ -105,6 +105,26 @@ final class MainStore: ObservableObject {
             settings.save(configuration)
         case .invalidateRepository(let repositoryID):
             settings.invalidateRepository(repositoryID: repositoryID)
+            SessionPassphrase.clear()
+        case .openBrowse:
+            openBrowse()
+        }
+    }
+
+    // Browse strictly requires an established connection: it opens its own
+    // repository session with the passphrase cached by the last successful
+    // connect and must never prompt. When the background grace close dropped
+    // the repository, fall back to the normal reconnect flow instead.
+    private func openBrowse() {
+        Task {
+            let configuration = state.configuration
+            let open = await repository.isAlreadyOpen(hostURL: configuration.hostURL).open
+            if open, SessionPassphrase.get(repositoryID: configuration.repositoryID) != nil {
+                dispatch(.browseOpened)
+            } else {
+                noteRepositoryClosed()
+                connect(promptIfNeeded: true)
+            }
         }
     }
 
@@ -250,6 +270,9 @@ final class MainStore: ObservableObject {
         pendingShare?.store.noteRepositoryClosed()
         testConnectionTask?.cancel()
         try? Bridge.closeRepository()
+        // Browse sessions hold their own open repositories.
+        try? Bridge.browseCloseAll()
+        SessionPassphrase.clear()
         if reopen {
             reopenOnForeground = true
         }
@@ -273,6 +296,7 @@ final class MainStore: ObservableObject {
         s3Controller.cancel()
         state.isConnecting = false
         state.isConnected = false
+        state.showBrowse = false
     }
 
     private func beginCloseBackgroundTask() {

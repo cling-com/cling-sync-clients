@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The embedded WebViews load this page as a string, so the CSP must travel
+     inside the document; the HTTP header only covers cmd/cling-browse. -->
+<meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'">
+<title>{{.Title}}</title>
+<style>{{.CSS}}</style>
+</head>
+<body>
+<main>
+<h1>{{.Title}}</h1>
+{{template "dir" .Root}}
+</main>
+<script>{{.JS}}</script>
+</body>
+</html>

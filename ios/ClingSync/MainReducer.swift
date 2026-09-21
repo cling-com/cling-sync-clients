@@ -97,6 +97,20 @@ enum MainReducer {
             next.showSettings = true
             return .only(next)
 
+        case .browseClicked:
+            guard state.isConnected else { return .only(state) }
+            return Reduction(state: state, effects: [.openBrowse])
+
+        case .browseOpened:
+            var next = state
+            next.showBrowse = true
+            return .only(next)
+
+        case .browseDismissed:
+            var next = state
+            next.showBrowse = false
+            return .only(next)
+
         case .settingsDismissed:
             var next = state
             next.showSettings = false

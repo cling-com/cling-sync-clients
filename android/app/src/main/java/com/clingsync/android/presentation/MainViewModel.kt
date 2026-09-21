@@ -19,6 +19,7 @@ import com.clingsync.android.RecentTargets
 import com.clingsync.android.RepositoryUriStore
 import com.clingsync.android.S3CredentialsResult
 import com.clingsync.android.SHA256Cache
+import com.clingsync.android.SessionPassphrase
 import com.clingsync.android.SettingsManager
 import com.clingsync.android.ShareTargetOptions
 import com.clingsync.android.UploadWorker
@@ -157,9 +158,11 @@ class MainViewModel(
                 connectJob?.cancel()
                 passphraseStore.delete(effect.repositoryId)
                 repositoryUriStore.clear(effect.repositoryId)
+                SessionPassphrase.clear()
             }
             Effect.LoadFiles -> loadFiles()
             Effect.Connect -> connect()
+            Effect.OpenBrowse -> openBrowse()
             Effect.OpenStorageSettings -> emit(ViewAction.OpenStorageSettings)
             Effect.FinishShare -> emit(ViewAction.Finish)
         }
@@ -228,6 +231,22 @@ class MainViewModel(
         }
     }
 
+    // Browse strictly requires an established connection: it opens its own
+    // repository session with the passphrase cached by the last successful
+    // connect and must never prompt. When the grace close dropped the
+    // repository, fall back to the app's normal reconnect flow instead.
+    private fun openBrowse() {
+        viewModelScope.launch {
+            val s = _state.value
+            if (gateway.isAlreadyOpen(s.settings) && SessionPassphrase.get(s.settings.repositoryID()) != null) {
+                dispatch(MainEvent.BrowseOpened)
+            } else {
+                dispatch(MainEvent.RepositoryClosed)
+                connect()
+            }
+        }
+    }
+
     private fun requiredPermissions(): Array<String> =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
@@ -262,6 +281,7 @@ class MainViewModel(
                     // A connect cancelled by a repository switch must not record a
                     // connection for the repository the bridge no longer targets.
                     ensureActive()
+                    SessionPassphrase.set(_state.value.settings.repositoryID(), passphrase)
                     dispatch(MainEvent.ConnectSucceeded)
                     if (saveToKeychain) {
                         emit(ViewAction.SavePassphrase(passphrase, _state.value.settings.repositoryID()))

@@ -6,7 +6,8 @@ struct ConnectDeclined: Error {}
 // The shared repository-open pipeline used by both the main screen and the share
 // screen: open the repository (a no-op when already open), prompting for the
 // passphrase and S3 credentials through the given controllers, and persisting the
-// passphrase per its storage mode. The passphrase never leaves this flow.
+// passphrase per its storage mode. Beyond the keychain, the passphrase only
+// leaves this flow into SessionPassphrase, for as long as the repository is open.
 struct RepositoryConnector {
     let repository: RepositoryGateway
     let settings: SettingsGateway
@@ -36,6 +37,7 @@ struct RepositoryConnector {
             hostURL: configuration.hostURL,
             passphrase: access.passphrase,
             askS3: { try await s3Controller.prompt(hostURL: configuration.hostURL) })
+        SessionPassphrase.set(repositoryID: configuration.repositoryID, passphrase: access.passphrase)
         if access.mode.savesInKeychain {
             try PassphraseStore.shared.save(
                 passphrase: access.passphrase, for: configuration.repositoryID, mode: access.mode)

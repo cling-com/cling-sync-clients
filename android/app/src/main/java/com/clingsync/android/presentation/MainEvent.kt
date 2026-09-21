@@ -68,6 +68,13 @@ sealed interface MainEvent {
 
     data object SettingsDismissed : MainEvent
 
+    // --- Browse ---
+    data object BrowseClicked : MainEvent
+
+    data object BrowseOpened : MainEvent
+
+    data object BrowseDismissed : MainEvent
+
     data class SettingsSaved(val settings: AppSettings) : MainEvent
 
     data class SettingsTestConnection(val settings: AppSettings) : MainEvent

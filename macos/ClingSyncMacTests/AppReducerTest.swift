@@ -448,3 +448,27 @@ struct AppReducerLaunchTests {
         #expect(reduction.state.preferencesOpen)
     }
 }
+
+struct AppReducerBrowseTests {
+    @Test func browseClickedOpensAndFocusesWindow() {
+        let workspace = makeWorkspace()
+        let reduction = AppReducer.reduce(stateWith([workspace]), .browseClicked(id: workspace.id))
+        #expect(reduction.state.openBrowseWindows.contains(workspace.id))
+        #expect(reduction.effects == [.focusBrowseWindow(id: workspace.id)])
+    }
+
+    @Test func browseClickedForUnknownWorkspaceIsIgnored() {
+        let reduction = AppReducer.reduce(stateWith([makeWorkspace()]), .browseClicked(id: UUID()))
+        #expect(reduction.state.openBrowseWindows.isEmpty)
+        #expect(reduction.effects.isEmpty)
+    }
+
+    @Test func browseWindowClosedRemovesWindow() {
+        let workspace = makeWorkspace()
+        var state = stateWith([workspace])
+        state.openBrowseWindows = [workspace.id]
+        let reduction = AppReducer.reduce(state, .browseWindowClosed(id: workspace.id))
+        #expect(reduction.state.openBrowseWindows.isEmpty)
+        #expect(reduction.effects.isEmpty)
+    }
+}

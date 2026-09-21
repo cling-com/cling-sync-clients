@@ -168,6 +168,66 @@ class Bridge {
         }
     }
 
+    // MARK: - Browse
+
+    static func browseOpen(
+        repositoryUri: String, passphrase: String, pathPrefix: String, tmpDir: String
+    ) throws(BridgeError) -> Int {
+        let result = try executeBrowse(
+            command: "open",
+            params: [
+                "repositoryUri": repositoryUri, "passphrase": passphrase,
+                "pathPrefix": pathPrefix, "tmpDir": tmpDir,
+            ])
+        guard let handle = result["handle"] as? Int else {
+            throw BridgeError(message: "Missing handle in response")
+        }
+        return handle
+    }
+
+    static func browseCall(handle: Int, target: String) throws(BridgeError) -> String {
+        let result = try executeBrowse(command: "call", params: ["handle": handle, "target": target])
+        guard let body = result["body"] as? String else {
+            throw BridgeError(message: "Missing body in response")
+        }
+        return body
+    }
+
+    static func browseDownload(handle: Int, path: String, destPath: String) throws(BridgeError) {
+        _ = try executeBrowse(command: "download", params: ["handle": handle, "path": path, "destPath": destPath])
+    }
+
+    static func browseClose(handle: Int) throws(BridgeError) {
+        _ = try executeBrowse(command: "close", params: ["handle": handle])
+    }
+
+    static func browseCloseAll() throws(BridgeError) {
+        _ = try executeBrowse(command: "closeAll", params: [:])
+    }
+
+    // Browse sessions open their own repository and synchronize in Go, so these
+    // calls do not take executeLock: a browse page load never queues behind a
+    // running upload and vice versa.
+    private static func executeBrowse(command: String, params: [String: Any]) throws(BridgeError) -> [String: Any] {
+        guard let paramsData = try? JSONSerialization.data(withJSONObject: params),
+            let paramsString = String(data: paramsData, encoding: .utf8)
+        else {
+            throw BridgeError(message: "Failed to serialize parameters")
+        }
+        let commandCString = strdup(command)
+        let paramsCString = strdup(paramsString)
+        defer {
+            free(commandCString)
+            free(paramsCString)
+        }
+        guard let resultCString = GoBrowse(commandCString, paramsCString) else {
+            throw BridgeError(message: "Bridge returned nil")
+        }
+        let resultString = String(cString: resultCString)
+        free(resultCString)
+        return try parseResult(resultString)
+    }
+
     // The bridge keeps one global open repository, so concurrent calls (e.g. the
     // share screen scanning while the main screen uploads) must be serialized.
     private static let executeLock = NSLock()
@@ -196,7 +256,10 @@ class Bridge {
             resultString = String(cString: resultCString)
             free(resultCString)
         }
+        return try parseResult(resultString)
+    }
 
+    private static func parseResult(_ resultString: String) throws(BridgeError) -> [String: Any] {
         guard let resultData = resultString.data(using: String.Encoding.utf8),
             let result = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
         else {

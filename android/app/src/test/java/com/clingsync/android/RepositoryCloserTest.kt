@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
@@ -21,6 +22,7 @@ class RepositoryCloserTest {
     private val lifecycle = mock<Lifecycle>()
     private val owner = mock<LifecycleOwner>()
     private val bridge = mock<IGoBridge>()
+    private var browseCloses = 0
 
     init {
         whenever(owner.lifecycle).thenReturn(lifecycle)
@@ -39,21 +41,25 @@ class RepositoryCloserTest {
     fun closesAfterTheGracePeriod() =
         runTest {
             val workManager = workManagerWith(MutableStateFlow(emptyList()))
-            val closer = RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000) { bridge }
+            val closer =
+                RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000, closeBrowseSessions = { browseCloses++ }) { bridge }
             closer.onStop(owner)
             advanceTimeBy(29_999)
             runCurrent()
             verify(bridge, never()).closeRepository()
+            assertEquals(0, browseCloses)
             advanceTimeBy(2)
             runCurrent()
             verify(bridge).closeRepository()
+            assertEquals(1, browseCloses)
         }
 
     @Test
     fun returningWithinTheGracePeriodCancelsTheClose() =
         runTest {
             val workManager = workManagerWith(MutableStateFlow(emptyList()))
-            val closer = RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000) { bridge }
+            val closer =
+                RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000, closeBrowseSessions = { browseCloses++ }) { bridge }
             closer.onStop(owner)
             advanceTimeBy(10_000)
             closer.onStart(owner)
@@ -66,7 +72,13 @@ class RepositoryCloserTest {
     fun waitsForARunningUploadThenCloses() =
         runTest {
             val infos = MutableStateFlow(listOf(workInfo(WorkInfo.State.RUNNING)))
-            val closer = RepositoryCloser(workManagerWith(infos), backgroundScope, graceMillis = 30_000) { bridge }
+            val closer =
+                RepositoryCloser(
+                    workManagerWith(infos),
+                    backgroundScope,
+                    graceMillis = 30_000,
+                    closeBrowseSessions = { browseCloses++ },
+                ) { bridge }
             closer.onStop(owner)
             advanceTimeBy(60_000)
             runCurrent()
@@ -80,7 +92,13 @@ class RepositoryCloserTest {
     fun returningWhileWaitingForAnUploadCancelsTheClose() =
         runTest {
             val infos = MutableStateFlow(listOf(workInfo(WorkInfo.State.RUNNING)))
-            val closer = RepositoryCloser(workManagerWith(infos), backgroundScope, graceMillis = 30_000) { bridge }
+            val closer =
+                RepositoryCloser(
+                    workManagerWith(infos),
+                    backgroundScope,
+                    graceMillis = 30_000,
+                    closeBrowseSessions = { browseCloses++ },
+                ) { bridge }
             closer.onStop(owner)
             advanceTimeBy(60_000)
             closer.onStart(owner)
@@ -93,7 +111,8 @@ class RepositoryCloserTest {
     fun skipsTheCloseWhenTheAppIsAlreadyForegroundAgain() =
         runTest {
             val workManager = workManagerWith(MutableStateFlow(emptyList()))
-            val closer = RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000) { bridge }
+            val closer =
+                RepositoryCloser(workManager, backgroundScope, graceMillis = 30_000, closeBrowseSessions = { browseCloses++ }) { bridge }
             closer.onStop(owner)
             whenever(lifecycle.currentState).thenReturn(Lifecycle.State.STARTED)
             advanceTimeBy(60_000)

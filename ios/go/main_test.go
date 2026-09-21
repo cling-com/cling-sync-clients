@@ -15,6 +15,7 @@ import (
 
 	clingsynchttp "github.com/cling-com/cling-sync/http"
 	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 var td = lib.TestData{} //nolint:gochecknoglobals
@@ -47,6 +48,18 @@ func newUITestRepo(t *testing.T) *uiTestRepo {
 	go server.Serve(ln)                  //nolint:errcheck
 	t.Cleanup(func() { _ = server.Close() })
 	return &uiTestRepo{repo: repo, url: "s3+http://" + ln.Addr().String()}
+}
+
+// seedBrowseRepo commits one file under the default UI-test path prefix so
+// the browse smoke test has content to render.
+func seedBrowseRepo(t *testing.T, r *uiTestRepo) {
+	t.Helper()
+	assert := lib.NewAssert(t)
+	wstd := workspace.WorkspaceTestData{}
+	ws := wstd.NewTestWorkspace(t, r.repo.Repository)
+	ws.Write("uitest/browse-hello.txt", "hello browse")
+	_, err := workspace.Merge(t.Context(), ws.Workspace, r.repo.Repository, wstd.MergeOptions())
+	assert.NoError(err)
 }
 
 // faultRepo serves a repository over an S3 server that can inject write failures
@@ -137,6 +150,8 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	switchTarget := newUITestRepo(t)
 	multi := newUITestRepo(t)
 	share := newUITestRepo(t)
+	browse := newUITestRepo(t)
+	seedBrowseRepo(t, browse)
 	abort := newFaultRepo(t)
 	failure := newFaultRepo(t)
 	assert.Equal("testpassphrase", main.repo.Passphrase)
@@ -151,6 +166,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	)
 	assert.NoError(err)
 
+	browseHead := browse.repo.Head()
 	mainHead := main.repo.Head()
 	multiHead := multi.repo.Head()
 	shareHead := share.repo.Head()
@@ -162,6 +178,7 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 		"TEST_SWITCH_URL=" + switchTarget.url,
 		"TEST_MULTI_URL=" + multi.url,
 		"TEST_SHARE_URL=" + share.url,
+		"TEST_BROWSE_URL=" + browse.url,
 		"TEST_ABORT_URL=" + abort.url,
 		"TEST_ABORT_CONTROL_URL=" + abort.controlURL,
 		"TEST_FAILURE_URL=" + failure.url,
@@ -181,6 +198,8 @@ func TestIOSIntegration(t *testing.T) { //nolint:paralleltest
 	assert.NoError(err, string(output))
 
 	t.Log("Verifying results")
+	// Browsing is read-only, so its repository must be exactly as seeded.
+	assert.Equal(browseHead, browse.repo.Head())
 	verifyHappyPath(t, main, mainHead)
 	verifyShareUpload(t, share, shareHead)
 

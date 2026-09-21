@@ -194,6 +194,60 @@ struct AppStoreTests {
         #expect(fake.storedPasswords().isEmpty)
     }
 
+    @Test func browsePassphraseStoredOnlyAfterSuccessfulOpen() async throws {
+        let fake = FakeWorkspaceGateway()
+        let prompter = ScriptedPrompter()
+        prompter.passphraseResults = [PassphrasePromptResult(passphrase: "secret", rememberInKeychain: true)]
+        let store = makeStore(gateway: fake, prompter: prompter)
+        let config = WorkspaceConfig(hostURL: "s3+https://h", localDirectory: "/p", author: "me")
+        load(store, config)
+
+        var openedWith: [String] = []
+        let handle = try await store.openBrowseSession(id: config.id) { passphrase in
+            openedWith.append(passphrase)
+            #expect(fake.storedPasswords().isEmpty)
+            return 7
+        }
+
+        #expect(handle == 7)
+        #expect(openedWith == ["secret"])
+        #expect(fake.storedPasswords() == ["secret"])
+    }
+
+    @Test func browsePassphraseNotStoredWhenOpenFails() async {
+        let fake = FakeWorkspaceGateway()
+        let prompter = ScriptedPrompter()
+        prompter.passphraseResults = [PassphrasePromptResult(passphrase: "wrong", rememberInKeychain: true)]
+        let store = makeStore(gateway: fake, prompter: prompter)
+        let config = WorkspaceConfig(hostURL: "s3+https://h", localDirectory: "/p", author: "me")
+        load(store, config)
+
+        await #expect(throws: BridgeError.self) {
+            try await store.openBrowseSession(id: config.id) { _ in
+                throw BridgeError(message: "wrong passphrase", code: nil)
+            }
+        }
+        #expect(fake.storedPasswords().isEmpty)
+    }
+
+    @Test func cancellingBrowsePassphrasePromptOpensNothing() async throws {
+        let fake = FakeWorkspaceGateway()
+        let prompter = ScriptedPrompter()  // no canned passphrase -> prompt returns nil (cancelled)
+        let store = makeStore(gateway: fake, prompter: prompter)
+        let config = WorkspaceConfig(hostURL: "s3+https://h", localDirectory: "/p", author: "me")
+        load(store, config)
+
+        var opened = false
+        let handle = try await store.openBrowseSession(id: config.id) { _ in
+            opened = true
+            return 7
+        }
+
+        #expect(handle == nil)
+        #expect(!opened)
+        #expect(prompter.passphraseRequestCount == 1)
+    }
+
     @Test func startSuccessPollsThroughToCompletion() async {
         let fake = FakeWorkspaceGateway()
         fake.pollQueue = [

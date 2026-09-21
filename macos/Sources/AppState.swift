@@ -24,9 +24,10 @@ struct AppState: Equatable {
     var lastResultMessage = ""
     var errorMessage = ""
 
-    // The projection's desired-open set (drives WindowCoordinator) + whether the
-    // preferences window is open.
+    // The projection's desired-open sets (drive WindowCoordinator): progress
+    // windows, browse windows (by workspace id), and the preferences window.
     var openWindows: Set<WindowKey> = []
+    var openBrowseWindows: Set<UUID> = []
     var preferencesOpen = false
 
     // MARK: - Lookup

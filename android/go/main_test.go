@@ -13,6 +13,7 @@ import (
 
 	clingsynchttp "github.com/cling-com/cling-sync/http"
 	"github.com/cling-com/cling-sync/lib"
+	"github.com/cling-com/cling-sync/workspace"
 )
 
 var td = lib.TestData{} //nolint:gochecknoglobals
@@ -104,6 +105,18 @@ func startServer(t *testing.T, port int, fault *faultControl) *testServer {
 	return &testServer{repo: repo, url: "s3+http://10.0.2.2:" + strconv.Itoa(port)}
 }
 
+// seedBrowseRepo commits one file under the browse test's destination path so
+// the browse smoke test has content to render.
+func seedBrowseRepo(t *testing.T, server *testServer) {
+	t.Helper()
+	assert := lib.NewAssert(t)
+	wstd := workspace.WorkspaceTestData{}
+	ws := wstd.NewTestWorkspace(t, server.repo.Repository)
+	ws.Write("browse/hello-browse.txt", "hello browse")
+	_, err := workspace.Merge(t.Context(), ws.Workspace, server.repo.Repository, wstd.MergeOptions())
+	assert.NoError(err)
+}
+
 func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	assert := lib.NewAssert(t)
 
@@ -116,6 +129,9 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 	reattach := startServer(t, 9127, &faultControl{})
 	mediaSub := startServer(t, 9128, nil)
 	docsSub := startServer(t, 9129, nil)
+	browse := startServer(t, 9130, nil)
+	seedBrowseRepo(t, browse)
+	browseHead := browse.repo.Head()
 
 	headA := repoA.repo.Head()
 	headB := repoB.repo.Head()
@@ -189,10 +205,14 @@ func TestAndroidIntegration(t *testing.T) { //nolint:paralleltest
 		arg("switchDestination", "/switched/"),
 		arg("mediaSubUrl", mediaSub.url),
 		arg("docsSubUrl", docsSub.url),
+		arg("browseUrl", browse.url),
 	)
 	cmd.Dir = ".."
 	output, err := cmd.CombinedOutput()
 	assert.NoError(err, string(output))
+
+	// Browsing is read-only, so its repository must be exactly as seeded.
+	assert.Equal(browseHead, browse.repo.Head(), "Browse repo must stay untouched")
 
 	t.Log("Verifying repository A (happy path + select-all + search)")
 	newHeadA := repoA.repo.Head()

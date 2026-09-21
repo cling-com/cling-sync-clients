@@ -35,6 +35,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -83,6 +84,7 @@ import com.clingsync.android.presentation.MainViewModel
 import com.clingsync.android.presentation.Overlay
 import com.clingsync.android.presentation.ShareOutcome
 import com.clingsync.android.presentation.ViewAction
+import com.clingsync.android.ui.BrowseScreen
 import com.clingsync.android.ui.ScrollAwareTopBar
 import com.clingsync.android.ui.formatFileSize
 import com.clingsync.android.ui.theme.ClingSyncTheme
@@ -181,14 +183,22 @@ fun MainRoot(
 
     LaunchedEffect(Unit) { viewModel.onStart() }
 
-    MainScreen(
-        state = state,
-        onEvent = viewModel::dispatch,
-        onBrowseDirectory = { onResult ->
-            directoryPickerCallback = onResult
-            directoryPickerLauncher.launch(null)
-        },
-    )
+    if (state.showBrowse) {
+        BrowseScreen(
+            settings = state.settings,
+            passphrase = SessionPassphrase.get(state.settings.repositoryID()),
+            onClose = { viewModel.dispatch(MainEvent.BrowseDismissed) },
+        )
+    } else {
+        MainScreen(
+            state = state,
+            onEvent = viewModel::dispatch,
+            onBrowseDirectory = { onResult ->
+                directoryPickerCallback = onResult
+                directoryPickerLauncher.launch(null)
+            },
+        )
+    }
 }
 
 @Composable
@@ -351,6 +361,12 @@ private fun AppTopBar(
                         }
                         IconButton(onClick = { onEvent(MainEvent.RefreshClicked) }, enabled = !disabled) {
                             Icon(Icons.Default.Refresh, "Refresh", Modifier.size(24.dp), iconTint)
+                        }
+                        IconButton(
+                            onClick = { onEvent(MainEvent.BrowseClicked) },
+                            enabled = !disabled && state.isConnected,
+                        ) {
+                            Icon(Icons.Default.Language, "Browse", Modifier.size(24.dp), iconTint)
                         }
                         IconButton(onClick = { onEvent(MainEvent.SettingsClicked) }, enabled = !disabled) {
                             Icon(Icons.Default.SettingsIcon, "Settings", Modifier.size(24.dp), iconTint)

@@ -6,6 +6,7 @@ import SwiftUI
 protocol WindowFronting: AnyObject {
     func focusPreferences()
     func focusProgressWindow(id: UUID, kind: OperationKind)
+    func focusBrowseWindow(id: UUID)
 }
 
 // Projects AppState.openWindows + .preferencesOpen onto real NSWindows: opens the
@@ -16,6 +17,11 @@ protocol WindowFronting: AnyObject {
 final class WindowCoordinator: NSObject, NSWindowDelegate, WindowFronting {
     private unowned let store: AppStore
     private var progressWindows: [WindowKey: NSWindow] = [:]
+    private var browseWindows: [UUID: NSWindow] = [:]
+    // Owned here, not by SwiftUI: an NSWindow close never runs
+    // dismantleNSView, so the coordinator must shut the browse session down
+    // itself or the Go session leaks.
+    private var browseControllers: [UUID: BrowseController] = [:]
     private var preferencesWindow: NSWindow?
 
     init(store: AppStore) {
@@ -36,6 +42,22 @@ final class WindowCoordinator: NSObject, NSWindowDelegate, WindowFronting {
         for (key, window) in progressWindows {
             if let workspace = state.workspace(key.workspaceID) {
                 window.title = "\(workspace.config.displayName) \(key.kind.windowTitleSuffix)"
+            }
+        }
+
+        for id in state.openBrowseWindows where browseWindows[id] == nil {
+            openBrowseWindow(id)
+        }
+        for (id, window) in browseWindows where !state.openBrowseWindows.contains(id) {
+            browseWindows[id] = nil
+            browseControllers[id]?.shutdown()
+            browseControllers[id] = nil
+            window.delegate = nil
+            window.close()
+        }
+        for (id, window) in browseWindows {
+            if let workspace = state.workspace(id) {
+                window.title = "\(workspace.config.displayName) Browse"
             }
         }
 
@@ -65,6 +87,26 @@ final class WindowCoordinator: NSObject, NSWindowDelegate, WindowFronting {
         window.makeKeyAndOrderFront(nil)
     }
 
+    private func openBrowseWindow(_ id: UUID) {
+        guard let workspace = store.state.workspace(id) else { return }
+        let controller = BrowseController(localPath: workspace.localPath) { [unowned store] open in
+            try await store.openBrowseSession(id: id, open: open)
+        }
+        browseControllers[id] = controller
+        let view = BrowseView(controller: controller)
+        let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+        window.title = "\(workspace.config.displayName) Browse"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 900, height: 600))
+        window.minSize = NSSize(width: 480, height: 320)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        browseWindows[id] = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     private func openPreferences() {
         let window = NSWindow(contentViewController: NSHostingController(rootView: PreferencesView(store: store)))
         window.title = "Cling Sync Settings"
@@ -86,6 +128,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate, WindowFronting {
         bringToFront(progressWindows[WindowKey(workspaceID: id, kind: kind)])
     }
 
+    func focusBrowseWindow(id: UUID) {
+        bringToFront(browseWindows[id])
+    }
+
     // No-op when the window isn't open yet; render() opens (and fronts) it instead.
     private func bringToFront(_ window: NSWindow?) {
         guard let window else { return }
@@ -103,6 +149,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate, WindowFronting {
         if let key = progressWindows.first(where: { $0.value === window })?.key {
             progressWindows[key] = nil
             store.dispatch(.progressWindowClosed(id: key.workspaceID, kind: key.kind))
+            return
+        }
+        if let id = browseWindows.first(where: { $0.value === window })?.key {
+            browseWindows[id] = nil
+            browseControllers[id]?.shutdown()
+            browseControllers[id] = nil
+            store.dispatch(.browseWindowClosed(id: id))
         }
     }
 }

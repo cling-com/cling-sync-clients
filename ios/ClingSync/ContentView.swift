@@ -75,10 +75,25 @@ struct ContentView: View {
                         SelectAllButton(store: store)
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            store.dispatch(.browseClicked)
+                        } label: {
+                            Image(systemName: "globe")
+                        }
+                        .disabled(!store.state.isConnected)
+                        .accessibilityLabel("Browse")
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Settings") { store.dispatch(.settingsClicked) }
                             .disabled(store.state.isBusy)
                     }
                 }
+        }
+        // Deliberately NOT chained with the share cover on the outer Group: a
+        // second fullScreenCover on the same view never presents, it must
+        // live on its own node.
+        .fullScreenCover(isPresented: showBrowse) {
+            BrowseScreen(configuration: store.state.configuration, onClose: { store.dispatch(.browseDismissed) })
         }
     }
 
@@ -86,6 +101,12 @@ struct ContentView: View {
         Binding(
             get: { store.state.showSettings },
             set: { store.dispatch($0 ? .settingsClicked : .settingsDismissed) })
+    }
+
+    private var showBrowse: Binding<Bool> {
+        Binding(
+            get: { store.state.showBrowse },
+            set: { store.dispatch($0 ? .browseClicked : .browseDismissed) })
     }
 
     private var showOverlay: Binding<Bool> {

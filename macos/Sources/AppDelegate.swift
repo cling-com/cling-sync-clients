@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onStart()
     }
 
+    // Browse sessions own decrypted temp files that only a close removes.
+    func applicationWillTerminate(_ notification: Notification) {
+        try? Bridge.browseCloseAll()
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let idleImage = trayIconImage()

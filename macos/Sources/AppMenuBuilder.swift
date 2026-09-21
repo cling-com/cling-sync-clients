@@ -85,6 +85,13 @@ enum AppMenuBuilder {
         openItem.representedObject = workspace.id.uuidString
         openItem.identifier = NSUserInterfaceItemIdentifier("workspace.open-folder.\(workspace.localPath)")
         menu.addItem(openItem)
+
+        let browseItem = NSMenuItem(
+            title: "Browse", action: #selector(MenuActions.browse(_:)), keyEquivalent: "")
+        browseItem.target = actions
+        browseItem.representedObject = workspace.id.uuidString
+        browseItem.identifier = NSUserInterfaceItemIdentifier("workspace.browse.\(workspace.localPath)")
+        menu.addItem(browseItem)
     }
 
     private static func actionItem(
@@ -138,6 +145,11 @@ final class MenuActions: NSObject {
     @objc func openFolder(_ sender: NSMenuItem) {
         guard let id = workspaceID(sender) else { return }
         store.dispatch(.openLocalFolderClicked(id: id))
+    }
+
+    @objc func browse(_ sender: NSMenuItem) {
+        guard let id = workspaceID(sender) else { return }
+        store.dispatch(.browseClicked(id: id))
     }
 
     @objc func openPreferences() {

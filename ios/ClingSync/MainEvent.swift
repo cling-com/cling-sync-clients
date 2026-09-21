@@ -35,6 +35,11 @@ enum MainEvent {
     case settingsDismissed
     case settingsSaved(RepositoryConfiguration)
 
+    // --- Browse ---
+    case browseClicked
+    case browseOpened
+    case browseDismissed
+
     // --- Connection (dispatched as the gateway flow progresses) ---
     case connectClicked
     case connectStarted

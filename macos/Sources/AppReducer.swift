@@ -84,6 +84,7 @@ enum AppReducer {
             effects.append(.clearWorkspacePassphrase(uri: removed.config.bridgeRepositoryURI))
             effects.append(.deactivateDirectoryAccess(path: removed.localPath))
             state.openWindows = state.openWindows.filter { $0.workspaceID != id }
+            state.openBrowseWindows.remove(id)
             state.workspaces.remove(at: index)
             effects.append(.persistMergeTracking)
             if state.autoMergeBackoffActive != wasBackoffActive { effects.append(.rescheduleAutoMerge) }
@@ -213,6 +214,14 @@ enum AppReducer {
             guard state.workspace(id) != nil else { break }
             state.openWindows.insert(WindowKey(workspaceID: id, kind: kind))
             effects.append(.focusProgressWindow(id: id, kind: kind))
+
+        case .browseClicked(let id):
+            guard state.workspace(id) != nil else { break }
+            state.openBrowseWindows.insert(id)
+            effects.append(.focusBrowseWindow(id: id))
+
+        case .browseWindowClosed(let id):
+            state.openBrowseWindows.remove(id)
 
         case .progressWindowClosed(let id, let kind):
             state.openWindows.remove(WindowKey(workspaceID: id, kind: kind))

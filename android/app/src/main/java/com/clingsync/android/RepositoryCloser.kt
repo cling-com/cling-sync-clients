@@ -25,6 +25,8 @@ class RepositoryCloser(
     private val workManager: () -> WorkManager,
     private val scope: CoroutineScope,
     private val graceMillis: Long = GRACE_MILLIS,
+    // Browse sessions hold their own open repositories.
+    private val closeBrowseSessions: () -> Unit = { GoBrowse.closeAll() },
     private val bridge: () -> IGoBridge = { GoBridgeProvider.getInstance() },
 ) : DefaultLifecycleObserver {
     private var closeJob: Job? = null
@@ -42,6 +44,8 @@ class RepositoryCloser(
                 // user returns: never drop the repository under a foreground app.
                 if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
                 bridge().closeRepository()
+                closeBrowseSessions()
+                SessionPassphrase.clear()
             }
     }
 

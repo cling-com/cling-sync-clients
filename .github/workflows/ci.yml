@@ -28,6 +28,8 @@ jobs:
         run: ./build.sh build
       - name: Lint
         run: ./build.sh lint
+      - name: Test (browse)
+        run: ./build.sh browse test
       # The runner is self-hosted, so anything a test step leaves running stays on
       # the machine: a booted simulator keeps its whole runtime resident, and a UI
       # test killed by its timeout leaves the app it drove behind. Either one costs

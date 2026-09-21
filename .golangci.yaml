@@ -79,5 +79,9 @@ linters:
     wrapcheck:
       extra-ignore-sigs:
         - .WrapErrorf
+      # Errors from the browse module's own internal packages are not foreign
+      # and do not need another wrapping layer.
+      ignore-package-globs:
+        - github.com/flunderpero/cling-sync-clients/browse/*
     exhaustruct:
       allow-empty: true

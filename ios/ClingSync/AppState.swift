@@ -35,6 +35,7 @@ struct AppState: Equatable {
     var uploadInfo: UploadInfo?
     var uploadedBytes: Int64 = 0
     var showSettings: Bool = false
+    var showBrowse: Bool = false
     var overlay: Overlay = .none
 
     // True while an upload is initiated or running; the toolbar and the

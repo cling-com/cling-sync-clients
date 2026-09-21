@@ -195,4 +195,22 @@ struct MainReducerTest {
         #expect(!next.isScanning)
         #expect(next.overlay == .error(title: "File Scanning Error", message: "Some files could not be scanned: io"))
     }
+
+    @Test func browseClickedVerifiesTheConnectionInsteadOfShowingDirectly() {
+        let disconnected = AppState(configuration: config())
+        let ignored = MainReducer.reduce(disconnected, .browseClicked)
+        #expect(!ignored.state.showBrowse)
+        #expect(ignored.effects.isEmpty)
+
+        var connected = disconnected
+        connected.isConnected = true
+        let verifying = MainReducer.reduce(connected, .browseClicked)
+        #expect(!verifying.state.showBrowse)
+        #expect(verifying.effects == [.openBrowse])
+
+        let shown = MainReducer.reduce(connected, .browseOpened).state
+        #expect(shown.showBrowse)
+        let hidden = MainReducer.reduce(shown, .browseDismissed).state
+        #expect(!hidden.showBrowse)
+    }
 }

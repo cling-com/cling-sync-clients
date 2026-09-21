@@ -56,6 +56,7 @@ data class MainUiState(
     val uploadInfo: UploadInfo? = null,
     val uploadedBytes: Long = 0L,
     val showSettings: Boolean = false,
+    val showBrowse: Boolean = false,
     val overlay: Overlay = Overlay.None,
     // Set when the screen is hosting a share: it shows the target-directory picker
     // and a Cancel-only top bar instead of search/refresh/settings.

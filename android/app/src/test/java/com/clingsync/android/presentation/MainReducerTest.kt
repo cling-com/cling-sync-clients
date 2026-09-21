@@ -248,4 +248,24 @@ class MainReducerTest {
         assertNull(reduction.state.shareOutcome)
         assertEquals(listOf(Effect.FinishShare), reduction.effects)
     }
+
+    @Test
+    fun `browse clicked verifies the connection instead of showing directly`() {
+        val disconnected = MainUiState.initial(settings())
+        val ignored = MainReducer.reduce(disconnected, MainEvent.BrowseClicked)
+        assertFalse(ignored.state.showBrowse)
+        assertTrue(ignored.effects.isEmpty())
+
+        val connected = disconnected.copy(isConnected = true)
+        val verifying = MainReducer.reduce(connected, MainEvent.BrowseClicked)
+        assertFalse(verifying.state.showBrowse)
+        assertEquals(listOf<Effect>(Effect.OpenBrowse), verifying.effects)
+
+        val shown = MainReducer.reduce(connected, MainEvent.BrowseOpened).state
+        assertTrue(shown.showBrowse)
+        val hidden = MainReducer.reduce(shown, MainEvent.BrowseDismissed).state
+        assertFalse(hidden.showBrowse)
+        val closed = MainReducer.reduce(shown, MainEvent.RepositoryClosed).state
+        assertFalse(closed.showBrowse)
+    }
 }

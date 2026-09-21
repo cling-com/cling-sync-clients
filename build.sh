@@ -10,11 +10,14 @@ cd "$root"
 export GOTOOLCHAIN="go$(awk '/^go /{print $2}' "$root/bridge/go.mod")"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 bridge|ios|android|macos|tools|use-dev-cling-sync|build|fmt|lint|test|precommit [options]"
+    echo "Usage: $0 bridge|browse|ios|android|macos|tools|use-dev-cling-sync|build|fmt|lint|test|precommit [options]"
     echo
     echo "Commands:"
     echo "  bridge [options]"
     echo "      Build the shared bridge. Dispatches to bridge/build.sh"
+    echo
+    echo "  browse [options]"
+    echo "      Build the browse web UI and cling-browse server. Dispatches to browse/build.sh"
     echo
     echo "  android [options]"
     echo "      Build the Android app. Dispatches to android/build.sh"
@@ -62,7 +65,7 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-projects="bridge ios android macos"
+projects="bridge browse ios android macos"
 
 # The checkout `use-dev-cling-sync` builds against. macos/build.sh assumes this
 # same location when mirroring it to the runner VM.
@@ -236,7 +239,7 @@ run_use_dev_cling_sync() {
             }
             rm -f go.work go.work.sum
             go work init
-            go work use ./bridge ./ios/go ./android/go ./macos/go "$dev_cling_sync"
+            go work use ./bridge ./browse ./ios/go ./android/go ./macos/go "$dev_cling_sync"
             echo ">>> On. Building against $dev_cling_sync."
             ;;
         off)
@@ -285,6 +288,9 @@ case "$cmd" in
         ;;
     bridge)
         exec ./bridge/build.sh "$@"
+        ;;
+    browse)
+        exec ./browse/build.sh "$@"
         ;;
     ios)
         exec ./ios/build.sh "$@"

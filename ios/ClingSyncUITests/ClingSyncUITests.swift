@@ -21,6 +21,8 @@ final class ClingSyncUITests: XCTestCase {
         ProcessInfo.processInfo.environment["TEST_FAILURE_CONTROL_URL"] ?? ""
     static let shareURL =
         ProcessInfo.processInfo.environment["TEST_SHARE_URL"] ?? ""
+    static let browseURL =
+        ProcessInfo.processInfo.environment["TEST_BROWSE_URL"] ?? ""
     static let s3AccessKeyId =
         ProcessInfo.processInfo.environment["TEST_S3_ACCESS_KEY_ID"] ?? "minioadmin"
     static let s3AccessKey =

@@ -1,0 +1,25 @@
+{{define "dir"}}
+{{if .Entries}}
+<ul class="entries">
+{{range .Entries}}
+<li>
+{{if .IsDir}}
+<details data-path="{{.PathString}}">
+<summary>{{.Name}}</summary>
+<p class="loading">Loading &hellip;</p>
+</details>
+{{else if .IsSymlink}}
+<span class="name">{{.Name}}</span>
+<span class="meta">symlink to {{.SymlinkTarget}}</span>
+{{else}}
+<span class="name">{{.Name}}</span>
+<a href="{{.DownloadHref}}" data-download-path="{{.PathString}}">Download</a>
+<span class="meta">{{.SizeHuman}}, {{.MTimeHuman}}</span>
+{{end}}
+</li>
+{{end}}
+</ul>
+{{else}}
+<p class="empty">Empty directory</p>
+{{end}}
+{{end}}

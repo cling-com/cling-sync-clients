@@ -23,6 +23,8 @@ enum AppEvent: Equatable {
     case openPreferencesClicked
     case closePreferencesClicked
     case openLocalFolderClicked(id: UUID)
+    case browseClicked(id: UUID)
+    case browseWindowClosed(id: UUID)
 
     // Test / save
     case testDraftClicked

@@ -12,6 +12,9 @@ enum Effect: Equatable {
     case loadFiles
     // Open the repository (the store drives the passphrase/S3 prompts + gateway).
     case connect
+    // Verify the repository is really open (the grace close may have dropped
+    // it), then either show the browse screen or fall back to a reconnect.
+    case openBrowse
 }
 
 struct Reduction: Equatable {

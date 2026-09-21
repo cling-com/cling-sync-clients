@@ -76,7 +76,7 @@ class PassphraseStore(private val context: Context) {
         try {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
-            authenticateAndRun(activity, cipher, key, "Save passphrase securely") {
+            authenticateAndRun(activity, cipher, key, "Save passphrase securely", onAuthError = { onDone() }) {
                 val encryptCipher = it ?: cipher
                 val ciphertext = encryptCipher.doFinal(passphrase.toByteArray(Charsets.UTF_8))
                 val iv = encryptCipher.iv
@@ -120,7 +120,7 @@ class PassphraseStore(private val context: Context) {
         try {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
-            authenticateAndRun(activity, cipher, key, "Unlock passphrase") {
+            authenticateAndRun(activity, cipher, key, "Unlock passphrase", onAuthError = onError) {
                 val decryptCipher = it ?: cipher
                 val plaintext = decryptCipher.doFinal(ciphertext)
                 onSuccess(String(plaintext, Charsets.UTF_8))
@@ -164,6 +164,7 @@ class PassphraseStore(private val context: Context) {
         cipher: Cipher,
         key: SecretKey,
         subtitle: String,
+        onAuthError: (String) -> Unit,
         onAuthenticated: (Cipher?) -> Unit,
     ) {
         val info = keyInfo(key)
@@ -213,7 +214,9 @@ class PassphraseStore(private val context: Context) {
                         errString: CharSequence,
                     ) {
                         Log.w(TAG, "Auth error $errorCode: $errString")
-                        // Cancel/lockout: abort rather than run unauthenticated.
+                        // Cancel/lockout: abort rather than run unauthenticated,
+                        // but tell the caller so its UI never hangs on nothing.
+                        onAuthError(errString.toString())
                     }
 
                     override fun onAuthenticationFailed() {
@@ -227,6 +230,7 @@ class PassphraseStore(private val context: Context) {
         } catch (e: Exception) {
             // The key requires auth, so there is no safe unauthenticated fallback.
             Log.w(TAG, "Authentication could not start", e)
+            onAuthError(e.message ?: "Authentication could not start")
         }
     }
 

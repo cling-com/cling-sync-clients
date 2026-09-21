@@ -1,0 +1,44 @@
+:root {
+    color-scheme: light dark;
+}
+
+body {
+    font-family: system-ui, sans-serif;
+    margin: 1rem;
+}
+
+h1 {
+    font-size: 1.2rem;
+}
+
+ul.entries {
+    list-style: none;
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+ul.entries li {
+    padding: 0.15rem 0;
+}
+
+details > summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.meta {
+    color: color-mix(in srgb, currentColor 55%, transparent);
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+}
+
+.error {
+    color: #b00020;
+}
+
+.empty,
+.loading {
+    color: color-mix(in srgb, currentColor 55%, transparent);
+    font-size: 0.85rem;
+    margin: 0.15rem 0;
+}

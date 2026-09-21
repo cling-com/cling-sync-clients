@@ -111,6 +111,17 @@ object MainReducer {
 
             MainEvent.SettingsDismissed -> only(state.copy(showSettings = false))
 
+            MainEvent.BrowseClicked ->
+                if (state.isConnected) {
+                    Reduction(state, listOf(Effect.OpenBrowse))
+                } else {
+                    only(state)
+                }
+
+            MainEvent.BrowseOpened -> only(state.copy(showBrowse = true))
+
+            MainEvent.BrowseDismissed -> only(state.copy(showBrowse = false))
+
             is MainEvent.SettingsSaved -> settingsSaved(state, event)
 
             is MainEvent.SettingsTestConnection -> {
@@ -130,7 +141,7 @@ object MainReducer {
                 only(state.copy(isConnecting = false, isConnected = true))
 
             MainEvent.RepositoryClosed ->
-                only(state.copy(isConnecting = false, isConnected = false))
+                only(state.copy(isConnecting = false, isConnected = false, showBrowse = false))
 
             is MainEvent.ConnectFailed ->
                 only(

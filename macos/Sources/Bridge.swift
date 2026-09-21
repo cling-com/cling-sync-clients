@@ -274,7 +274,51 @@ enum Bridge {
         )
     }
 
-    private static func execute(command: String, params: [String: Any]) throws -> [String: Any] {
+    // MARK: - Browse
+
+    // Without `passphrase` the workspace's saved passphrase is used.
+    static func browseOpen(workspacePath: String, passphrase: String?, tmpDir: String) throws -> Int {
+        var params: [String: Any] = ["workspacePath": workspacePath, "tmpDir": tmpDir]
+        if let passphrase {
+            params["passphrase"] = passphrase
+        }
+        let result = try executeBrowse(command: "open", params: params)
+        guard let handle = result["handle"] as? Int else {
+            throw BridgeError(message: "Missing handle in response", code: nil)
+        }
+        return handle
+    }
+
+    static func browseCall(handle: Int, target: String) throws -> String {
+        let result = try executeBrowse(command: "call", params: ["handle": handle, "target": target])
+        guard let body = result["body"] as? String else {
+            throw BridgeError(message: "Missing body in response", code: nil)
+        }
+        return body
+    }
+
+    static func browseDownload(handle: Int, path: String, destPath: String) throws {
+        _ = try executeBrowse(command: "download", params: ["handle": handle, "path": path, "destPath": destPath])
+    }
+
+    static func browseClose(handle: Int) throws {
+        _ = try executeBrowse(command: "close", params: ["handle": handle])
+    }
+
+    static func browseCloseAll() throws {
+        _ = try executeBrowse(command: "closeAll", params: [:])
+    }
+
+    private static func executeBrowse(command: String, params: [String: Any]) throws -> [String: Any] {
+        try execute(command: command, params: params, via: GoBrowse)
+    }
+
+    private typealias GoEntryPoint = (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) ->
+        UnsafeMutablePointer<CChar>?
+
+    private static func execute(
+        command: String, params: [String: Any], via bridgeFunction: GoEntryPoint = GoBridge
+    ) throws -> [String: Any] {
         let paramsData = try JSONSerialization.data(withJSONObject: params)
         guard let paramsString = String(data: paramsData, encoding: .utf8) else {
             throw BridgeError(message: "Failed to serialize parameters", code: nil)
@@ -285,7 +329,7 @@ enum Bridge {
             free(commandCString)
             free(paramsCString)
         }
-        guard let resultCString = GoBridge(commandCString, paramsCString) else {
+        guard let resultCString = bridgeFunction(commandCString, paramsCString) else {
             throw BridgeError(message: "Bridge returned nil", code: nil)
         }
         defer { free(resultCString) }

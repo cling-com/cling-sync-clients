@@ -1,0 +1,11 @@
+{
+    "nodeModulesDir": "none",
+    "imports": {
+        "playwright": "npm:playwright@1.62.1",
+        "@std/assert": "jsr:@std/assert@1"
+    },
+    "tasks": {
+        "install-browsers": "deno run -A playwright install chromium",
+        "test": "deno test --allow-all --unsafe-proto browse_test.ts"
+    }
+}

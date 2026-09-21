@@ -2,7 +2,10 @@ module github.com/flunderpero/cling-sync-clients/go-bridge-ios
 
 go 1.26.5
 
-require github.com/flunderpero/cling-sync-clients/bridge v0.0.0
+require (
+	github.com/flunderpero/cling-sync-clients/bridge v0.0.0
+	github.com/flunderpero/cling-sync-clients/browse v0.0.0
+)
 
 require (
 	github.com/cling-com/cling-sync v0.0.5
@@ -12,3 +15,5 @@ require (
 )
 
 replace github.com/flunderpero/cling-sync-clients/bridge v0.0.0 => ../../bridge
+
+replace github.com/flunderpero/cling-sync-clients/browse v0.0.0 => ../../browse

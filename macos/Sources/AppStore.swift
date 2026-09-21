@@ -120,6 +120,8 @@ final class AppStore: ObservableObject {
             windowFronter?.focusPreferences()
         case .focusProgressWindow(let id, let kind):
             windowFronter?.focusProgressWindow(id: id, kind: kind)
+        case .focusBrowseWindow(let id):
+            windowFronter?.focusBrowseWindow(id: id)
         case .postNotification(let id, let title, let body):
             if !isTestMode { notifier.post(id: id, title: title, body: body) }
         case .showAlert(let title, let message):
@@ -487,6 +489,27 @@ final class AppStore: ObservableObject {
                     .syncTargetActionFailed(title: "Remove Sync Target Failed", message: userFacingMessage(for: error)))
             }
         }
+    }
+
+    // MARK: - Browse
+
+    // A browse window opens its own repository session. Without a saved
+    // passphrase it opens with a prompted one, saved (when asked) only after
+    // `open` proved it, like a merge does. Nil when the prompt was cancelled.
+    func openBrowseSession(id: UUID, open: (String) async throws -> Int) async throws -> Int? {
+        guard let workspace = state.workspace(id),
+            let prompt = await prompter.passphrase(workspaceName: workspace.config.displayName)
+        else { return nil }
+        let handle = try await open(prompt.passphrase)
+        if prompt.rememberInKeychain {
+            // The session is open either way, so a failed save must not lose it.
+            do {
+                try await gateway.storeWorkspacePassphrase(localPath: workspace.localPath, password: prompt.passphrase)
+            } catch {
+                await prompter.alert(title: "Could Not Save Passphrase", message: userFacingMessage(for: error))
+            }
+        }
+        return handle
     }
 
     // MARK: - Local directory

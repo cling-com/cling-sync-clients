@@ -45,6 +45,7 @@ enum Effect: Equatable {
     // Bring an already-open window to the front (re-open clicks change no state)
     case focusPreferences
     case focusProgressWindow(id: UUID, kind: OperationKind)
+    case focusBrowseWindow(id: UUID)
 
     // Fire-and-forget UI side effects
     case postNotification(id: UUID, title: String, body: String)

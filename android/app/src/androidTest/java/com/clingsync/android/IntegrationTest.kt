@@ -23,6 +23,10 @@ import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -57,6 +61,7 @@ class IntegrationTest {
     private val switchDestination = args.getString("switchDestination") ?: "/switched/"
     private val mediaSubUrl = args.getString("mediaSubUrl")
     private val docsSubUrl = args.getString("docsSubUrl")
+    private val browseUrl = args.getString("browseUrl")
 
     // Runs BEFORE the Activity launches (lower order = outer), so each test starts
     // with cleared settings/keychain. A plain @Before runs after the compose rule
@@ -281,6 +286,49 @@ class IntegrationTest {
         // Connection succeeds after only the passphrase; no S3 dialog appears.
         composeTestRule.waitUntilExactlyOneExists(hasText("Save"), 15000)
         composeTestRule.onAllNodesWithText("S3 Credentials").assertCountEquals(0)
+    }
+
+    // Browse smoke test: after connecting (which caches the passphrase for the
+    // session), the globe button must open the Go-rendered repository view.
+    @Test
+    fun testBrowseShowsRepositoryFile() {
+        val url = browseUrl ?: return
+        composeTestRule.waitForIdle()
+
+        connectFreshRepo(url, "/browse/", testPassphrase)
+        saveAndWaitForList()
+
+        // The globe button is disabled while the initial scan runs.
+        composeTestRule.waitUntilExactlyOneExists(hasContentDescription("Browse").and(isEnabled()), 30000)
+        composeTestRule.onNode(hasContentDescription("Browse")).performClick()
+
+        // The browse screen appears asynchronously (the click verifies the
+        // repository is open first); its back button is a Compose node.
+        composeTestRule.waitUntilExactlyOneExists(hasContentDescription("Back"), 15000)
+
+        // The WebView content is outside the Compose tree; UiAutomator sees it
+        // through the accessibility hierarchy. The compose test rule owns the
+        // frame clock, so frames only advance inside rule calls: the poll must
+        // alternate waitForIdle (pumps frames) with short UiAutomator waits, a
+        // single long device.wait would freeze the UI it is waiting on.
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val deadline = System.currentTimeMillis() + 30_000
+        var rendered = false
+        while (!rendered && System.currentTimeMillis() < deadline) {
+            composeTestRule.waitForIdle()
+            rendered = device.wait(Until.hasObject(By.text("hello-browse.txt")), 500) == true
+        }
+        if (!rendered) {
+            // Post-mortem evidence: what was actually on screen at timeout.
+            val dir = File("/sdcard/Download")
+            dir.mkdirs()
+            device.takeScreenshot(File(dir, "browse_fail.png"))
+            File(dir, "browse_fail_hierarchy.xml").outputStream().use { device.dumpWindowHierarchy(it) }
+        }
+        assertTrue("browse screen did not render the repository content", rendered)
+
+        composeTestRule.onNode(hasContentDescription("Back")).performClick()
+        composeTestRule.waitUntilExactlyOneExists(hasTestTag("select_all_button"), 10000)
     }
 
     @Test

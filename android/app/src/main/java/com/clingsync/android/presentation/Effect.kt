@@ -10,6 +10,10 @@ sealed interface Effect {
 
     data object CancelUpload : Effect
 
+    // Verify the repository is really open (the grace close may have dropped
+    // it), then either show the browse screen or fall back to a reconnect.
+    data object OpenBrowse : Effect
+
     data class PersistSettings(val settings: AppSettings) : Effect
 
     // Drop the stored passphrase + encoded URI of a repository we navigated away from.
