@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 
 @testable import ClingSync
 
@@ -75,6 +76,27 @@ extension BridgeSuite {
         #expect(files.allSatisfy { secondFinal[$0.id] == .exists(repoPath: "") })
     }
 
+    @Test(.enabled(if: TestRepo.isAvailable))
+    func abortDuringTheLastFileUploadCommitsNothing() async throws {
+        let (source, files) = try await openFreshRepo()
+        let last = try #require(files.last)
+        let aborting = AbortingSource(inner: source, abortOn: last.id)
+        let coordinator = UploadCoordinator(source: aborting)
+
+        let updates = await Task {
+            var updates: [WorkUpdate] = []
+            await coordinator.upload(
+                files, repoPathPrefix: "phone", author: "Tester", deviceName: "TestDevice"
+            ) { update in updates.append(update) }
+            return updates
+        }.value
+
+        #expect(updates.last.map(isCancelled) == true)
+        var shas: [String] = []
+        for file in files { shas.append(try await source.sha256(for: file)) }
+        #expect(try Bridge.checkFiles(sha256s: shas) == files.map { _ in false })
+    }
+
     private func collectUpdates(
         _ coordinator: UploadCoordinator,
         _ files: [SourceFile],
@@ -95,5 +117,31 @@ extension BridgeSuite {
     private func isEnqueued(_ update: WorkUpdate) -> Bool {
         if case .enqueued = update { return true }
         return false
+    }
+
+    private func isCancelled(_ update: WorkUpdate) -> Bool {
+        if case .cancelled = update { return true }
+        return false
+    }
+}
+
+// Cancels the running task while `abortOn`'s content is being uploaded, the way
+// an Abort tap lands during an upload.
+private struct AbortingSource: SourceGateway {
+    let inner: PhotoLibrarySource
+    let abortOn: String
+
+    func loadFiles() async -> [SourceFile] { await inner.loadFiles() }
+    func sha256(for file: SourceFile) async throws -> String { try await inner.sha256(for: file) }
+    func thumbnail(for file: SourceFile) async -> UIImage? { await inner.thumbnail(for: file) }
+
+    func withLocalCopy<T>(of file: SourceFile, _ body: (URL) async throws -> T) async throws -> T {
+        try await inner.withLocalCopy(of: file) { url in
+            let result = try await body(url)
+            if file.id == abortOn {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            return result
+        }
     }
 }

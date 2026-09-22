@@ -41,6 +41,9 @@ struct UploadCoordinator {
                 await emit(.running(statuses: statuses, uploadedBytes: uploadedBytes))
             }
 
+            // An abort that arrived while the last file was uploading must still win:
+            // Abort is only disabled once the commit starts.
+            try Task.checkCancellation()
             if !revisionEntries.isEmpty {
                 for (id, status) in statuses where status == .sentWaitingCommit {
                     statuses[id] = .committing
