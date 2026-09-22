@@ -42,25 +42,16 @@ extension ClingSyncUITests {
         alert.buttons["OK"].tap()
     }
 
-    // typeText can drop keystrokes on a loaded simulator, and a credential that
-    // arrives short only surfaces much later as an unrelated server error (a
-    // mangled S3 secret is a 403 SignatureDoesNotMatch). So verify what landed
-    // and retype. A secure field reports one bullet per character.
+    // A single tap lands the cursor wherever the center hits (or selects a word the
+    // spell checker flags), so backwards deletes can leave text behind. A triple tap
+    // selects the whole line, which the typed value then replaces.
     func replaceText(in field: XCUIElement, with value: String) {
-        for _ in 0..<3 {
+        if let current = field.value as? String, !current.isEmpty, current != field.placeholderValue {
+            field.tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        } else {
             field.tap()
-            if let current = field.value as? String, !current.isEmpty, current != field.placeholderValue {
-                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
-            }
-            field.typeText(value)
-            let landed = field.value as? String ?? ""
-            let isComplete =
-                field.elementType == .secureTextField ? landed.count == value.count : landed == value
-            if isComplete {
-                return
-            }
         }
-        XCTFail("typing \(value.count) characters into \(field.identifier) kept dropping keystrokes")
+        field.typeText(value)
     }
 
     func verifyConnectionWithoutSavingPassphrase() {
@@ -79,8 +70,12 @@ extension ClingSyncUITests {
         }
         let keyIdField = app.textFields["S3 Key ID"]
         XCTAssertTrue(keyIdField.waitToAppear(timeout: 3))
-        replaceText(in: keyIdField, with: Self.s3AccessKeyId)
-        replaceText(in: app.secureTextFields["S3 Access Key"], with: Self.s3AccessKey)
+        keyIdField.tap()
+        keyIdField.typeText(Self.s3AccessKeyId)
+
+        let accessKeyField = app.secureTextFields["S3 Access Key"]
+        accessKeyField.tap()
+        accessKeyField.typeText(Self.s3AccessKey)
 
         s3Nav.buttons["Continue"].tap()
     }
@@ -118,7 +113,8 @@ extension ClingSyncUITests {
     func enterPassphrase(_ passphrase: String = ClingSyncUITests.passphrase, saveToKeychain: Bool) {
         let passphraseField = app.secureTextFields["Passphrase"]
         XCTAssertTrue(passphraseField.waitToAppear(timeout: 5))
-        replaceText(in: passphraseField, with: passphrase)
+        passphraseField.tap()
+        passphraseField.typeText(passphrase)
 
         let saveToggle = app.switches["Save in iPhone Keychain"]
         if saveToggle.exists {
